@@ -1,6 +1,7 @@
 .env
 *.env
 .replit
+replit.nix
 .replit-artifact
 .cache
 .config
@@ -12,3 +13,6 @@ node_modules
 dist
 backups
 *.pyc
+.data
+backend/seed-data
+tsconfig.tsbuildinfo

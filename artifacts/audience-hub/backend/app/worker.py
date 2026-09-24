@@ -2,6 +2,7 @@ import logging
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from datetime import timedelta
 from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.db import engine
@@ -15,7 +16,8 @@ def run_job(job_id: int, job_type: str, payload: dict) -> None:
     stop = threading.Event()
 
     def keep_alive():
-        while not stop.wait(15):
+        heartbeat_interval = min(15, max(0.2, get_settings().job_stale_seconds / 3))
+        while not stop.wait(heartbeat_interval):
             with Session(engine) as db:
                 queue.heartbeat(db, job_id)
                 db.commit()
@@ -23,7 +25,17 @@ def run_job(job_id: int, job_type: str, payload: dict) -> None:
     heart = threading.Thread(target=keep_alive, daemon=True)
     heart.start()
     try:
-        handlers.run(job_type, payload)
+        if job_type == "import.run":
+            from app.imports.service import run_import
+
+            def report(progress):
+                with Session(engine) as progress_db:
+                    queue.heartbeat(progress_db, job_id, progress)
+                    progress_db.commit()
+
+            run_import(int(payload["import_id"]), progress_callback=report)
+        else:
+            handlers.run(job_type, payload)
         with Session(engine) as db:
             queue.succeed(db, job_id)
             db.commit()
@@ -42,11 +54,13 @@ def main():
     with ThreadPoolExecutor(max_workers=get_settings().worker_concurrency) as pool:
         active = set()
         last_maintenance = 0.0
+        maintenance_interval = min(30, max(0.5, get_settings().job_stale_seconds / 2))
         while True:
             active = {f for f in active if not f.done()}
-            if time.monotonic() - last_maintenance > 30:
+            if time.monotonic() - last_maintenance > maintenance_interval:
                 with Session(engine) as db:
-                    queue.requeue_stale(db)
+                    queue.requeue_stale(
+                        db, stale_after=timedelta(seconds=get_settings().job_stale_seconds))
                     scheduler.tick(db)
                     db.commit()
                 last_maintenance = time.monotonic()

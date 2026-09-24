@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.data/
+backend/seed-data/
+backend/**/__pycache__/
+backend/**/.pytest_cache/
+tsconfig.tsbuildinfo
+.env
+backups/

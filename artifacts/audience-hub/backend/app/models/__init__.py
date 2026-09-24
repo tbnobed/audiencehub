@@ -86,3 +86,29 @@ class Source(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+# Importing this module registers the remaining milestone-two tables on Base.metadata.
+from app.models.milestone2 import (  # noqa: E402,F401
+    Activation,
+    ActivationRun,
+    Consent,
+    DeletionRequest,
+    Destination,
+    EnrichmentAttribute,
+    EnrichmentValue,
+    Event,
+    Gift,
+    Identifier,
+    IdentifierBlocklist,
+    Import,
+    Profile,
+    ProfileMerge,
+    ProfileTrait,
+    Segment,
+    SegmentCount,
+    SegmentMembership,
+    SourceRecord,
+    Suppression,
+    TraitSnapshot,
+)

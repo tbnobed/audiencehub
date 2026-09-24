@@ -1,5 +1,5 @@
 from functools import lru_cache
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     event_retention_days: int = 730
     export_retention_days: int = 14
     worker_concurrency: int = 4
+    job_stale_seconds: int = Field(default=300, ge=1)
     ingest_cors_origins: str = ""
     log_level: str = "INFO"
 

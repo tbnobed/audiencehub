@@ -60,9 +60,12 @@ def fail(db: Session, job_id: int, error: str) -> None:
         job.run_after = now() + timedelta(seconds=min(3600, 2 ** job.attempts * 10))
 
 
-def requeue_stale(db: Session, stale_after: timedelta = timedelta(minutes=5)) -> int:
-    jobs = db.scalars(select(Job).where(Job.status == "running", Job.heartbeat_at < now() - stale_after)
-                      .with_for_update(skip_locked=True)).all()
+def requeue_stale(db: Session, stale_after: timedelta = timedelta(minutes=5),
+                  job_ids: list[int] | None = None) -> int:
+    stmt = select(Job).where(Job.status == "running", Job.heartbeat_at < now() - stale_after)
+    if job_ids is not None:
+        stmt = stmt.where(Job.id.in_(job_ids))
+    jobs = db.scalars(stmt.with_for_update(skip_locked=True)).all()
     for job in jobs:
         job.heartbeat_at = None
         job.error = "Worker heartbeat expired"

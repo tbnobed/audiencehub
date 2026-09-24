@@ -48,9 +48,16 @@ export function TopBar() {
           </div>
         </div>
         <div className="flex items-center space-x-4">
-          <Badge variant="outline" className="font-mono bg-background/50">
-            {user.auth_mode === 'dev' ? 'DEV AUTH' : user.app_env.toUpperCase()}
-          </Badge>
+          {user.app_env === 'development' && (
+            <Badge variant="outline" className="font-mono bg-amber-500/10 text-amber-500 border-amber-500/50">
+              DEV
+            </Badge>
+          )}
+          {user.auth_mode === 'dev' && (
+            <Badge variant="outline" className="font-mono bg-amber-500/10 text-amber-500 border-amber-500/50">
+              DEV AUTH
+            </Badge>
+          )}
           
           <Button variant="ghost" size="icon" onClick={() => setDrawerOpen(true)} aria-label={`Job activity: ${runningCount} running`}>
             <Activity className="h-5 w-5 text-muted-foreground" />

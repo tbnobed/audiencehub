@@ -16,6 +16,9 @@ fi
 export SECRET_KEY="${SECRET_KEY:-$(python3 -c 'import secrets;print(secrets.token_hex(32))')}"
 export FERNET_KEY="${FERNET_KEY:-$(python3 -c 'from cryptography.fernet import Fernet;print(Fernet.generate_key().decode())')}"
 export PII_HASH_PEPPER="${PII_HASH_PEPPER:-$(python3 -c 'import secrets;print(secrets.token_hex(32))')}"
+export UPLOAD_DIR="${UPLOAD_DIR:-$PWD/.data/uploads}"
+export EXPORT_DIR="${EXPORT_DIR:-$PWD/.data/exports}"
+mkdir -p "$UPLOAD_DIR" "$EXPORT_DIR"
 export PYTHONPATH="$PWD/backend"
 cd backend
 python3 -m alembic upgrade head
