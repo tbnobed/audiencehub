@@ -1,5 +1,7 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
+from alembic.runtime.migration import MigrationContext
+from alembic.script import ScriptDirectory
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
@@ -83,11 +85,33 @@ def healthz():
     return {"status": "ok"}
 
 
+def migration_script() -> ScriptDirectory:
+    # Source checkouts and containers running from the backend directory both
+    # work; installed packages can use the backend working directory as well.
+    candidates = (Path(__file__).resolve().parent.parent / "alembic", Path.cwd() / "alembic")
+    for directory in candidates:
+        if (directory / "env.py").is_file() and (directory / "versions").is_dir():
+            return ScriptDirectory(str(directory))
+    raise RuntimeError("Alembic migration scripts are unavailable")
+
+
+def database_heads(connection) -> tuple[str, ...]:
+    return MigrationContext.configure(connection).get_current_heads()
+
+
 @app.get("/readyz")
 def readyz():
-    with engine.connect() as db:
-        version = db.scalar(text("SELECT version_num FROM alembic_version"))
-    if version != "0007_admin_settings":
+    try:
+        expected = set(migration_script().get_heads())
+        if not expected:
+            raise RuntimeError("Alembic migration scripts have no heads")
+        with engine.connect() as db:
+            actual = set(database_heads(db))
+    except Exception:
+        # Readiness must fail closed for missing scripts, missing version table,
+        # and unreachable databases, without leaking connection details.
+        raise HTTPException(503, detail="Database migration status is unavailable") from None
+    if actual != expected:
         raise HTTPException(503, detail="Database migration is not current")
     return {"status": "ready"}
 
@@ -135,7 +159,8 @@ def system(user: User = Depends(require_role("admin")), db: Session = Depends(se
         select(Job.status, func.count(Job.id)).group_by(Job.status))}
     scheduled = db.scalars(select(ScheduledRun).order_by(ScheduledRun.created_at.desc()).limit(20)).all()
     size = db.scalar(text("SELECT pg_size_pretty(pg_database_size(current_database()))"))
-    return {"counts": counts, "database_size": size, "migration": "0007_admin_settings",
+    return {"counts": counts, "database_size": size,
+            "migration": ", ".join(sorted(database_heads(db.connection()))),
             "scheduled_runs": [{"task": run.task, "window_key": run.window_key, "job_id": run.job_id}
                                for run in scheduled]}
 
