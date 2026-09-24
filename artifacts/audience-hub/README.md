@@ -26,6 +26,8 @@ M2 imports retain unlinked source records and gifts/events until the M3 identity
 
 Copy `.env.example` to `.env` on your Linux server and set new, strong production-only secret values, OIDC Authentik settings, database password, and public URL. Then run `docker compose up -d --build`. The Compose stack contains only Postgres 16, FastAPI, a separate worker, and a daily pg_dump backup container. It binds the API on localhost for an existing TLS reverse proxy. No Replit service, CDN, telemetry endpoint, or hosted asset is used by the production image.
 
+The API defaults to `API_BIND_HOST=127.0.0.1`. If a reverse proxy in another container or machine forwards to the server's LAN address, set `API_BIND_HOST` in `.env` to that LAN address (for example `192.168.3.67`) and recreate the API container. Keep the proxy pointed at that address and port `API_PORT`; do not expose the API port to the public internet. Restrict LAN access to the proxy host using your firewall, especially while using the unauthenticated development role picker.
+
 The API serves the built React files. Routes are `/api/*` for the UI, `/auth/*` for login, `/healthz` and `/readyz`. `/v1/*` and `/sdk/*` are reserved for the ingestion milestone. Operational data lives in PostgreSQL; jobs are claimed with `FOR UPDATE SKIP LOCKED`, heartbeated, retried, and requeued after stale heartbeats.
 
 See `docs/MILESTONES.md` for subsequent milestones and `docs/DECISIONS.md` for implementation choices.
