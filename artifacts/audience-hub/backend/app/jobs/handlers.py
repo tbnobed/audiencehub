@@ -13,7 +13,9 @@ def run(job_type: str, payload: dict, job_id: int | None = None) -> None:
             while True:
                 result = resolve_batch(db, limit=limit, job_id=job_id)
                 db.commit()
-                if result["records"] < limit:
+                # A complete component may not fit the remaining group space.
+                # Underfull groups are not EOF; every call has its own commit.
+                if result["records"] == 0:
                     break
         return
     if job_type == "traits.recompute":

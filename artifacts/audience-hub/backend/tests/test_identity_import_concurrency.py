@@ -11,7 +11,8 @@ from sqlalchemy import delete, select, text
 from sqlalchemy.orm import Session
 
 from app.db import engine
-from app.identity.locking import IdentityResolutionDeferred, import_identity_lock
+from app.identity.locking import IdentityResolutionDeferred
+from app.imports.staging import import_batch_identity_lock
 from app.identity.resolver import resolve_batch
 from app.imports.service import run_import
 from app.jobs import queue
@@ -56,9 +57,10 @@ def _assert_deferred(job_id, before):
         assert 29 <= (job.run_after - before).total_seconds() < 60
 
 
-def test_shared_lock_survives_commits_and_worker_defers_without_failure():
+def test_shared_batch_lock_defers_worker_and_releases_on_commit():
     job_id = _resolver_job()
-    with import_identity_lock(engine):
+    with Session(engine) as importing_db:
+        import_batch_identity_lock(importing_db)
         with Session(engine) as db:
             db.execute(text("SELECT 1"))
             db.commit()
@@ -68,13 +70,14 @@ def test_shared_lock_survives_commits_and_worker_defers_without_failure():
         before = datetime.now(timezone.utc)
         run_job(job_id, "identity.resolve_batch", {})
         _assert_deferred(job_id, before)
+        importing_db.commit()
     with Session(engine) as db:
         resolve_batch(db)
         db.rollback()
 
 
 @pytest.mark.parametrize("record_type", ["contact", "consent", "enrichment"])
-def test_running_import_queue_check_defers_resolver(record_type, tmp_path):
+def test_running_import_without_batch_lock_does_not_defer_resolver(record_type, tmp_path):
     with Session(engine) as db:
         source = Source(key=f"queue_{uuid.uuid4().hex}", name="Queue test", kind="csv",
                         record_types=[record_type])
@@ -91,9 +94,9 @@ def test_running_import_queue_check_defers_resolver(record_type, tmp_path):
         import_job_id = importing.id
     try:
         resolver_id = _resolver_job()
-        before = datetime.now(timezone.utc)
         run_job(resolver_id, "identity.resolve_batch", {})
-        _assert_deferred(resolver_id, before)
+        with Session(engine) as db:
+            assert db.get(Job, resolver_id).status == "succeeded"
     finally:
         with Session(engine) as db:
             queue.succeed(db, import_job_id)
@@ -149,13 +152,15 @@ def test_two_contact_imports_and_resolver_overlapping_identifiers(tmp_path):
     with ThreadPoolExecutor(max_workers=2) as pool:
         futures = [pool.submit(execute_import, index) for index in range(2)]
         try:
-            assert all(item.wait(20) for item in ready), "Both imports must hold shared locks"
-            # No import jobs exist: this specifically tests the authoritative
-            # lock for direct run_import calls, not the queue courtesy check.
-            resolver_id = _resolver_job()
-            before = datetime.now(timezone.utc)
-            run_job(resolver_id, "identity.resolve_batch", {})
-            _assert_deferred(resolver_id, before)
+            assert all(item.wait(20) for item in ready), "Both imports must be validating"
+            # Full-file validation must not exclude the resolver or hold the
+            # imports row locks, even for direct run_import invocations.
+            with Session(engine) as db:
+                db.execute(text("SET LOCAL lock_timeout = '2s'"))
+                db.execute(text("SELECT id FROM imports WHERE id=ANY(:ids) FOR UPDATE"),
+                           {"ids": import_ids})
+                resolve_batch(db)
+                db.commit()
         finally:
             release.set()
         for future in futures:

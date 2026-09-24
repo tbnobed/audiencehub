@@ -33,10 +33,6 @@ def run_job(job_id: int, job_type: str, payload: dict) -> None:
     heart = threading.Thread(target=keep_alive, daemon=True)
     heart.start()
     try:
-        if job_type == "identity.resolve_batch":
-            with Session(engine) as db:
-                if queue.identity_import_running(db):
-                    raise IdentityResolutionDeferred("Identity resolution is waiting for running imports")
         if job_type == "import.run":
             from app.imports.service import run_import
 

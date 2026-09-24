@@ -14,6 +14,7 @@ from decimal import Decimal
 from contextlib import ExitStack
 from pathlib import Path
 from typing import Any, Callable, Iterator
+from uuid import uuid4
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -23,6 +24,7 @@ from app.db import engine
 from app.imports.mapping import RECORD_TYPES
 from app.imports.staging import (
     IMPORT_TABLES, ImportStatistics, copy_upsert, import_statistics, import_lock,
+    import_batch_identity_lock,
 )
 from app.imports.validation import map_and_validate_row
 
@@ -597,15 +599,10 @@ class _ErrorCsv:
 
 def run_import(import_id: int, progress_callback: Callable[[dict[str, Any]], None] | None = None,
                db: Session | None = None) -> dict[str, Any]:
-    """Own lifecycle locks independently of batch transactions."""
+    """Run with locks confined to individual checkpoint/write transactions."""
     with ExitStack() as stack:
         if db is None:
             db = stack.enter_context(Session(engine))
-        stack.enter_context(import_lock(db, import_id))
-        from app.identity.locking import import_identity_lock
-
-        # All imports write source_records, and gifts/events can carry identifiers.
-        stack.enter_context(import_identity_lock(db.get_bind().engine))
         return _run_import(import_id, progress_callback, db)
 
 
@@ -621,10 +618,12 @@ def _run_import(import_id: int, progress_callback=None, db: Session | None = Non
         db = Session(engine)
     assert db is not None
     error_sink: _ErrorCsv | None = None
-    stage = f"ah_import_rows_{int(import_id)}"
+    stage = f"ah_import_rows_{int(import_id)}_{uuid4().hex}"
+    checkpoint = None
     statistics = ImportStatistics()
     statistics_token = import_statistics.set(statistics)
     try:
+        import_lock(db, import_id)
         imported = db.execute(text(
             "SELECT * "
             "FROM imports WHERE id=:id FOR UPDATE"
@@ -632,6 +631,7 @@ def _run_import(import_id: int, progress_callback=None, db: Session | None = Non
         if not imported:
             raise ImportProblem("Import not found")
         if imported["status"] == "completed":
+            db.commit()
             return {key: imported[key] for key in (
                 "rows_total", "rows_ok", "rows_rejected", "warning_count", "warning_counts",
                 "rows_normalized", "rows_deduplicated", "duration_ms")}
@@ -645,6 +645,12 @@ def _run_import(import_id: int, progress_callback=None, db: Session | None = Non
         columns = mapping.get("columns", {})
         options = mapping.get("options", {})
         path = Path(imported["file_path"])
+        db.execute(text(
+            "UPDATE imports SET status='running', started_at=COALESCE(started_at, now()), "
+            "finished_at=NULL WHERE id=:id"
+        ), {"id": import_id})
+        # Release both the mutex and row lock before any file scan.
+        db.commit()
         if not path.is_file():
             raise ImportProblem("Uploaded CSV is no longer available")
         headers, rows = csv_reader(path)
@@ -654,12 +660,6 @@ def _run_import(import_id: int, progress_callback=None, db: Session | None = Non
         if not total:
             total = sum(1 for _ in rows)
             headers, rows = csv_reader(path)
-        db.execute(text(
-            "UPDATE imports SET status='running', started_at=COALESCE(started_at, now()), "
-            "finished_at=NULL, rows_total=:total "
-            "WHERE id=:id"
-        ), {"id": import_id, "total": total})
-        db.flush()
 
         settings = get_settings()
         pepper = settings.pii_hash_pepper
@@ -672,9 +672,8 @@ def _run_import(import_id: int, progress_callback=None, db: Session | None = Non
         raw_connection = conn.connection.driver_connection
         bounce_hashes: set[str] = set()
         with raw_connection.cursor() as cursor:
-            # A process kill may leave a committed unlogged stage. The import
-            # lock makes this deterministic name safe to reclaim on retry.
-            cursor.execute(f"DROP TABLE IF EXISTS {stage}")
+            # Each validator owns its stage; concurrent retries must never
+            # reclaim or replace another validator's rows.
             cursor.execute(f"""
                 CREATE UNLOGGED TABLE {stage} (
                   record_number bigint NOT NULL, was_normalized boolean NOT NULL, converted text NOT NULL
@@ -705,23 +704,36 @@ def _run_import(import_id: int, progress_callback=None, db: Session | None = Non
             def write(self, row):
                 diagnostics.append(row)
         diagnostic_sink = DiagnosticSink()
-        # Register every hard-bounced address before accepting any row. The
-        # suppression is an email-channel opt-out, not an import-row block.
-        _register_hard_bounce_suppressions(db, bounce_hashes)
-        db.commit()  # Preserve staging and complete-file suppressions across batches.
+        db.commit()  # Validation holds no import mutex or identity/row lock.
         _report_progress(progress_callback, "Writing", checkpoint - 1, total)
 
-        # Preview validation also writes rows_ok/rejected; only a durable
-        # writing checkpoint makes these cumulative import counters.
-        accepted = imported["rows_ok"] if checkpoint > 1 else 0
-        rejected = imported["rows_rejected"] if checkpoint > 1 else 0
-        seen = checkpoint - 1
-        warning_count = imported["warning_count"] if checkpoint > 1 else 0
-        normalized_count = imported["rows_normalized"] if checkpoint > 1 else 0
-        deduplicated_count = imported["rows_deduplicated"] if checkpoint > 1 else 0
-        warning_counts: dict[str, int] = dict(imported["warning_counts"] or {}) if checkpoint > 1 else {}
-        last_record_number = checkpoint
-        for _ in range(0, total, CSV_BATCH_SIZE):
+        while True:
+            import_lock(db, import_id)
+            current = db.execute(text("SELECT * FROM imports WHERE id=:id FOR UPDATE"),
+                                 {"id": import_id}).mappings().one()
+            if current["status"] == "completed":
+                db.commit()
+                return {key: current[key] for key in (
+                    "rows_total", "rows_ok", "rows_rejected", "warning_count", "warning_counts",
+                    "rows_normalized", "rows_deduplicated", "duration_ms")}
+            if (current["mapping"] != imported["mapping"]
+                    or current["file_path"] != imported["file_path"]
+                    or current["record_type"] != record_type
+                    or current["source_id"] != imported["source_id"]):
+                raise ImportProblem("Import configuration changed during validation; retry import")
+            # Another invocation may have committed while this one validated
+            # or reported progress. Counters and cursor must come from one
+            # locked database snapshot, never this invocation's stale state.
+            checkpoint = current["last_committed_record_number"]
+            last_record_number = checkpoint
+            seen = checkpoint - 1
+            # Preview counters are not cumulative until the first checkpoint.
+            accepted = current["rows_ok"] if checkpoint > 1 else 0
+            rejected = current["rows_rejected"] if checkpoint > 1 else 0
+            warning_count = current["warning_count"] if checkpoint > 1 else 0
+            normalized_count = current["rows_normalized"] if checkpoint > 1 else 0
+            deduplicated_count = current["rows_deduplicated"] if checkpoint > 1 else 0
+            warning_counts = dict(current["warning_counts"] or {}) if checkpoint > 1 else {}
             staged = db.execute(text(f"""
                 SELECT record_number, was_normalized, converted FROM {stage}
                 WHERE record_number > :last_record_number
@@ -729,6 +741,11 @@ def _run_import(import_id: int, progress_callback=None, db: Session | None = Non
             """), {"last_record_number": last_record_number, "limit": CSV_BATCH_SIZE}).mappings().all()
             if not staged:
                 break
+            # All record types write source_records, including gifts/events.
+            import_batch_identity_lock(db)
+            # Complete-file bounce precedence, including when another validator
+            # won the preceding batch. Registration is atomic with first writes.
+            _register_hard_bounce_suppressions(db, bounce_hashes)
             last_record_number = staged[-1]["record_number"]
             processed: list[dict[str, Any]] = []
             source_rows: list[dict[str, Any]] = []
@@ -816,11 +833,12 @@ def _run_import(import_id: int, progress_callback=None, db: Session | None = Non
                 "UPDATE imports SET rows_ok=:ok, rows_rejected=:rejected, "
                 "warning_count=:warning_count, warning_counts=CAST(:warning_counts AS jsonb), "
                 "rows_normalized=:normalized, rows_deduplicated=:deduplicated, "
-                "last_committed_record_number=:record_number WHERE id=:id"
+                "last_committed_record_number=:record_number, rows_total=:total, "
+                "status='running', finished_at=NULL WHERE id=:id"
             ), {"ok": accepted, "rejected": rejected, "warning_count": warning_count,
                 "warning_counts": json.dumps(warning_counts), "normalized": normalized_count,
                 "deduplicated": deduplicated_count, "id": import_id,
-                "record_number": last_record_number})
+                "record_number": last_record_number, "total": total})
             if diagnostics:
                 db.execute(text("""
                     INSERT INTO import_batch_diagnostics (import_id, record_number, diagnostics)
@@ -830,6 +848,8 @@ def _run_import(import_id: int, progress_callback=None, db: Session | None = Non
                 """), {"id": import_id, "record": last_record_number,
                        "diagnostics": json.dumps(diagnostics)})
             db.commit()
+            checkpoint = last_record_number
+            bounce_hashes.clear()
             diagnostics.clear()
             _report_progress(progress_callback, "Writing", min(seen, total), total)
         statistics.finish(db)
@@ -868,10 +888,15 @@ def _run_import(import_id: int, progress_callback=None, db: Session | None = Non
         # Never persist raw exception text from database errors, which can
         # contain values. Keep the import status useful without exposing PII.
         try:
+            import_lock(db, import_id)
             db.execute(text(
                 "UPDATE imports SET status='failed', duration_ms=:duration_ms, "
-                "finished_at=now() WHERE id=:id"
+                "finished_at=now() WHERE id=:id AND status <> 'completed' "
+                "AND last_committed_record_number=:checkpoint "
+                "AND mapping IS NOT DISTINCT FROM CAST(:mapping AS jsonb)"
             ), {"id": import_id,
+                "checkpoint": checkpoint,
+                "mapping": json.dumps(imported["mapping"]) if checkpoint is not None else None,
                 "duration_ms": max(0, int((time.perf_counter() - started) * 1000))})
             db.commit()
         except Exception:

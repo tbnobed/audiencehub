@@ -2,6 +2,8 @@
 import csv
 import json
 import os
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from uuid import uuid4
 
 import pytest
@@ -10,6 +12,119 @@ from sqlalchemy.orm import Session
 
 from app.db import engine
 from app.imports.service import run_import
+
+
+def test_import_mutex_and_identity_locks_are_transaction_owned():
+    from app.imports.staging import import_lock, import_batch_identity_lock
+
+    statements = []
+    class Db:
+        def execute(self, statement, params):
+            statements.append((str(statement), params))
+
+    db = Db()
+    import_lock(db, 17)
+    import_batch_identity_lock(db)
+    assert statements == [
+        ("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))",
+         {"key": "audience-hub:import:17"}),
+        ("SELECT pg_advisory_xact_lock_shared(:key)", {"key": 0x41484944454E54}),
+    ]
+
+
+@pytest.mark.skipif(
+    os.environ.get("KINSHIP_BENCHMARK_ISOLATED_TESTS") != "1",
+    reason="Requires benchmark's disposable PostgreSQL cluster",
+)
+@pytest.mark.parametrize("pause_phase", ["validating", "writing"])
+@pytest.mark.parametrize("stale_failure", [False, True])
+def test_same_import_concurrent_validation_and_checkpoint_reread(
+        tmp_path, monkeypatch, pause_phase, stale_failure):
+    from app.imports import service
+
+    monkeypatch.setattr(service, "CSV_BATCH_SIZE", 10)
+    path = tmp_path / "concurrent.csv"
+    path.write_text("external_id,email,amount,gift_date,hard_bounce\n" + "".join(
+        f"gift-{index},donor-{path.parent.name}@valid-example.org,"
+        f"{'invalid' if index == 11 else '12.50'},"
+        f"{'12/25/2024' if index == 12 else '2024-12-25'},"
+        f"{'true' if index == 22 else ''}\n"
+        for index in range(23)
+    ))
+    with Session(engine) as db:
+        source = db.scalar(text("""
+            INSERT INTO sources (key,name,kind,record_types,priority,is_active)
+            VALUES (:key,'Concurrent checkpoint','csv',ARRAY['gift'],10,true) RETURNING id
+        """), {"key": "checkpoint_" + uuid4().hex})
+        import_id = db.scalar(text("""
+            INSERT INTO imports (source_id,filename,file_path,record_type,mapping,rows_total)
+            VALUES (:source,'concurrent.csv',:path,'gift',CAST(:mapping AS jsonb),23)
+            RETURNING id
+        """), {"source": source, "path": str(path), "mapping": json.dumps({"columns": {
+            "external_id": "external_id", "email": "email", "amount": "amount",
+            "gift_date": "gift_date", "hard_bounce": "attributes.hard_bounce",
+        }})})
+        db.commit()
+    paused, release = threading.Event(), threading.Event()
+
+    def progress(update):
+        if (not paused.is_set() and update["phase"] == pause_phase
+                and (pause_phase == "validating" or update["done"] == 10)):
+            paused.set()
+            assert release.wait(30)
+            if stale_failure:
+                raise RuntimeError("stale invocation failed")
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(run_import, import_id, progress)
+        try:
+            assert paused.wait(20)
+            # Neither validation nor the between-batches progress callback can
+            # retain an imports row lock or either advisory lock.
+            with Session(engine) as db:
+                db.execute(text("SET LOCAL lock_timeout = '2s'"))
+                db.execute(text("SELECT id FROM imports WHERE id=:id FOR UPDATE"),
+                           {"id": import_id})
+                assert db.scalar(text("SELECT pg_try_advisory_xact_lock(:key)"),
+                                 {"key": 0x41484944454E54})
+                assert db.scalar(text(
+                    "SELECT pg_try_advisory_xact_lock(hashtextextended(:key, 0))"),
+                    {"key": f"audience-hub:import:{import_id}"})
+                db.commit()
+            result = pool.submit(run_import, import_id).result(timeout=30)
+        finally:
+            release.set()
+        if stale_failure:
+            with pytest.raises(RuntimeError, match="stale invocation"):
+                first.result(timeout=30)
+        else:
+            assert first.result(timeout=30) == result
+    assert result["rows_total"] == 23
+    assert result["rows_ok"] == 22
+    assert result["rows_rejected"] == 1
+    assert result["warning_count"] == 1
+    with Session(engine) as db:
+        imported = db.execute(text("SELECT * FROM imports WHERE id=:id"),
+                              {"id": import_id}).mappings().one()
+        assert imported["status"] == "completed"
+        assert imported["last_committed_record_number"] == 24
+        assert db.scalar(text("SELECT count(*) FROM gifts WHERE source_id=:id"),
+                         {"id": source}) == 22
+        assert db.scalar(text("""
+            SELECT attributes->'_import_consent'->>'status' FROM source_records
+            WHERE source_id=:id AND external_id='gift-0'
+        """), {"id": source}) == "opted_out"
+        with open(imported["error_file_path"], newline="") as handle:
+            diagnostics = list(csv.DictReader(handle))
+        # Invalid amount emits both conversion and required-field errors;
+        # diagnostics count messages, while rows_rejected counts the row once.
+        assert len(diagnostics) == 3
+        assert [(int(item["row"]), item["severity"]) for item in diagnostics] == [
+            (13, "error"), (13, "error"), (14, "warning"),
+        ]
+        assert "ConversionSyntax" in diagnostics[0]["message"]
+        assert diagnostics[1]["message"] == "Required field missing: amount"
+        assert "date_fallback_format" in diagnostics[2]["message"]
 
 
 @pytest.mark.skipif(
@@ -53,13 +168,13 @@ def test_batch_checkpoint_retry_preserves_diagnostics_and_bounce_precedence(tmp_
 
     def fault(update):
         if update["phase"] == "writing" and update["done"] == 10_000:
-            # A separate physical connection still cannot own this import,
-            # even though the first batch's transaction has committed.
+            # A committed batch releases its mutex; another invocation may
+            # continue from the durable checkpoint immediately.
             with engine.connect() as connection:
                 acquired = connection.scalar(text(
-                    "SELECT pg_try_advisory_lock(hashtextextended(:key, 0))"),
+                    "SELECT pg_try_advisory_xact_lock(hashtextextended(:key, 0))"),
                     {"key": f"audience-hub:import:{import_id}"})
-                assert acquired is False
+                assert acquired is True
             if failure == "after_commit":
                 raise RuntimeError("fault after durable first batch")
 

@@ -9,6 +9,27 @@ Production runs on our own Linux server with Docker Engine and the Compose plugi
 - Sits behind the existing reverse proxy that terminates TLS (Nginx Proxy Manager, Traefik, or Caddy). Only the proxy is exposed; `api` binds to the internal Docker network or `127.0.0.1`.
 - DNS: e.g. `audience.obtv.io` for the UI/API. If the browser SDK is used on public sites, the `/v1` and `/sdk` paths must be reachable publicly; everything else can be restricted to the internal network or VPN at the proxy.
 
+## PostgreSQL lock-table budget
+
+Compose sets `max_locks_per_transaction=1024` as production headroom for concurrent
+imports, identity work, migrations, and relation/advisory locks. This sizes a
+shared server-wide pool, not a hard per-transaction limit. Capacity scales
+approximately with `max_locks_per_transaction * (max_connections +
+max_prepared_transactions)`: at 100 connections and no prepared transactions,
+1024 budgets about 102,400 lock objects versus 6,400 at the default 64.
+Lock and holder bookkeeping use additional shared memory (typically tens of
+MiB here; exact allocation depends on PostgreSQL version/build). Budget that
+alongside the existing 8 GB shared buffers, connection/work memory, and OS
+cache; reconsider the budget when increasing connection limits.
+
+This setting requires a PostgreSQL **restart**, not a reload. After changing the
+Compose command, recreate the database container with `docker compose up -d db`
+(schedule downtime; keep the persistent volume), then verify with
+`SHOW max_locks_per_transaction;`. Raising the setting is defense in depth,
+**not a substitute for bounded resolver transactions and advisory-lock buckets**.
+The isolated 50,000-record concurrent-import regression deliberately uses
+PostgreSQL's default 64 to protect that property.
+
 ## Dockerfile (multi-stage, single image)
 
 ```dockerfile
@@ -66,7 +87,7 @@ services:
       postgres -c shared_buffers=8GB -c effective_cache_size=24GB
                -c work_mem=64MB -c maintenance_work_mem=1GB
                -c max_wal_size=8GB -c random_page_cost=1.1
-               -c jit=off
+               -c jit=off -c max_locks_per_transaction=1024
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:

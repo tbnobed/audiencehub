@@ -8,8 +8,7 @@ from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
-from app.identity.locking import IdentityResolutionDeferred, acquire_resolver_lock
-from app.jobs.queue import identity_import_running
+from app.identity.locking import acquire_identifier_locks, acquire_resolver_lock
 
 from app.identity.normalize import (
     normalize_anonymous_id,
@@ -18,7 +17,8 @@ from app.identity.normalize import (
 )
 from app.identity.survivorship import recompute_profiles_fields
 
-BATCH_SIZE = 10_000
+BATCH_SIZE = 500
+COMPONENT_SCAN_SIZE = 10_000
 HIGH_CARDINALITY_LIMIT = 25
 
 
@@ -415,19 +415,28 @@ def _assign_record_references(
 
 
 def resolve_batch(db: Session, limit: int = BATCH_SIZE, job_id: int | None = None) -> dict[str, int]:
-    """Resolve up to ``limit`` pending source records in one transaction."""
+    """Resolve one connected-component group of at most 500 records.
+
+    The caller MUST commit after each call, including an empty result, and loop
+    until an empty result (a component boundary can make a group underfull).
+    Components within the discovery window stay together when they fit. An
+    oversized component is streamed through bounded prefixes; every subsequent
+    transaction rebuilds components from fresh source rows and persisted
+    identifiers under the exclusive resolver lock. Never carry a planned winner
+    across commits. Later bridges merge earlier partial profiles using the usual
+    oldest-profile rule and move every dependent reference. Thus interruption
+    leaves only unresolved rows to retry, not a lost in-memory component plan.
+    """
     limit = max(1, min(int(limit), BATCH_SIZE))
     acquire_resolver_lock(db)
-    if identity_import_running(db):
-        raise IdentityResolutionDeferred("Identity resolution is waiting for running imports")
     pending = db.execute(
         text("""
             SELECT sr.*, s.key AS source_key, s.priority, i.record_type AS imported_record_type
             FROM source_records sr JOIN sources s ON s.id=sr.source_id
             LEFT JOIN imports i ON i.id=sr.last_import_id
-            WHERE sr.resolved_at IS NULL ORDER BY sr.id LIMIT :limit FOR UPDATE OF sr
+            WHERE sr.resolved_at IS NULL ORDER BY sr.id LIMIT :limit
         """),
-        {"limit": limit},
+        {"limit": COMPONENT_SCAN_SIZE},
     ).mappings().all()
     if not pending:
         return {"records": 0, "profiles_created": 0, "merges": 0}
@@ -441,20 +450,8 @@ def resolve_batch(db: Session, limit: int = BATCH_SIZE, job_id: int | None = Non
     for record_id, values in identifiers.items():
         identifiers[record_id] = {identifier for identifier in values if identifier not in blocked}
 
-    lock_keys = [f"{kind}:{value}" for kind, value in sorted(key_set)]
-    if lock_keys:
-        db.execute(
-            text("""
-                WITH ordered_keys AS MATERIALIZED (
-                    SELECT lock_key FROM unnest(CAST(:lock_keys AS text[])) AS keys(lock_key)
-                    ORDER BY lock_key
-                )
-                SELECT pg_advisory_xact_lock(hashtext(lock_key)) FROM ordered_keys
-            """),
-            {"lock_keys": lock_keys},
-        )
-    # Re-read after taking locks so a prior resolver's writes are visible before
-    # any new profile is selected.
+    # The exclusive transaction lock precedes discovery: no participating
+    # importer or resolver can change these rows while the group is planned.
     key_pairs = sorted(key_set)
     existing = db.execute(
         text("""
@@ -490,19 +487,39 @@ def resolve_batch(db: Session, limit: int = BATCH_SIZE, job_id: int | None = Non
     components: dict[Any, list[int]] = defaultdict(list)
     for record in records:
         components[uf.find(("record", record["id"]))].append(record["id"])
+    # Stable component order follows the first pending record. Do not hold row
+    # or identifier locks for the entire discovery window.
+    selected_components = []
+    remaining = limit
+    for component_records in components.values():
+        if len(component_records) > remaining:
+            if not selected_components:
+                selected_components.append(component_records[:remaining])
+            break
+        selected_components.append(component_records)
+        remaining -= len(component_records)
+        if not remaining:
+            break
+    selected_ids = {rid for component in selected_components for rid in component}
+    records = [record for record in records if record["id"] in selected_ids]
     record_by_id = {record["id"]: record for record in records}
+    key_set = {key for rid in selected_ids for key in identifiers[rid]}
+    acquire_identifier_locks(db, key_set)
 
     component_plans = []
-    existing_profile_ids = {profile_id for profile_id in key_profiles.values()}
+    existing_profile_ids = {key_profiles[key] for key in key_set if key in key_profiles}
     existing_profile_ids.update(
         record["profile_id"] for record in records if record.get("profile_id")
     )
-    for component_records in components.values():
-        root = uf.find(("record", component_records[0]))
+    for component_records in selected_components:
+        # On a split component, only merge profiles reached by this prefix.
+        # Its remaining bridges are re-read in the next transaction.
         profile_ids = {
-            item[1] for item in uf.parent
-            if item[0] == "profile" and uf.find(item) == root
+            key_profiles[key] for rid in component_records
+            for key in identifiers[rid] if key in key_profiles
         }
+        profile_ids.update(record_by_id[rid]["profile_id"]
+                           for rid in component_records if record_by_id[rid].get("profile_id"))
         component_plans.append((component_records, profile_ids))
 
     profile_first_seen = {}

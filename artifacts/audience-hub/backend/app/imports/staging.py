@@ -56,29 +56,16 @@ import_statistics: ContextVar[ImportStatistics | None] = ContextVar(
 )
 
 
-@contextmanager
 def import_lock(db: Session, import_id: int):
-    """Serialize one import across commits; never return a locked pooled connection."""
-    bind = db.get_bind()
-    with bind.engine.connect() as connection:
-        params = {"key": f"audience-hub:import:{import_id}"}
-        acquired = False
-        try:
-            connection.execute(text(
-                "SELECT pg_advisory_lock(hashtextextended(:key, 0))"), params)
-            acquired = True
-            connection.commit()
-            yield
-        finally:
-            if acquired:
-                try:
-                    connection.rollback()
-                    connection.execute(text(
-                        "SELECT pg_advisory_unlock(hashtextextended(:key, 0))"), params)
-                    connection.commit()
-                except BaseException:
-                    connection.invalidate()
-                    raise
+    """Serialize checkpoint reads and writes until the caller commits/rolls back."""
+    db.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+               {"key": f"audience-hub:import:{import_id}"})
+
+
+def import_batch_identity_lock(db: Session) -> None:
+    """Share the resolver's identity key for this write transaction only."""
+    db.execute(text("SELECT pg_advisory_xact_lock_shared(:key)"),
+               {"key": 0x41484944454E54})
 
 
 @contextmanager

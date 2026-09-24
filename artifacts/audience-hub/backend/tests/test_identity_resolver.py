@@ -7,6 +7,9 @@ from sqlalchemy.orm import Session
 from app.db import engine
 from app.importer import _mapping
 from app.identity.resolver import UnionFind, backfill_anonymous_events, resolve_batch
+from app.identity.locking import (
+    IDENTIFIER_LOCK_BUCKETS, IDENTIFIER_LOCK_NAMESPACE, acquire_identifier_locks,
+)
 from app.identity.survivorship import select_survivorship_values
 from app.imports.service import _row_payload, _upsert_source_records
 from app.imports.validation import map_and_validate_row
@@ -63,6 +66,133 @@ def test_anonymous_event_backfill_is_scoped_and_only_fills_unlinked():
     assert db.params == {
         "profile_id": 42, "source_id": 7, "anonymous_id": "anon-1"
     }
+
+
+def test_identifier_lock_buckets_are_bounded_distinct_and_numerically_ordered():
+    db = _Recorder()
+    acquire_identifier_locks(db, [("email", "b@example.org"), ("external", "a:1"),
+                                 ("email", "b@example.org")])
+    assert db.params["keys"] == ["email:b@example.org", "external:a:1"]
+    assert db.params["buckets"] == IDENTIFIER_LOCK_BUCKETS == 1024
+    assert db.params["namespace"] == IDENTIFIER_LOCK_NAMESPACE
+    assert "SELECT DISTINCT" in db.statement
+    assert "ORDER BY bucket" in db.statement
+    assert "((hashtext(lock_key) % :buckets) + :buckets) % :buckets" in db.statement
+    assert "pg_advisory_xact_lock(CAST(:namespace AS integer), bucket)" in db.statement
+
+
+def test_empty_identifier_group_takes_no_bucket_locks():
+    db = _Recorder()
+    acquire_identifier_locks(db, [])
+    assert db.statement == ""
+
+
+def test_identity_handler_commits_underfull_groups_and_only_stops_at_empty(monkeypatch):
+    from app.jobs.handlers import run
+
+    calls = []
+
+    class BatchSession:
+        def __init__(self, _engine):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            pass
+
+        def commit(self):
+            calls.append("commit")
+
+    sizes = iter([2, 1, 0])
+
+    def resolve(_db, limit, job_id):
+        assert limit == 10_000
+        assert job_id == 42
+        size = next(sizes)
+        calls.append(size)
+        return {"records": size, "profiles_created": size, "merges": 0}
+
+    monkeypatch.setattr("sqlalchemy.orm.Session", BatchSession)
+    monkeypatch.setattr("app.identity.resolver.resolve_batch", resolve)
+    run("identity.resolve_batch", {"limit": 10_000}, job_id=42)
+    assert calls == [2, "commit", 1, "commit", 0, "commit"]
+
+
+def test_large_connected_component_resumes_in_bounded_groups():
+    """Rollback-only correctness test; isolated scale test covers real commits."""
+    prefix = f"resolver_large_component_{uuid.uuid4().hex}"
+    with Session(engine) as db:
+        source_id = db.execute(text("""
+            INSERT INTO sources (key, name, kind, record_types, priority, is_active)
+            VALUES (:key, :key, 'csv', ARRAY['gift']::text[], 10, true) RETURNING id
+        """), {"key": prefix}).scalar_one()
+        import_id = db.execute(text("""
+            INSERT INTO imports (source_id, filename, record_type)
+            VALUES (:source_id, 'large.csv', 'gift') RETURNING id
+        """), {"source_id": source_id}).scalar_one()
+        db.execute(text("""
+            INSERT INTO source_records
+              (source_id, external_id, email_norm, raw_hash, last_import_id)
+            SELECT :source_id, :prefix || '-' || n, :email, 'row-' || n, :import_id
+            FROM generate_series(1, 1001) n
+        """), {"source_id": source_id, "prefix": prefix, "import_id": import_id,
+               "email": f"{prefix}@example.org"})
+        # The oldest pre-existing profile is encountered only in the final
+        # prefix. Earlier commits must not pin the eventual winner incorrectly.
+        winner = db.execute(text("""
+            INSERT INTO profiles (first_seen_at, last_seen_at)
+            VALUES ('2020-01-01', '2020-01-01') RETURNING id
+        """)).scalar_one()
+        db.execute(text("""
+            INSERT INTO identifiers (type, value, profile_id)
+            VALUES ('external', :value, :winner)
+        """), {"value": f"{prefix}:{prefix}-1001", "winner": winner})
+        results = [resolve_batch(db, limit=50_000) for _ in range(3)]
+        assert [result["records"] for result in results] == [500, 500, 1]
+        assert sum(result["profiles_created"] for result in results) == 1
+        assert sum(result["merges"] for result in results) == 1
+        assert resolve_batch(db)["records"] == 0
+        assert db.scalar(text("""
+            SELECT count(DISTINCT profile_id) FROM source_records WHERE source_id=:id
+        """), {"id": source_id}) == 1
+        assert db.scalar(text("""
+            SELECT count(*) FROM source_records
+            WHERE source_id=:id AND resolved_at IS NOT NULL
+        """), {"id": source_id}) == 1001
+        assert db.scalar(text("""
+            SELECT count(*) FROM source_records
+            WHERE source_id=:id AND profile_id=:winner
+        """), {"id": source_id, "winner": winner}) == 1001
+        assert db.scalar(text("""
+            SELECT count(*) FROM identifiers
+            WHERE profile_id=:winner AND (
+                (type='external' AND value LIKE :prefix) OR
+                (type='email' AND value=:email))
+        """), {"winner": winner, "prefix": f"{prefix}:%",
+               "email": f"{prefix}@example.org"}) == 1002
+        db.rollback()
+
+
+def test_component_boundary_can_return_underfull_group_without_finishing():
+    prefix = f"resolver_boundary_{uuid.uuid4().hex}"
+    with Session(engine) as db:
+        source_id = db.execute(text("""
+            INSERT INTO sources (key, name, kind, record_types, priority, is_active)
+            VALUES (:key, :key, 'csv', ARRAY['contact']::text[], 10, true) RETURNING id
+        """), {"key": prefix}).scalar_one()
+        db.execute(text("""
+            INSERT INTO source_records (source_id, external_id, email_norm, raw_hash)
+            SELECT :source_id, :prefix || '-' || n,
+                   :prefix || '-' || ((n-1)/2) || '@example.org', 'row-' || n
+            FROM generate_series(1, 6) n
+        """), {"source_id": source_id, "prefix": prefix})
+        results = [resolve_batch(db, limit=3) for _ in range(3)]
+        assert [result["records"] for result in results] == [2, 2, 2]
+        assert sum(result["profiles_created"] for result in results) == 3
+        assert resolve_batch(db)["records"] == 0
+        db.rollback()
 
 
 def test_resolver_merges_profiles_moves_related_rows_and_preserves_opt_out():

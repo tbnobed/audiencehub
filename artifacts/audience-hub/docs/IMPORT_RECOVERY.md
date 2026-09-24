@@ -14,11 +14,14 @@ Migration `0008_import_checkpoints` adds the checkpoint and diagnostic storage.
 Rebuild the API and worker images together; normal API startup applies migrations.
 Stop old workers before upgrading so old and new transaction behavior do not mix.
 
-Contact, consent and enrichment imports hold a shared advisory lock across batch
-commits. Identity resolution takes the exclusive counterpart. A resolver that
-finds an active conflicting import or cannot acquire the lock is deferred for
-30 seconds without consuming a failure attempt. Overlapping import writes use
-stable conflict-key ordering.
+Import writes hold a shared transaction advisory lock for one batch only.
+Identity resolution takes the exclusive counterpart for groups of at most 500
+records, releasing it on each commit. Validation holds neither advisory nor
+import-row locks. A resolver that cannot acquire the coordination lock is
+deferred for 30 seconds without consuming a failure attempt; a running import
+does not exclude resolution between its batches. Identifier locks use 1,024
+distinct, sorted hash buckets instead of one lock per identifier. Overlapping
+import writes use stable conflict-key ordering.
 
 Worker ERROR logs include sanitized exception chains and stack frame locations.
 SQLSTATE-aware failure messages also appear in `jobs.error` and the System page.

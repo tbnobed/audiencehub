@@ -34,7 +34,9 @@ Identifiers on `identifier_blocklist` are never used for matching. Seed with:
 
 ## Algorithm (`app/identity/resolver.py`)
 
-Batch-oriented, runs inside `identity.resolve_batch` over up to 10k pending source records at a time.
+Batch-oriented: each `resolve_batch` call resolves at most 500 pending records.
+The `identity.resolve_batch` job handler commits each group and repeats until an
+empty result; an underfull group is not end-of-work.
 
 1. Load pending records and extract their normalized identifiers (excluding blocklisted).
 2. Look up all those identifiers in `identifiers` in one query → map identifier → profile_id.
@@ -47,7 +49,28 @@ Batch-oriented, runs inside `identity.resolve_batch` over up to 10k pending sour
 6. Recompute survivor fields for affected profiles (see below) and mark `source_records.resolved_at`.
 7. Mark affected profiles dirty for `traits.recompute`.
 
-Concurrency: take `pg_advisory_xact_lock(hashtext(identifier))` for every identifier in a component before merging, sorted to avoid deadlocks. Only one `identity.resolve_batch` runs at a time by default (dedupe key `identity`), which is enough for MVP volumes.
+Concurrency: hash identifiers into a fixed pool of **1024 advisory-lock buckets**,
+deduplicate and acquire bucket locks in sorted order to avoid deadlocks. Hash
+collisions only serialize unrelated work; they do not change matching semantics.
+Resolve requests are split into groups of **at most 500 records per transaction**,
+committing each group to release row and transaction advisory locks instead of
+accumulating one lock per distinct identifier for the entire request. The
+resolver takes an exclusive transaction-level coordination lock; contact,
+consent, and enrichment imports take the corresponding **shared transaction
+lock per writing batch**, released on commit/rollback, not for the whole file.
+Imports and resolution can therefore make progress between each other's
+batches. A busy coordination lock defers resolution safely rather than failing
+the job. Dedupe key `identity` additionally avoids redundant queued resolvers.
+Production's larger lock-table budget is headroom, not required for correctness.
+
+The opt-in real PostgreSQL scale regression seeds 50,000 records with distinct
+external, email, user, and anonymous identifiers, requests resolution of all
+50,000 through a caller-owned commit loop (as in the job handler), and synchronizes
+a real contact import to commit during that request.
+It asserts `max_locks_per_transaction=64` and verifies resolved records and
+import row counts without loss. Run only in the disposable benchmark fixture:
+`KINSHIP_IDENTITY_SCALE_TEST=1 PYTEST_ADDOPTS="-k identity_scale" kinship benchmark --imports --test-suite`.
+Never point this test at the application database.
 
 Events: when an `identify` event has `user_id` or email/phone traits, it creates or updates a source record for the event source and links its `anonymous_id` identifier to the resolved profile. Then `UPDATE events SET profile_id = $p WHERE anonymous_id = $a AND profile_id IS NULL`.
 
