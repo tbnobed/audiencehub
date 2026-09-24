@@ -17,6 +17,8 @@ from app.models import AuditLog, Job, ScheduledRun, User
 from app.sources import router as sources_router
 from app.imports.api import router as imports_router
 from app.profiles.api import router as profiles_router
+from app.dashboards.api import router as dashboards_router
+from app.settings.api import router as settings_router
 
 
 @asynccontextmanager
@@ -34,6 +36,8 @@ app.include_router(oidc.router)
 app.include_router(sources_router)
 app.include_router(imports_router)
 app.include_router(profiles_router)
+app.include_router(dashboards_router)
+app.include_router(settings_router)
 
 
 @app.exception_handler(HTTPException)
@@ -83,7 +87,7 @@ def healthz():
 def readyz():
     with engine.connect() as db:
         version = db.scalar(text("SELECT version_num FROM alembic_version"))
-    if version != "0003_historical_event_partitions":
+    if version != "0007_admin_settings":
         raise HTTPException(503, detail="Database migration is not current")
     return {"status": "ready"}
 
@@ -131,7 +135,7 @@ def system(user: User = Depends(require_role("admin")), db: Session = Depends(se
         select(Job.status, func.count(Job.id)).group_by(Job.status))}
     scheduled = db.scalars(select(ScheduledRun).order_by(ScheduledRun.created_at.desc()).limit(20)).all()
     size = db.scalar(text("SELECT pg_size_pretty(pg_database_size(current_database()))"))
-    return {"counts": counts, "database_size": size, "migration": "0003_historical_event_partitions",
+    return {"counts": counts, "database_size": size, "migration": "0007_admin_settings",
             "scheduled_runs": [{"task": run.task, "window_key": run.window_key, "job_id": run.job_id}
                                for run in scheduled]}
 

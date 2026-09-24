@@ -111,4 +111,5 @@ from app.models.milestone2 import (  # noqa: E402,F401
     SourceRecord,
     Suppression,
     TraitSnapshot,
+    TraitDirtyProfile,
 )

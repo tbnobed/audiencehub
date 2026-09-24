@@ -593,11 +593,18 @@ def resolve_batch(db: Session, limit: int = BATCH_SIZE, job_id: int | None = Non
             },
         )
     recompute_profiles_fields(db, affected)
-    # Until the traits worker can recompute, remove potentially stale
-    # aggregates instead of exposing counts calculated before resolution.
     if affected:
         db.execute(
             text("DELETE FROM profile_traits WHERE profile_id=ANY(CAST(:profile_ids AS bigint[]))"),
             {"profile_ids": list(affected)},
         )
+        # Re-resolution may change gift/event ownership or merge profiles. Reset
+        # the debounce timestamp on conflict so traits run ten minutes after the
+        # final resolution activity for each profile.
+        db.execute(text("""
+            INSERT INTO trait_dirty_profiles (profile_id, dirtied_at)
+            SELECT DISTINCT profile_id, clock_timestamp()
+            FROM unnest(CAST(:profile_ids AS bigint[])) AS changed(profile_id)
+            ON CONFLICT (profile_id) DO UPDATE SET dirtied_at=EXCLUDED.dirtied_at
+        """), {"profile_ids": list(affected)})
     return {"records": len(records), "profiles_created": profiles_created, "merges": merges}

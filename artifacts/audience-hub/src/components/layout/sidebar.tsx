@@ -37,14 +37,18 @@ export function Sidebar() {
   const visibleItems = navItems.filter(item => item.roles.includes(role));
 
   return (
-    <div className={cn("bg-sidebar border-r border-sidebar-border flex flex-col shrink-0 transition-[width]", collapsed ? "w-16" : "w-64")}>
-      <div className="h-14 flex items-center justify-between px-3 border-b border-sidebar-border">
-        {!collapsed && <span className="font-mono font-bold tracking-tight text-primary text-sm">AUDIENCE_HUB</span>}
-        <button type="button" title={collapsed ? "Expand sidebar" : "Collapse sidebar"} aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"} onClick={() => setCollapsed(!collapsed)} className="text-sidebar-foreground hover:text-primary">
-          {collapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
-        </button>
+    <div className={cn("bg-sidebar border-r border-sidebar-border flex flex-col shrink-0 transition-[width]", collapsed ? "w-14" : "w-[200px]")}>
+      <div className={cn("h-14 flex items-center px-4 border-b border-sidebar-border", collapsed && "justify-center")}>
+        <Link to="/" aria-label="Kinship home">
+          <img
+            src={`${import.meta.env.BASE_URL}brand/${collapsed ? 'kinship-mark-dark.svg' : 'kinship-sidebar-wordmark.svg'}`}
+            alt="Kinship"
+            className="h-6 w-auto max-w-full"
+            height={24}
+          />
+        </Link>
       </div>
-      <nav className="flex-1 py-4 px-3 space-y-1">
+      <nav className={cn("flex-1 py-4 space-y-1", collapsed ? "px-2" : "px-3")}>
         {visibleItems.map(item => {
           const isActive = location === item.path || (item.path !== '/' && location.startsWith(item.path));
           return (
@@ -54,7 +58,8 @@ export function Sidebar() {
               title={collapsed ? item.name : undefined}
               aria-label={item.name}
               className={cn(
-                "flex items-center px-3 py-2 text-sm font-medium rounded-md transition-colors",
+                "flex items-center py-2 text-sm font-medium rounded-md transition-colors",
+                collapsed ? "justify-center px-2" : "px-3",
                 isActive 
                   ? "bg-sidebar-accent text-sidebar-accent-foreground" 
                   : "text-sidebar-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground"
@@ -66,6 +71,9 @@ export function Sidebar() {
           );
         })}
       </nav>
+      <button type="button" title={collapsed ? "Expand sidebar" : "Collapse sidebar"} aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"} aria-expanded={!collapsed} onClick={() => setCollapsed(!collapsed)} className="m-2 flex justify-center p-2 rounded-md text-sidebar-foreground hover:text-primary">
+        {collapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
+      </button>
     </div>
   );
 }

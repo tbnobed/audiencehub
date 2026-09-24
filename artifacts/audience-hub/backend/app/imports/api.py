@@ -21,7 +21,8 @@ from app.config import get_settings
 from app.db import session_scope
 from app.imports.mapping import RECORD_TYPES, suggest_mapping, validate_mapping
 from app.imports.service import (
-    MAX_IMPORT_BYTES, ImportProblem, inspect_preview, safe_filename, validate_file,
+    MAX_IMPORT_BYTES, ImportProblem, _warning_category, inspect_preview,
+    safe_filename, validate_file,
 )
 from app.jobs.queue import enqueue
 from app.models import User
@@ -263,24 +264,16 @@ def validate_import(import_id: int, user: User = Depends(require_role("analyst")
                               mapping.get("options", {}), limit=5000)
     except (ImportProblem, UnicodeDecodeError, OSError) as exc:
         raise HTTPException(422, detail=str(exc)) from exc
+    warning_counts: dict[str, int] = {}
+    for warning in result["warnings"]:
+        category = _warning_category(warning["message"])
+        warning_counts[category] = warning_counts.get(category, 0) + 1
     db.execute(text(
         "UPDATE imports SET rows_ok=:ok, rows_rejected=:rejected, warning_count=:warnings, "
         "warning_counts=CAST(:warning_counts AS jsonb), status='mapped' WHERE id=:id"
     ), {"ok": result["rows_ok"], "rejected": result["rows_rejected"],
         "warnings": result["warning_count"],
-        "warning_counts": json.dumps({
-            "invalid_email": sum("invalid email" in row["message"].casefold()
-                                 for row in result["warnings"]),
-            "invalid_phone": sum("invalid phone" in row["message"].casefold()
-                                 for row in result["warnings"]),
-            "date_format_coerced": sum("date format coerced" in row["message"].casefold()
-                                       for row in result["warnings"]),
-            "other": sum(
-                not any(term in row["message"].casefold() for term in
-                        ("invalid email", "invalid phone", "date format coerced"))
-                for row in result["warnings"]
-            ),
-        }), "id": import_id})
+        "warning_counts": json.dumps(warning_counts), "id": import_id})
     db.commit()
     return result
 

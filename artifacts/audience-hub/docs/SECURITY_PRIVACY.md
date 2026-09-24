@@ -38,14 +38,14 @@ This system holds donor PII and giving history. Treat it as the most sensitive d
 - Sources: consent imports, `identify` traits (`consent_email`, etc.), and manual changes (with a required note).
 - Precedence: an opt-out from any source wins over an opt-in with an earlier or equal timestamp. A later explicit opt-in can override an earlier opt-out only if it comes from a source flagged `authoritative_for_consent` (for example the ESP's preference center).
 - Activations respect `required_consent`. Ad audiences default to requiring `ads_personalization` unless an admin overrides it for that activation (audited).
-- ESP hard bounces and spam complaints imported as consent records with status `opted_out` also add a suppression.
+- Hard bounces, spam complaints, and manual email suppressions set email consent to `opted_out`. They exclude an address from email-channel activations only; they never reject imported contact, gift, event, or enrichment rows and do not suppress other activation channels.
 
 ## Deletion requests (CCPA/CPRA-style right to delete)
 
 1. Admin enters an email or phone. The system normalizes it, finds matching profiles (including merged-away ones), and shows what will be deleted (counts only).
 2. Approval (by a second admin when `DELETION_TWO_PERSON=true`).
 3. `deletion.execute` job, in one transaction per profile: delete events, gifts, consents, enrichment values, segment memberships, identifiers, source records, and the profile rows. Insert suppression hashes (HMAC-SHA256 with `PII_HASH_PEPPER`) for every email and phone the profiles had.
-4. Future imports check suppressions and skip matching rows (counted as `suppressed` in the import report, not as errors).
+4. Future imports reject only identifiers with a `deletion_request` suppression. These rows are counted as rejected and reported in the import error file. Hard-bounce, spam-complaint, and manual suppressions do not reject imports; email suppressions with those reasons set email consent to `opted_out` so email-channel activation excludes the address while gifts, events, and enrichment remain importable.
 5. Audit log records the request ID, counts, and actor, not the identifier.
 6. Note in the admin UI that backups keep deleted data until they age out (`BACKUP_KEEP_DAYS`), and that gift records needed for tax receipting should be handled in the system of record, not here.
 

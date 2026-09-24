@@ -272,6 +272,12 @@ Index("ix_profile_traits_donor_status", ProfileTrait.donor_status)
 Index("ix_profile_traits_last_gift_date", ProfileTrait.last_gift_date)
 Index("ix_profile_traits_ltv_total", ProfileTrait.ltv_total)
 Index("ix_profile_traits_gift_amount_12m", ProfileTrait.gift_amount_12m)
+Index(
+    "ix_gifts_profile_recurring_date", Gift.profile_id, Gift.gift_date,
+    postgresql_where=text("is_recurring=true"),
+)
+Index("ix_gifts_source_profile", Gift.source_id, Gift.profile_id)
+Index("ix_events_source_profile", Event.source_id, Event.profile_id)
 
 
 class TraitSnapshot(Base):
@@ -281,6 +287,19 @@ class TraitSnapshot(Base):
     profile_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     ltv_sum: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, server_default="0")
     giving_12m_sum: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, server_default="0")
+
+
+class TraitDirtyProfile(Base):
+    __tablename__ = "trait_dirty_profiles"
+    profile_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("profiles.id", ondelete="CASCADE"), primary_key=True
+    )
+    dirtied_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+Index("ix_trait_dirty_profiles_dirtied_at", TraitDirtyProfile.dirtied_at)
 
 
 class Segment(Base):

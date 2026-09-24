@@ -1,8 +1,33 @@
 import argparse
+import os
+import time
 from sqlalchemy import select
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 from app.db import engine
 from app.models import AuditLog, User
+
+
+def _compute_seed_traits() -> None:
+    """Wait for queued identity resolution, then compute seeded traits/history."""
+    from app.traits.engine import backfill_trait_snapshots, recompute_traits
+
+    deadline = time.monotonic() + int(os.environ.get("SEED_LOAD_TIMEOUT_SECONDS", "7200"))
+    while True:
+        with Session(engine) as db:
+            pending = db.execute(text(
+                "SELECT count(*) FROM source_records WHERE resolved_at IS NULL"
+            )).scalar_one()
+        if not pending:
+            break
+        if time.monotonic() >= deadline:
+            raise RuntimeError("Seed trait computation timed out waiting for identity resolution.")
+        time.sleep(2)
+    with Session(engine) as db:
+        recompute_traits(db)
+        backfill_trait_snapshots(db)
+        db.execute(text("DELETE FROM trait_dirty_profiles"))
+        db.commit()
 
 
 def main():
@@ -49,6 +74,8 @@ def main():
             if args.load:
                 load_generated_files(result["files"])
                 print("CSV files submitted through app.importer.import_seed_files.")
+                _compute_seed_traits()
+                print("Computed profile traits and backfilled 24 monthly snapshots.")
         except (ValueError, RuntimeError) as exc:
             raise SystemExit(str(exc)) from exc
         return

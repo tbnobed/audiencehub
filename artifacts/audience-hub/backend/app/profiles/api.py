@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import text
@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from app.auth.deps import require_role
 from app.db import session_scope
 from app.models import AuditLog, IdentifierBlocklist, User
+from app.traits.registry import TRAITS
 
 router = APIRouter(tags=["profiles"])
 
@@ -58,7 +59,9 @@ def list_profiles(
     source_id: int | None = Query(default=None, ge=1),
     has_email: bool | None = None,
     has_phone: bool | None = None,
-    donor_status: str | None = Query(default=None, max_length=40),
+    donor_status: Literal[
+        "prospect", "new", "active", "reactivated", "lapsing", "lapsed"
+    ] | None = Query(default=None),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=100),
     user: User = Depends(require_role("viewer")),
@@ -100,7 +103,11 @@ def list_profiles(
     items = _rows(db, f"""
         SELECT p.id, p.first_name, p.last_name, p.email, p.phone, p.city, p.region,
                p.country, p.first_seen_at, p.last_seen_at,
-               COALESCE(pt.donor_status, 'prospect') AS donor_status
+               COALESCE(pt.donor_status, 'prospect') AS donor_status,
+               COALESCE(
+                   to_jsonb(pt) - 'profile_id',
+                   jsonb_build_object('donor_status', COALESCE(pt.donor_status, 'prospect'))
+               ) AS traits
         FROM profiles p
         LEFT JOIN profile_traits pt ON pt.profile_id=p.id
         WHERE {where}
@@ -120,7 +127,7 @@ def _profile_or_404(db: Session, profile_id: int) -> dict:
                pt.days_since_last_gift, pt.rfm_recency, pt.rfm_frequency,
                pt.rfm_monetary, pt.rfm_score, pt.event_count_30d, pt.last_event_at,
                pt.video_views_30d, pt.last_engagement_channel, pt.source_keys,
-               pt.computed_at AS traits_computed_at
+                pt.computed_at, pt.computed_at AS traits_computed_at
         FROM profiles p
         LEFT JOIN profile_traits pt ON pt.profile_id=p.id
         WHERE p.id=:id AND p.merged_into_id IS NULL AND p.is_deleted=false
@@ -152,7 +159,8 @@ def profile_detail(
         "first_gift_date", "last_gift_date", "largest_gift_amount", "avg_gift_amount",
         "is_recurring_active", "days_since_last_gift", "rfm_recency", "rfm_frequency",
         "rfm_monetary", "rfm_score", "event_count_30d", "last_event_at",
-        "video_views_30d", "last_engagement_channel", "source_keys", "traits_computed_at",
+        "donor_status", "video_views_30d", "last_engagement_channel", "source_keys",
+        "computed_at", "traits_computed_at",
     )
     pid = profile_id
     gifts = _rows(db, """
@@ -214,6 +222,12 @@ def profile_detail(
                     details={"role": user.role}))
     db.commit()
     return _json_safe(result, mask_pii=user.role == "viewer")
+
+
+@router.get("/api/traits")
+def trait_catalog(user: User = Depends(require_role("viewer"))):
+    """Return the documented trait catalog for profile/segment builders."""
+    return {"items": [trait.public_dict() for trait in TRAITS]}
 
 
 @router.get("/api/data-health")

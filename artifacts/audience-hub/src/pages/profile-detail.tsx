@@ -1,9 +1,12 @@
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
+import { fetchApi } from '@/lib/api';
 import { useProfile } from '@/hooks/use-profiles';
 import { 
   ArrowLeft, Mail, Phone, MapPin, Calendar, CreditCard, Activity, Link2, Database, ShieldAlert,
-  Merge, Gift, LayoutDashboard, Fingerprint, Coins, Shield
+  Merge, Gift, LayoutDashboard, Fingerprint, Coins, Shield, Copy, Check
 } from 'lucide-react';
+import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -15,7 +18,15 @@ import { Skeleton } from '@/components/ui/skeleton';
 export default function ProfileDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { data: profile, isLoading, error } = useProfile(Number(id));
+  const location = useLocation();
+  const back = (location.state as { from?: string } | null)?.from || '/profiles';
+  const [copied, setCopied] = useState(false);
+  const { data: profile, isLoading, error, refetch } = useProfile(Number(id));
+  const { data: catalog } = useQuery({
+    queryKey: ['traits-catalog'],
+    queryFn: () => fetchApi('/api/traits') as Promise<{ items: { key: string; label: string; description: string }[] }>,
+    staleTime: 300000,
+  });
 
   if (isLoading) {
     return (
@@ -34,13 +45,14 @@ export default function ProfileDetail() {
         <div className="h-16 w-16 rounded-full bg-destructive/10 flex items-center justify-center mb-4">
           <ShieldAlert className="h-8 w-8 text-destructive" />
         </div>
-        <h2 className="text-xl font-semibold mb-2">Profile Not Found</h2>
+        <h2 className="kin-heading mb-2">Profile Not Found</h2>
         <p className="text-muted-foreground mb-6 max-w-md">
           This profile might have been deleted or merged into another record.
         </p>
-        <Button onClick={() => navigate('/profiles')}>
+        <Button variant="outline" onClick={() => navigate(back)}>
           <ArrowLeft className="mr-2 h-4 w-4" /> Back to Profiles
         </Button>
+        {error && <Button variant="outline" onClick={() => refetch()}>Retry</Button>}
       </div>
     );
   }
@@ -48,21 +60,21 @@ export default function ProfileDetail() {
   const name = [profile.first_name, profile.last_name].filter(Boolean).join(' ') || 'Unnamed Profile';
 
   return (
-    <div className="h-full flex flex-col space-y-6 p-8 animate-in fade-in duration-500 max-w-[1400px] mx-auto">
+    <div className="h-full flex flex-col space-y-4 pb-8 animate-in fade-in duration-300 max-w-[1680px] mx-auto">
       <div className="flex items-center gap-4">
-        <Button variant="ghost" size="icon" onClick={() => navigate('/profiles')}>
+        <Button variant="ghost" size="icon" data-testid="button-back-profiles" onClick={() => navigate(back)}>
           <ArrowLeft className="h-5 w-5" />
         </Button>
         <div>
           <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-bold tracking-tight">{name}</h1>
+            <h1 className="kin-title">{name}</h1>
             <Badge variant="outline" className={`font-mono text-xs uppercase ${
               profile.donor_status === 'active' ? 'bg-primary/10 text-primary border-primary/20' :
               profile.donor_status === 'lapsed' ? 'bg-amber-500/10 text-amber-500 border-amber-500/20' : ''
             }`}>
               {profile.donor_status}
             </Badge>
-            <Badge variant="secondary" className="font-mono text-xs text-muted-foreground">ID: {profile.id}</Badge>
+            <button type="button" data-testid="button-copy-profile-id" className="font-mono text-[11px] text-muted-foreground border border-border rounded px-2 py-1 flex items-center gap-1 hover:text-primary" title="Copy profile ID" onClick={async () => { await navigator.clipboard.writeText(String(profile.id)); setCopied(true); setTimeout(() => setCopied(false), 2000); }}>ID: {profile.id} {copied ? <Check size={12} /> : <Copy size={12} />}</button>
           </div>
           <div className="flex items-center gap-4 mt-2 text-sm text-muted-foreground">
             {profile.email && <span className="flex items-center"><Mail className="h-3 w-3 mr-1" /> {profile.email}</span>}
@@ -75,6 +87,14 @@ export default function ProfileDetail() {
             )}
           </div>
         </div>
+      </div>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+        {[
+          ['Donor status', profile.donor_status?.replaceAll('_', ' ') || '—'],
+          ['RFM score', profile.traits?.rfm_score ?? '—'],
+          ['Lifetime giving', profile.traits?.ltv_total == null ? '—' : Number(profile.traits.ltv_total).toLocaleString('en-US', { style: 'currency', currency: 'USD' })],
+          ['Last gift', profile.traits?.last_gift_date ? format(new Date(profile.traits.last_gift_date), 'MMM d, yyyy') : '—'],
+        ].map(([label, value]) => <div key={label} className="border border-line bg-surface rounded px-3 py-3"><div className="text-[10px] uppercase tracking-wider text-ink-muted">{label}</div><div className="font-mono text-lg text-ink mt-1" data-testid={`value-${label.toLowerCase().replaceAll(' ', '-')}`}>{value}</div></div>)}
       </div>
 
       <Tabs defaultValue="overview" className="flex-1 flex flex-col">
@@ -99,7 +119,7 @@ export default function ProfileDetail() {
           </TabsTrigger>
         </TabsList>
 
-        <div className="flex-1 mt-6">
+        <div className="flex-1 mt-4">
           <TabsContent value="overview" className="m-0 space-y-6">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
               <Card>
@@ -182,6 +202,17 @@ export default function ProfileDetail() {
                 </div>
               </CardContent>
             </Card>
+            <Card>
+              <CardHeader className="pb-3"><CardTitle className="text-sm">Computed traits</CardTitle><CardDescription>Current values from the trait engine. Hover a label for its definition.</CardDescription></CardHeader>
+              <CardContent className="grid grid-cols-2 lg:grid-cols-4 gap-px bg-line p-px">
+                {(catalog?.items || []).map(item => <div key={item.key} className="bg-surface p-3 min-w-0" title={item.description}><div className="text-[10px] uppercase tracking-wide text-ink-muted truncate">{item.label}</div><div className="font-mono text-xs mt-1 break-words">{profile.traits?.[item.key] == null ? '—' : Array.isArray(profile.traits[item.key]) ? profile.traits[item.key].join(', ') : typeof profile.traits[item.key] === 'boolean' ? (profile.traits[item.key] ? 'Yes' : 'No') : String(profile.traits[item.key])}</div></div>)}
+                {!catalog?.items?.length && <div className="bg-surface p-3 text-xs text-ink-muted">Trait definitions unavailable.</div>}
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-3"><CardTitle className="text-sm">Consent by channel</CardTitle><CardDescription>Recorded communication preferences and provenance.</CardDescription></CardHeader>
+              <CardContent className="p-0"><Table><TableHeader><TableRow><TableHead>Channel</TableHead><TableHead>Status</TableHead><TableHead>Source</TableHead><TableHead className="text-right">Captured</TableHead></TableRow></TableHeader><TableBody>{profile.consents.length ? profile.consents.map((c, i) => <TableRow key={i}><TableCell className="uppercase text-xs">{c.channel}</TableCell><TableCell className="text-xs">{c.status}</TableCell><TableCell className="font-mono text-xs">{c.source_key}</TableCell><TableCell className="text-right text-xs">{c.captured_at ? format(new Date(c.captured_at), 'MMM d, yyyy') : '—'}</TableCell></TableRow>) : <TableRow><TableCell colSpan={4} className="text-center text-xs text-muted-foreground py-6">No consent records yet.</TableCell></TableRow>}</TableBody></Table></CardContent>
+            </Card>
           </TabsContent>
 
           <TabsContent value="gifts" className="m-0 h-full">
@@ -263,6 +294,7 @@ export default function ProfileDetail() {
                           <TableCell className="font-medium text-sm">{event.name}</TableCell>
                           <TableCell>
                             <Badge variant="secondary" className="font-mono text-[10px]">{event.source_key}</Badge>
+                            {event.properties && Object.keys(event.properties).length > 0 && <details className="mt-1 text-[10px]"><summary className="cursor-pointer text-primary">Properties</summary><pre className="mt-1 p-2 bg-ground border border-line rounded max-w-[300px] overflow-auto">{JSON.stringify(event.properties, null, 2)}</pre></details>}
                           </TableCell>
                         </TableRow>
                       ))
@@ -383,6 +415,7 @@ export default function ProfileDetail() {
                             <div className="flex flex-col">
                               {sr.email && <span>{sr.email}</span>}
                               {sr.phone && <span className="text-muted-foreground">{sr.phone}</span>}
+                              {sr.attributes && Object.keys(sr.attributes).length > 0 && <details className="mt-1 text-[10px]"><summary className="cursor-pointer text-primary">Raw attributes</summary><pre className="mt-1 p-2 bg-ground border border-line rounded max-w-[300px] overflow-auto">{JSON.stringify(sr.attributes, null, 2)}</pre></details>}
                             </div>
                           </TableCell>
                           <TableCell className="text-right text-xs text-muted-foreground">
@@ -410,7 +443,7 @@ export default function ProfileDetail() {
                       <TableHead>Provider</TableHead>
                       <TableHead>Attribute Key</TableHead>
                       <TableHead>Value</TableHead>
-                      <TableHead className="text-right">Updated At</TableHead>
+                      <TableHead className="text-right">License expires</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -434,7 +467,7 @@ export default function ProfileDetail() {
                              enr.value_date !== null ? enr.value_date : '-'}
                           </TableCell>
                           <TableCell className="text-right text-xs text-muted-foreground">
-                            {enr.imported_at ? format(new Date(enr.imported_at), 'MMM d, yy') : '-'}
+                            {enr.license_expires_at ? format(new Date(enr.license_expires_at), 'MMM d, yy') : 'No expiry'}
                           </TableCell>
                         </TableRow>
                       ))

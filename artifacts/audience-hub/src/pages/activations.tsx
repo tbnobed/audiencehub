@@ -8,7 +8,7 @@ export default function Activations() {
         <Activity className="h-8 w-8 text-primary" />
       </div>
       <div className="text-center">
-        <h2 className="text-xl font-semibold">No Activations Running</h2>
+        <h2 className="kin-heading">No Activations Running</h2>
         <p className="text-muted-foreground mt-1 max-w-sm">
           Sync your segments to external marketing and advertising destinations.
         </p>

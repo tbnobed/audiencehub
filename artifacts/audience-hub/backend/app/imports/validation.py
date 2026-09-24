@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import re
 from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -54,17 +53,46 @@ def normalize_phone(value: str, region: str = "US") -> str | None:
         if phonenumbers.is_valid_number(parsed) else None
 
 
-def _date(value: str, configured_format: str | None) -> date:
-    if configured_format:
-        configured_format = configured_format.replace("YYYY", "%Y").replace("MM", "%m").replace("DD", "%d")
-        return datetime.strptime(value.strip(), configured_format).date()
+def _parse_date(value: str, configured_format: str | None) -> tuple[date, str | None]:
     value = value.strip()
-    for format_string in ("%Y-%m-%d", "%m/%d/%Y", "%b %d, %Y"):
+    if configured_format:
+        normalized_format = (
+            configured_format.replace("YYYY", "%Y")
+            .replace("MM", "%m")
+            .replace("DD", "%d")
+        )
         try:
-            return datetime.strptime(value, format_string).date()
+            return datetime.strptime(value, normalized_format).date(), None
         except ValueError:
             pass
+
+    fallback_formats = ("%Y-%m-%d", "%m/%d/%Y", "%b %d, %Y")
+    for format_string in fallback_formats:
+        try:
+            parsed = datetime.strptime(value, format_string).date()
+        except ValueError:
+            continue
+        if format_string == "%Y-%m-%d":
+            return parsed, "date_fallback_format" if configured_format else None
+        if format_string == "%m/%d/%Y":
+            month, day = (int(part) for part in value.split("/")[:2])
+            if month != day and 1 <= month <= 12 and 1 <= day <= 12:
+                return parsed, "date_ambiguous"
+        return parsed, "date_fallback_format"
     raise ValueError("expected YYYY-MM-DD, MM/DD/YYYY, or Mon DD, YYYY")
+
+
+def _date(value: str, configured_format: str | None) -> date:
+    """Parse a date while retaining the established value-only helper API."""
+    return _parse_date(value, configured_format)[0]
+
+
+def _date_warning(header: str, category: str) -> str:
+    if category == "date_ambiguous":
+        return f"{header}: date_ambiguous: numeric date could be interpreted in more than one order"
+    if category == "date_clamped":
+        return f"{header}: date_clamped: invalid day was clamped to the end of its month"
+    return f"{header}: date_fallback_format: parsed with a fallback date format"
 
 
 def _datetime(value: str, configured_format: str | None) -> datetime:
@@ -128,7 +156,14 @@ def map_and_validate_row(row: dict[str, str], columns: dict[str, Any], record_ty
         try:
             if isinstance(target, dict):
                 data_type = target["data_type"]
-                converted = _convert(raw_value, data_type, options)
+                if data_type == "date":
+                    converted, date_warning = _parse_date(
+                        raw_value, options.get("date_format")
+                    )
+                    if date_warning:
+                        warnings.append(_date_warning(header, date_warning))
+                else:
+                    converted = _convert(raw_value, data_type, options)
                 enrichments[target["enrichment"]] = (data_type, converted)
             elif target in {"properties.payload", "properties"}:
                 properties = json.loads(raw_value)
@@ -151,11 +186,11 @@ def map_and_validate_row(row: dict[str, str], columns: dict[str, Any], record_ty
                 if values[target].as_tuple().exponent < -2:
                     raise ValueError("must have no more than two decimal places")
             elif target == "gift_date":
-                values[target] = _date(raw_value, options.get("date_format"))
-                if not options.get("date_format") and not re.fullmatch(
-                    r"\d{4}-\d{2}-\d{2}", raw_value.strip()
-                ):
-                    warnings.append(f"{header}: date format coerced to ISO")
+                values[target], date_warning = _parse_date(
+                    raw_value, options.get("date_format")
+                )
+                if date_warning:
+                    warnings.append(_date_warning(header, date_warning))
             elif target in {"occurred_at", "received_at"}:
                 values[target] = _datetime(raw_value, options.get("datetime_format"))
             elif target == "captured_at":

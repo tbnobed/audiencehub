@@ -79,7 +79,7 @@ export default function System() {
     <div className="space-y-6 animate-in fade-in duration-500 max-w-6xl mx-auto">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">System Status</h1>
+          <h1 className="kin-title">System Status</h1>
           <p className="text-muted-foreground mt-1">Platform health and worker queues.</p>
         </div>
         <div className="flex space-x-2">

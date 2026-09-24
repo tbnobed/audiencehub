@@ -38,7 +38,8 @@ export default function Login() {
     <div className="min-h-screen bg-background flex items-center justify-center p-4">
       <Card className="w-full max-w-sm">
         <CardHeader className="text-center space-y-2">
-          <CardTitle className="text-2xl font-mono tracking-tight text-primary">AUDIENCE_HUB</CardTitle>
+          <CardTitle className="sr-only">Sign in to Kinship</CardTitle>
+          <img src={`${import.meta.env.BASE_URL}brand/kinship-logo-stacked-dark.svg`} alt="Kinship" className="mx-auto h-auto w-40" />
           <CardDescription>{auth?.mode === 'dev' ? 'Select a role to enter the development console.' : 'Sign in to the operations console.'}</CardDescription>
         </CardHeader>
         <CardContent>

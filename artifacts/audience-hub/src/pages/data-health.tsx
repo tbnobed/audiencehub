@@ -63,7 +63,7 @@ export default function DataHealth() {
   return (
     <div className="h-full flex flex-col space-y-6 p-8 animate-in fade-in duration-500 max-w-[1400px] mx-auto">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">Data Health</h1>
+        <h1 className="kin-title">Data Health</h1>
         <p className="text-muted-foreground text-sm mt-1">
           Monitor identity resolution engine, data anomalies, and import quality.
         </p>
@@ -127,21 +127,21 @@ export default function DataHealth() {
                 <XAxis 
                   dataKey="day" 
                   tickFormatter={(val) => format(new Date(val), 'MMM d')} 
-                  tick={{ fontSize: 10, fill: 'hsl(var(--muted-foreground))' }}
+                  tick={{ fontSize: 10, fill: 'var(--ink-muted)' }}
                   axisLine={false}
                   tickLine={false}
                 />
                 <YAxis 
-                  tick={{ fontSize: 10, fill: 'hsl(var(--muted-foreground))' }}
+                  tick={{ fontSize: 10, fill: 'var(--ink-muted)' }}
                   axisLine={false}
                   tickLine={false}
                 />
                 <Tooltip 
-                  cursor={{ fill: 'hsl(var(--muted)/0.3)' }}
-                  contentStyle={{ backgroundColor: 'hsl(var(--card))', border: '1px solid hsl(var(--border))', borderRadius: '4px', fontSize: '12px' }}
+                  cursor={{ fill: 'var(--signal-soft)' }}
+                  contentStyle={{ backgroundColor: 'var(--surface-raised)', color: 'var(--ink)', border: '1px solid var(--line)', borderRadius: '4px', fontSize: '12px' }}
                   labelFormatter={(val) => format(new Date(val), 'MMM d, yyyy')}
                 />
-                <Bar dataKey="count" fill="hsl(var(--primary))" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="count" fill="var(--kin-chart-1)" radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>

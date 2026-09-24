@@ -23,6 +23,7 @@ def test_profile_and_data_health_contract_routes_registered():
     routes = {(tuple(sorted(route.methods or [])), route.path) for route in router.routes}
     assert (("GET",), "/api/profiles") in routes
     assert (("GET",), "/api/profiles/{profile_id}") in routes
+    assert (("GET",), "/api/traits") in routes
     assert (("GET",), "/api/data-health") in routes
     assert (("POST",), "/api/data-health/blocklist/{blocklist_id}/approve") in routes
     assert (("POST",), "/api/data-health/blocklist/{blocklist_id}/unblock") in routes

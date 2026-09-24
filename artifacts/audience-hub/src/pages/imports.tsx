@@ -36,7 +36,7 @@ export default function Imports() {
     <div className="h-full flex flex-col space-y-6 p-8 animate-in fade-in duration-500 max-w-6xl mx-auto">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Data Imports</h1>
+          <h1 className="kin-title">Data Imports</h1>
           <p className="text-muted-foreground text-sm mt-1">
             Manual and scheduled batch ingestion jobs.
           </p>

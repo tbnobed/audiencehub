@@ -36,8 +36,12 @@ def _warning_category(message: str) -> str:
         return "invalid_email"
     if "invalid phone" in lowered:
         return "invalid_phone"
-    if "date format coerced" in lowered:
-        return "date_format_coerced"
+    if "date_ambiguous" in lowered:
+        return "date_ambiguous"
+    if "date_clamped" in lowered:
+        return "date_clamped"
+    if "date_fallback_format" in lowered or "date format coerced" in lowered:
+        return "date_fallback_format"
     if "blocklisted identifier" in lowered:
         return "blocklisted_identifier"
     return "other"
@@ -158,7 +162,8 @@ def _register_hard_bounce_suppressions(db: Session, hashes: set[str]) -> None:
         VALUES ('email', :value_hash, 'hard_bounce')
         ON CONFLICT (type, value_hash) DO UPDATE
           SET reason=EXCLUDED.reason
-          WHERE suppressions.reason IS DISTINCT FROM EXCLUDED.reason
+          WHERE suppressions.reason <> 'deletion_request'
+            AND suppressions.reason IS DISTINCT FROM EXCLUDED.reason
     """), [{"value_hash": value_hash} for value_hash in hashes])
 
 
@@ -166,12 +171,12 @@ def _identifiers_blocked_batch(
     db: Session,
     identities: set[tuple[str | None, str | None]],
     pepper: str,
-) -> dict[tuple[str | None, str | None], tuple[bool, bool]]:
+) -> dict[tuple[str | None, str | None], tuple[bool, bool, bool]]:
     """Resolve suppression and blocklist status for a batch in two DB queries."""
     emails = {email for email, _phone in identities if email}
     phones = {phone for _email, phone in identities if phone}
     if not emails and not phones:
-        return {identity: (False, False) for identity in identities}
+        return {identity: (False, False, False) for identity in identities}
     email_hash_values: dict[str, set[str]] = {}
     phone_hash_values: dict[str, set[str]] = {}
     for email in emails:
@@ -180,20 +185,24 @@ def _identifiers_blocked_batch(
     for phone in phones:
         phone_hash_values.setdefault(_identity_hash(pepper, phone), set()).add(phone)
 
-    suppressed_emails: set[str] = set()
-    suppressed_phones: set[str] = set()
+    deletion_emails: set[str] = set()
+    deletion_phones: set[str] = set()
+    opted_out_emails: set[str] = set()
     if email_hash_values or phone_hash_values:
         rows = db.execute(text("""
-            SELECT type, value_hash FROM suppressions
+            SELECT type, value_hash, reason FROM suppressions
             WHERE (type='email' AND value_hash=ANY(CAST(:email_hashes AS text[])))
                OR (type='phone' AND value_hash=ANY(CAST(:phone_hashes AS text[])))
         """), {"email_hashes": list(email_hash_values),
                "phone_hashes": list(phone_hash_values)}).mappings()
         for row in rows:
-            if row["type"] == "email":
-                suppressed_emails.update(email_hash_values[row["value_hash"]])
-            else:
-                suppressed_phones.update(phone_hash_values[row["value_hash"]])
+            if row["reason"] == "deletion_request":
+                if row["type"] == "email":
+                    deletion_emails.update(email_hash_values[row["value_hash"]])
+                else:
+                    deletion_phones.update(phone_hash_values[row["value_hash"]])
+            elif row["type"] == "email":
+                opted_out_emails.update(email_hash_values[row["value_hash"]])
 
     blocked_emails: set[str] = set()
     blocked_phones: set[str] = set()
@@ -216,7 +225,8 @@ def _identifiers_blocked_batch(
 
     results = {}
     for email, phone in identities:
-        suppressed = email in suppressed_emails or phone in suppressed_phones
+        deletion_blocked = email in deletion_emails or phone in deletion_phones
+        email_opted_out = bool(email and email in opted_out_emails)
         lowered_email = email.casefold() if email else ""
         blocked_email = lowered_email in blocked_emails
         if "*@test.com" in wildcard_email_rules and lowered_email.endswith("@test.com"):
@@ -232,7 +242,7 @@ def _identifiers_blocked_batch(
         blocked = blocked_email or bool(phone and (
             repeated_phone or phone in blocked_phones
         ))
-        results[(email, phone)] = (suppressed, blocked)
+        results[(email, phone)] = (deletion_blocked, blocked, email_opted_out)
     return results
 
 
@@ -576,9 +586,8 @@ def run_import(import_id: int, progress_callback: Callable[[dict[str, Any]], Non
         pepper = settings.pii_hash_pepper
         Path(settings.upload_dir).mkdir(parents=True, exist_ok=True)
         error_sink = _ErrorCsv(Path(settings.upload_dir), import_id)
-        # Register every hard-bounced address before accepting any row. This
-        # makes suppression independent of CSV order, including duplicate
-        # contacts earlier in the same file.
+        # Register every hard-bounced address before accepting any row. The
+        # suppression is an email-channel opt-out, not an import-row block.
         bounce_hashes: set[str] = set()
         bounce_last_record_number = 1
         while True:
@@ -627,9 +636,7 @@ def run_import(import_id: int, progress_callback: Callable[[dict[str, Any]], Non
                 line = staged_row["record_number"]
                 values = converted["values"]
                 batch_rows.append((line, raw, converted, values))
-                if converted["errors"] or (
-                    record_type == "contact" and _is_hard_bounce(values)
-                ):
+                if converted["errors"]:
                     continue
                 identities.add((values.get("email_norm"), values.get("phone_e164")))
 
@@ -645,19 +652,14 @@ def run_import(import_id: int, progress_callback: Callable[[dict[str, Any]], Non
                 if converted["errors"]:
                     rejected += 1
                     continue
-                if record_type == "contact" and _is_hard_bounce(values):
-                    rejected += 1
-                    error_sink.write({"row": line, "severity": "error",
-                                      "message": "Hard-bounce row was not imported"})
-                    continue
                 if _row_was_normalized(raw, columns, values):
                     normalized_count += 1
                 identity_key = (values.get("email_norm"), values.get("phone_e164"))
-                suppressed, blocklisted = identity_checks[identity_key]
-                if suppressed:
+                deletion_blocked, blocklisted, email_opted_out = identity_checks[identity_key]
+                if deletion_blocked:
                     rejected += 1
                     error_sink.write({"row": line, "severity": "error",
-                                      "message": "Identifier is suppressed; row was not imported"})
+                                      "message": "Identifier has a deletion-request suppression; row was not imported"})
                     continue
                 if blocklisted:
                     values["email_norm"] = None
@@ -668,6 +670,18 @@ def run_import(import_id: int, progress_callback: Callable[[dict[str, Any]], Non
                     warning_counts["blocklisted_identifier"] = (
                         warning_counts.get("blocklisted_identifier", 0) + 1
                     )
+                if email_opted_out or (
+                    record_type == "contact" and values.get("email_norm")
+                    and _is_hard_bounce(values)
+                ):
+                    if record_type == "consent" and values.get("channel") == "email":
+                        values["status"] = "opted_out"
+                    elif record_type != "consent":
+                        values["consent"] = {
+                            "channel": "email",
+                            "status": "opted_out",
+                            "captured_at": None,
+                        }
                 item = _row_payload(record_type, values, options.get("reference_source"))
                 item.update(record_type=record_type, values=values, line=line)
                 processed.append(item)

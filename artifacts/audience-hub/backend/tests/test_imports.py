@@ -7,9 +7,11 @@ from app.imports.service import (
     _identity_hash,
     _identifiers_blocked_batch,
     _insert_events,
+    _insert_gifts,
     _is_hard_bounce,
     _register_hard_bounce_suppressions,
     _row_payload,
+    _warning_category,
 )
 from app.imports.validation import map_and_validate_row, normalize_email
 
@@ -32,7 +34,7 @@ def test_validation_reports_required_and_bad_date_by_record_type():
     assert any("gift_date" in error for error in result["errors"])
 
 
-def test_non_iso_gift_date_is_coerced_and_reported_as_warning():
+def test_non_iso_gift_date_warns_when_fallback_format_is_needed():
     result = map_and_validate_row(
         {"Amount": "25.00", "Date": "12/25/2024"},
         {"Amount": "amount", "Date": "gift_date"},
@@ -40,7 +42,44 @@ def test_non_iso_gift_date_is_coerced_and_reported_as_warning():
     )
     assert result["errors"] == []
     assert result["values"]["gift_date"].isoformat() == "2024-12-25"
-    assert result["warnings"] == ["Date: date format coerced to ISO"]
+    assert result["warnings"] == [
+        "Date: date_fallback_format: parsed with a fallback date format"
+    ]
+
+
+def test_declared_date_format_parses_without_warning():
+    result = map_and_validate_row(
+        {"Amount": "25.00", "Date": "12/25/2024"},
+        {"Amount": "amount", "Date": "gift_date"},
+        "gift",
+        {"date_format": "MM/DD/YYYY"},
+    )
+    assert result["errors"] == []
+    assert result["values"]["gift_date"].isoformat() == "2024-12-25"
+    assert result["warnings"] == []
+
+
+def test_ambiguous_date_without_declared_format_has_specific_warning():
+    result = map_and_validate_row(
+        {"Amount": "25.00", "Date": "03/04/2024"},
+        {"Amount": "amount", "Date": "gift_date"},
+        "gift",
+    )
+    assert result["errors"] == []
+    assert result["values"]["gift_date"].isoformat() == "2024-03-04"
+    assert result["warnings"] == [
+        "Date: date_ambiguous: numeric date could be interpreted in more than one order"
+    ]
+    assert _warning_category(result["warnings"][0]) == "date_ambiguous"
+
+
+def test_date_warning_categories_distinguish_fallback_and_clamping():
+    assert _warning_category(
+        "Date: date_fallback_format: parsed with a fallback date format"
+    ) == "date_fallback_format"
+    assert _warning_category(
+        "Date: date_clamped: invalid day was clamped to the end of its month"
+    ) == "date_clamped"
 
 
 def test_enrichment_requires_declared_typed_attribute_and_identifier():
@@ -218,6 +257,7 @@ def test_hard_bounce_registers_email_hmac_and_has_privacy_safe_detection():
     db = _ExecuteRecorder()
     _register_hard_bounce_suppressions(db, {_identity_hash(pepper, email)})
     assert "'hard_bounce'" in db.statement
+    assert "suppressions.reason <> 'deletion_request'" in db.statement
     assert "ON CONFLICT (type, value_hash)" in db.statement
     assert db.params == [{"value_hash": _identity_hash(pepper, email)}]
     assert email not in str(db.params)
@@ -235,7 +275,10 @@ def test_hard_bounce_registers_email_hmac_and_has_privacy_safe_detection():
 
 class _BatchLookupDb:
     def __init__(self, suppression_hashes, emails, phones):
-        self.suppression_hashes = set(suppression_hashes)
+        self.suppression_reasons = (
+            dict(suppression_hashes) if isinstance(suppression_hashes, dict)
+            else {digest: "manual" for digest in suppression_hashes}
+        )
         self.emails = {value.casefold() for value in emails}
         self.phones = set(phones)
         self.calls = []
@@ -245,12 +288,13 @@ class _BatchLookupDb:
         self.calls.append(statement)
         if "FROM suppressions" in statement:
             rows = [
-                {"type": kind, "value_hash": digest}
+                {"type": kind, "value_hash": digest,
+                 "reason": self.suppression_reasons[digest]}
                 for kind, hashes in (
                     ("email", params["email_hashes"]),
                     ("phone", params["phone_hashes"]),
                 )
-                for digest in hashes if digest in self.suppression_hashes
+                for digest in hashes if digest in self.suppression_reasons
             ]
         else:
             rows = []
@@ -270,7 +314,7 @@ class _BatchLookupDb:
         return Result()
 
 
-def test_identifier_checks_batch_queries_suppressions_and_preserve_blocklist_rules():
+def test_identifier_checks_block_only_deletion_suppressions_and_preserve_blocklist_rules():
     pepper = "test-pepper"
     bounced_email = "bounced@example.org"
     bounced_phone = "+12147483647"
@@ -289,20 +333,73 @@ def test_identifier_checks_batch_queries_suppressions_and_preserve_blocklist_rul
         for index in range(1000)
     )
     db = _BatchLookupDb(
-        {_identity_hash(pepper, bounced_email), _identity_hash(pepper, bounced_phone)},
+        {
+            _identity_hash(pepper, bounced_email): "hard_bounce",
+            _identity_hash(pepper, bounced_phone): "deletion_request",
+        },
         {"block@example.org", "*@test.com", "noemail@*"},
         {"+15555555555"},
     )
 
     result = _identifiers_blocked_batch(db, identities, pepper)
 
-    assert result[(bounced_email, None)] == (True, False)
-    assert result[(None, bounced_phone)] == (True, False)
-    assert result[("block@example.org", None)] == (False, True)
-    assert result[("donor@test.com", None)] == (False, True)
-    assert result[("noemail@example.org", None)] == (False, True)
-    assert result[(None, "+15555555555")] == (False, True)
-    assert result[(None, "+11111111111")] == (False, True)
-    assert result[("good@example.org", "+12145551234")] == (False, False)
+    assert result[(bounced_email, None)] == (False, False, True)
+    assert result[(None, bounced_phone)] == (True, False, False)
+    assert result[("block@example.org", None)] == (False, True, False)
+    assert result[("donor@test.com", None)] == (False, True, False)
+    assert result[("noemail@example.org", None)] == (False, True, False)
+    assert result[(None, "+15555555555")] == (False, True, False)
+    assert result[(None, "+11111111111")] == (False, True, False)
+    assert result[("good@example.org", "+12145551234")] == (False, False, False)
     assert len(result) == len(identities)
     assert len(db.calls) == 2
+
+
+def test_hard_bounced_donor_gift_is_accepted_and_remains_trait_eligible():
+    pepper = "test-pepper"
+    email = normalize_email("bounced@example.org")
+    db = _BatchLookupDb(
+        {_identity_hash(pepper, email): "hard_bounce"},
+        set(),
+        set(),
+    )
+    mapped = map_and_validate_row(
+        {"email": "bounced@example.org", "amount": "125.00", "gift_date": "2024-03-04"},
+        {"email": "email", "amount": "amount", "gift_date": "gift_date"},
+        "gift",
+    )
+    assert mapped["errors"] == []
+
+    deletion_blocked, blocklisted, email_opted_out = _identifiers_blocked_batch(
+        db, {(email, None)}, pepper
+    )[(email, None)]
+    assert not deletion_blocked
+    assert not blocklisted
+    assert email_opted_out
+    assert mapped["values"]["amount"] == Decimal("125.00")
+    assert mapped["values"]["gift_date"].isoformat() == "2024-03-04"
+    payload = _row_payload("gift", mapped["values"])
+    gift_db = _ExecuteRecorder()
+    _insert_gifts(gift_db, 1, [{
+        "record_type": "gift",
+        "gift_external_id": payload["gift_external_id"],
+        "source_record_id": 42,
+        "values": mapped["values"],
+    }])
+    assert "INSERT INTO gifts" in gift_db.statement
+    assert gift_db.params[0]["amount"] == Decimal("125.00")
+    # The regular gift insert path remains available to trait recomputation;
+    # only email-channel activation is excluded.
+
+
+def test_deletion_request_suppression_still_blocks_reimport():
+    pepper = "test-pepper"
+    email = normalize_email("deleted@example.org")
+    db = _BatchLookupDb(
+        {_identity_hash(pepper, email): "deletion_request"},
+        set(),
+        set(),
+    )
+    assert _identifiers_blocked_batch(db, {(email, None)}, pepper)[(email, None)] == (
+        True, False, False
+    )

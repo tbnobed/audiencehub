@@ -1,0 +1,1 @@
+"""Chart-ready dashboard endpoints."""

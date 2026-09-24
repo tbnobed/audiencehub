@@ -42,7 +42,9 @@ def _write_csv(path: Path, columns: tuple[str, ...]):
 
 def _mixed_date(value: date, rng: random.Random) -> str:
     formats = ("%Y-%m-%d", "%m/%d/%Y", "%b %d, %Y")
-    return value.strftime(rng.choice(formats))
+    # Most seed rows use the declared ISO convention; a small minority exercises
+    # fallback/ambiguous parsing without drowning genuine import issues in warnings.
+    return value.strftime(rng.choices(formats, weights=(90, 5, 5), k=1)[0])
 
 
 def _mixed_datetime(value: datetime, rng: random.Random) -> str:

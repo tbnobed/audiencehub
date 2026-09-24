@@ -18,6 +18,10 @@ In production, use `docker compose exec -w /app/backend api python -m app.cli se
 
 Successful imports enqueue `identity.resolve_batch`. The resolver links source records by normalized strong identifiers, merges existing profiles transitively, applies source-priority survivorship, and keeps blocklisted identifiers out of matching. Profiles can be searched by source and identifier presence, with email and phone masked for viewers. Data Health shows pending resolutions, merges, recent rejected rows, and high-cardinality identifiers awaiting admin review. Shared family contact details can still merge household members; there is no unmerge UI.
 
+## Computed traits (M4)
+
+`GET /api/profiles` includes a `traits` object on each profile list item, and accepts `donor_status=prospect|new|active|reactivated|lapsing|lapsed`. `GET /api/profiles/{id}` returns the same computed values under `traits`; `GET /api/traits` returns the trait key, label, type, and description catalog. Trait SQL recomputes with one set-based upsert and a pinned database date. Resolution dirties profiles for an incremental refresh after a ten-minute quiet period; the worker also queues one full refresh nightly. A full refresh records the month's first snapshot and fills up to 24 months of historical `trait_snapshots` from dated gifts. `seed --load` waits for identity resolution, computes traits, and performs the historical snapshot backfill.
+
 For a reproducible acceptance report, run `python scripts/identity_acceptance.py --ground-truth /path/to/ground_truth.json` from this directory with `DATABASE_URL` pointing to the same **isolated** database used for the seed load. It compares ground truth with active resolved profiles and includes import metrics. Use a clean disposable database when measuring accuracy or performance; do not clear a database used by the running application.
 
 ## Worker recovery (M1)

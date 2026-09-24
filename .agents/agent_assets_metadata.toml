@@ -14,3 +14,17 @@ mtime_ms = 1790273668609
 storage_uri = "gcs://replit-rams-assets-janeway/rams/assets/repl:e5cb43bd-1e3c-4895-8728-2f6a0c8a7f98/573bcaf2-530c-4cc3-9510-95b290f9e00c/a7e4adff-47a2-400f-bd31-55500a9166b3"
 storage_version_token = "1790274545542721"
 content_type = "text/plain"
+
+[[outputs]]
+id = "zaPf48EOOngDrQbWqH6ar"
+uri = "file://artifacts/audience-hub/backend/seed-data/m4-acceptance/acceptance_report.html"
+type = "html"
+title = "Audience Hub M3 + M4 acceptance report"
+description = "50,000-person clean-seed results, Python trait comparison, all six dashboard screenshots, timing, identity evidence, and new test names."
+logical_id = "3b4f9a7d-1f0d-48d9-a0d4-0d786e4af5eb"
+content_hash = "sha256:4c67ca83461dcacc30c3fdb52e52e3c06267677d93268c09862316e9e2d0d1d0"
+size = 904855
+mtime_ms = 1790279803378
+storage_uri = "gcs://replit-rams-assets-janeway/rams/assets/repl:e5cb43bd-1e3c-4895-8728-2f6a0c8a7f98/3b4f9a7d-1f0d-48d9-a0d4-0d786e4af5eb/db42fb93-524c-40b2-93d0-6e285fd3af65"
+storage_version_token = "1790279879060246"
+content_type = "text/html"

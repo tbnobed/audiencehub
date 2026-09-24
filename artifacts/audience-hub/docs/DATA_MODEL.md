@@ -24,6 +24,8 @@ id, source_id, filename, file_path, file_sha256, record_type, mapping jsonb, sta
 
 Re-uploading a file with the same `file_sha256` for the same source warns in the UI and requires confirmation.
 
+Date validation is warning-free when a value parses in the mapping's declared `options.date_format` (or canonical ISO form when no format is declared). Date warnings are reserved for fallback-format parses, ambiguous values without a declared format, and any value explicitly clamped by a parser; warning counts retain those categories separately.
+
 ### `source_records`
 One row per external record per source, kept for lineage and survivorship.
 
@@ -96,7 +98,7 @@ All event reads go through `app/events/store.py` so the table can move to ClickH
 profile_id, channel (`email, sms, phone, mail, ads_personalization`), status (`opted_in, opted_out, unknown`), source_id, captured_at, evidence jsonb. Primary key (profile_id, channel). Latest `captured_at` wins, except that an `opted_out` from any source beats an older or equal-time `opted_in`.
 
 ### `suppressions`
-id, type (`email, phone`), value_hash (HMAC-SHA256 with `PII_HASH_PEPPER` over the normalized value), reason (`deletion_request, hard_bounce, spam_complaint, manual`), created_at. Unique (type, value_hash). Checked on import and on every activation.
+id, type (`email, phone`), value_hash (HMAC-SHA256 with `PII_HASH_PEPPER` over the normalized value), reason (`deletion_request, hard_bounce, spam_complaint, manual`), created_at. Unique (type, value_hash). Only `deletion_request` suppressions reject matching import rows. The other reasons do not reject contacts, gifts, events, or enrichments; email suppressions with those reasons produce `email=opted_out` consent and exclude the address from email-channel activations only. They do not exclude it from non-email channels or remove historical gift/event/enrichment data.
 
 ## Enrichment
 

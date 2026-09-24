@@ -8,7 +8,7 @@ export default function Segments() {
         <PieChart className="h-8 w-8 text-primary" />
       </div>
       <div className="text-center">
-        <h2 className="text-xl font-semibold">No Segments Created</h2>
+        <h2 className="kin-heading">No Segments Created</h2>
         <p className="text-muted-foreground mt-1 max-w-sm">
           Define rules to group your profiles into actionable audiences for targeting.
         </p>
