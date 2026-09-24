@@ -1,0 +1,72 @@
+obtv-admin@audiencehub:~/audiencehub/artifacts/audience-hub$ docker compose up -d --build
+[+] up 17/17
+ ✘ Image audience-hub:latest Error pull access denied for audience-hub, repository does not exist or may require 'docker ...  0.3s
+ ✔ Image postgres:16         Pulled                                                                                           9.9s
+[+] Building 45.3s (27/27) FINISHED
+ => [internal] load local bake definitions                                                                                   0.0s
+ => => reading from stdin 555B                                                                                               0.0s
+ => [internal] load build definition from Dockerfile                                                                         0.0s
+ => => transferring dockerfile: 953B                                                                                         0.0s
+ => [internal] load metadata for docker.io/library/python:3.12-slim-bookworm                                                 0.7s
+ => [internal] load metadata for docker.io/library/node:20-bookworm-slim                                                     0.7s
+ => [internal] load .dockerignore                                                                                            0.0s
+ => => transferring context: 173B                                                                                            0.0s
+ => [internal] load build context                                                                                            0.1s
+ => => transferring context: 458.58kB                                                                                        0.0s
+ => [web 1/8] FROM docker.io/library/node:20-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b  5.7s
+ => => resolve docker.io/library/node:20-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5feb  0.0s
+ => => sha256:3c02fd806613748139b8b8a14a69ae3518a1b0e863c57c35aada3b92ed87fb31 447B / 447B                                   0.0s
+ => => sha256:64cfb949317c9824fd081d55c59a7225bfe1f650c6395ba42d7ed0ccf51993d2 1.71MB / 1.71MB                               0.1s
+ => => sha256:e54aec64c365815cd7b91e718f00ac6e625562b1de09036b38614621b42c7582 3.31kB / 3.31kB                               0.1s
+ => => sha256:804d4d68057cbb26cbcde9a735148ebc6589911bad32cf9dbddb5b0ba878bf1f 41.42MB / 41.42MB                             1.2s
+ => => sha256:ff86ea2e5edce334d19a34fbc65d1a511aa1fc823dba1110422f991aa56b44d4 28.24MB / 28.24MB                             0.8s
+ => => extracting sha256:ff86ea2e5edce334d19a34fbc65d1a511aa1fc823dba1110422f991aa56b44d4                                    1.9s
+ => => extracting sha256:e54aec64c365815cd7b91e718f00ac6e625562b1de09036b38614621b42c7582                                    0.0s
+ => => extracting sha256:804d4d68057cbb26cbcde9a735148ebc6589911bad32cf9dbddb5b0ba878bf1f                                    2.1s
+ => => extracting sha256:64cfb949317c9824fd081d55c59a7225bfe1f650c6395ba42d7ed0ccf51993d2                                    0.2s
+ => => extracting sha256:3c02fd806613748139b8b8a14a69ae3518a1b0e863c57c35aada3b92ed87fb31                                    0.0s
+ => [stage-1  1/11] FROM docker.io/library/python:3.12-slim-bookworm@sha256:392307d22300de8b5986851a12d9176dfc0fc073e65bf65  4.1s
+ => => resolve docker.io/library/python:3.12-slim-bookworm@sha256:392307d22300de8b5986851a12d9176dfc0fc073e65bf6523ebd7dcbe  0.0s
+ => => sha256:7c6fab1667eb7d9029684d783e4c127f11dd7ed5120829f875b799a0b9431558 249B / 249B                                   0.1s
+ => => sha256:a2e58067964fcd8f46a6b5992975e9c8ab34e7620d96204e08e99bf0fdf4dab8 13.67MB / 13.67MB                             0.5s
+ => => sha256:1c5e03f304918f89aed0c098c8f4b6f163f7bf9d2702991696bf0132a2853e30 3.53MB / 3.53MB                               0.2s
+ => => sha256:774043ccc8ccd0d0833a9ee0792142ab7ad93df971e59dd248fbf82db16d0150 28.24MB / 28.24MB                             0.9s
+ => => extracting sha256:774043ccc8ccd0d0833a9ee0792142ab7ad93df971e59dd248fbf82db16d0150                                    1.7s
+ => => extracting sha256:1c5e03f304918f89aed0c098c8f4b6f163f7bf9d2702991696bf0132a2853e30                                    0.3s
+ => => extracting sha256:a2e58067964fcd8f46a6b5992975e9c8ab34e7620d96204e08e99bf0fdf4dab8                                    0.9s
+ => => extracting sha256:7c6fab1667eb7d9029684d783e4c127f11dd7ed5120829f875b799a0b9431558                                    0.0s
+ => [stage-1  2/11] RUN apt-get update && apt-get install -y --no-install-recommends libpq5 tini curl   && rm -rf /var/lib/  4.9s
+ => [web 2/8] WORKDIR /web                                                                                                   1.9s
+ => [web 3/8] COPY package.json package-lock.json ./                                                                         0.1s
+ => [web 4/8] RUN npm ci                                                                                                    12.0s
+ => [stage-1  3/11] RUN useradd --create-home --uid 10001 app                                                                0.4s
+ => [stage-1  4/11] WORKDIR /app                                                                                             0.1s
+ => [stage-1  5/11] COPY backend/pyproject.toml ./backend/                                                                   0.1s
+ => [stage-1  6/11] COPY backend/app/__init__.py ./backend/app/                                                              0.1s
+ => [stage-1  7/11] RUN pip install --upgrade pip && pip install ./backend                                                  20.7s
+ => [web 5/8] COPY index.html vite.config.ts tsconfig.json ./                                                                0.4s
+ => [web 6/8] COPY src/ ./src/                                                                                               0.1s
+ => [web 7/8] COPY public/ ./public/                                                                                         0.1s
+ => [web 8/8] RUN PORT=5000 BASE_PATH=/ npm run build                                                                        4.6s
+ => [stage-1  8/11] COPY backend/ ./backend/                                                                                 0.1s
+ => [stage-1  9/11] COPY --from=web /web/dist/public ./static                                                                0.1s
+ => [stage-1 10/11] COPY scripts/ ./scripts/                                                                                 0.0s
+ => [stage-1 11/11] RUN chmod +x scripts/*.sh && mkdir -p /data/uploads /data/exports   && chown -R app:app /data /app       0.6s
+ => exporting to image                                                                                                      12.8s
+ => => exporting layers                                                                                                      9.4s
+ => => exporting manifest sha256:b7f19efe433dd43f6144af8cb256916089205577f9bc214f0e33ef897c2fbf97                            0.0s
+ => => exporting config sha256:3c9433c710fcc165c4b9ed8d1ea72c8c3eed2515989ad5be592c228a79d5eb73                              0.0s
+ => => exporting attestation manifest sha256:82bb7ff7af6542eb21edd3bbf78588d90c7932a3df16cd01c8fa7a282abcfe35                0.0s
+ => => exporting manifest list sha256:6d1a90fe1b57d26fe91cb45bcf4accc79d746ba4fc9bb390d578eb06231f3666                       0.0s
+[+] up 24/24g to docker.io/library/audience-hub:latest                                                                       0.0s
+ ✔ Image audience-hub:latest       Built                                                                                     55.8s
+ ✔ Image postgres:16               Pulled                                                                                     9.9s
+ ✔ Network audience-hub_internal   Created                                                                                    0.1s
+ ✔ Volume audience-hub_appdata     Created                                                                                    0.0s
+ ✔ Volume audience-hub_pgdata      Created                                                                                    0.0s
+ ✔ Container audience-hub-db-1     Healthy                                                                                   12.4s
+ ✘ Container audience-hub-api-1    Error dependency api failed to start                                                      14.6s
+ ✔ Container audience-hub-backup-1 Started                                                                                   11.7s
+ ✔ Container audience-hub-worker-1 Created                                                                                    0.1s
+dependency failed to start: container audience-hub-api-1 is unhealthy
+obtv-admin@audiencehub:~/audiencehub/artifacts/audience-hub$
