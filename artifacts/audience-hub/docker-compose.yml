@@ -1,0 +1,68 @@
+name: audience-hub
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: audience_hub
+      POSTGRES_USER: ${POSTGRES_USER:-audience}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    command: >-
+      postgres -c shared_buffers=8GB -c effective_cache_size=24GB
+      -c work_mem=64MB -c maintenance_work_mem=1GB
+      -c max_wal_size=8GB -c random_page_cost=1.1 -c jit=off
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d audience_hub"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [internal]
+  api:
+    build: .
+    image: audience-hub:latest
+    restart: unless-stopped
+    env_file: .env
+    depends_on:
+      db: {condition: service_healthy}
+    command: ["./scripts/start-api.sh"]
+    volumes: [appdata:/data]
+    ports: ["127.0.0.1:${API_PORT:-8080}:8000"]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/readyz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks: [internal]
+  worker:
+    image: audience-hub:latest
+    restart: unless-stopped
+    env_file: .env
+    depends_on:
+      db: {condition: service_healthy}
+      api: {condition: service_healthy}
+    command: ["./scripts/start-worker.sh"]
+    volumes: [appdata:/data]
+    networks: [internal]
+  backup:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      PGHOST: db
+      PGDATABASE: audience_hub
+      PGUSER: ${POSTGRES_USER:-audience}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-14}
+      BACKUP_HOUR: ${BACKUP_HOUR:-02}
+    volumes:
+      - ./scripts/backup.sh:/backup.sh:ro
+      - ${BACKUP_DIR:-./backups}:/backups
+    entrypoint: ["/bin/bash", "/backup.sh"]
+    depends_on:
+      db: {condition: service_healthy}
+    networks: [internal]
+volumes:
+  pgdata:
+  appdata:
+networks:
+  internal:

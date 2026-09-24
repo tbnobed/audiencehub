@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "Audience Hub"
+description = "Self-hostable customer data operations console for OBTV/TBN analysts, with a FastAPI backend and Postgres job queue."
+version = "1.0.0"
+id = "artifacts/audience-hub"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 18462
+
+[services.development]
+run = "bash scripts/dev.sh"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/audience-hub", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/audience-hub/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "18462"
+BASE_PATH = "/"

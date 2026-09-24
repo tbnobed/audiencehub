@@ -1,0 +1,14 @@
+.env
+*.env
+.replit
+.replit-artifact
+.cache
+.config
+.pythonlibs
+.upm
+node_modules
+**/__pycache__
+**/.pytest_cache
+dist
+backups
+*.pyc

@@ -1,0 +1,1 @@
+- [Standalone container lockfiles](standalone-lockfiles.md) — generate npm lockfiles outside the pnpm workspace with the container's npm version.
