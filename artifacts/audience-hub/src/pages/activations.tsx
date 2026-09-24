@@ -13,7 +13,7 @@ export default function Activations() {
           Sync your segments to external marketing and advertising destinations.
         </p>
       </div>
-      <Button variant="outline" className="mt-4" disabled>New Activation (Coming Soon)</Button>
+      <Button variant="outline" className="mt-4" disabled>Not available yet</Button>
     </div>
   );
 }

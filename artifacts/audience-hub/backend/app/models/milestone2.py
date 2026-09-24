@@ -42,6 +42,11 @@ class Import(Base):
     rows_total: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     rows_ok: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     rows_rejected: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    warning_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    warning_counts: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    rows_normalized: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    rows_deduplicated: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    duration_ms: Mapped[int | None] = mapped_column(Integer)
     error_file_path: Mapped[str | None] = mapped_column(Text)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -80,6 +85,8 @@ class SourceRecord(Base):
         UniqueConstraint("source_id", "external_id", name="uq_source_records_source_external"),
         Index("ix_source_records_pending", "id", postgresql_where=text("resolved_at IS NULL")),
         Index("ix_source_records_profile_id", "profile_id"),
+        Index("ix_source_records_email_source_external", "email_norm", "source_id", "external_id"),
+        Index("ix_source_records_phone_source_external", "phone_e164", "source_id", "external_id"),
     )
     id: Mapped[int] = identity_pk()
     source_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("sources.id"), nullable=False)

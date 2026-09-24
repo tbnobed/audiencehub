@@ -35,7 +35,7 @@ def run_job(job_id: int, job_type: str, payload: dict) -> None:
 
             run_import(int(payload["import_id"]), progress_callback=report)
         else:
-            handlers.run(job_type, payload)
+            handlers.run(job_type, payload, job_id=job_id)
         with Session(engine) as db:
             queue.succeed(db, job_id)
             db.commit()

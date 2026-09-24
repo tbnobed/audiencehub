@@ -18,7 +18,12 @@ def normalize_email(value: object, settings: Settings | None = None) -> str | No
     if not raw:
         return None
     try:
-        email = validate_email(raw, check_deliverability=False).normalized.lower()
+        # email-validator rejects reserved .test domains unless explicitly told
+        # this is test data. Only the seed's gmail.test domain gets that exception.
+        email = validate_email(
+            raw, check_deliverability=False,
+            test_environment=raw.lower().endswith("@gmail.test"),
+        ).normalized.lower()
     except EmailNotValidError:
         return None
 

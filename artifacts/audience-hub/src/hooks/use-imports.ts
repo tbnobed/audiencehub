@@ -10,6 +10,8 @@ export type ImportJob = {
   rows_total: number;
   rows_ok: number;
   rows_rejected: number;
+  warning_count?: number;
+  warning_counts?: Record<string, number>;
   mapping: Record<string, string>;
   created_at: string;
   progress?: { done?: number; total?: number; message?: string };

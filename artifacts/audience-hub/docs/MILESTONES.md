@@ -33,8 +33,9 @@ Acceptance: `seed --profiles 50000 --load` completes; the import list shows accu
 
 - Resolver, merge, survivorship, blocklist, high-cardinality guard per `IDENTITY_RESOLUTION.md`, with every required test.
 - `identity.resolve_batch` enqueued after imports and event ingestion.
-- Profiles list with trigram search and filters, profile detail with all tabs, role-based masking, audit on view.
-- Data Health dashboard (pending, merges per day, blocklist hits, auto-blocklisted identifiers with admin actions).
+- Profiles API: `GET /api/profiles?search=&source_id=&has_email=&has_phone=&donor_status=&page=&page_size=` returns `{items,total,page,page_size}`; search uses PostgreSQL trigram matching.
+- Profile detail: `GET /api/profiles/{id}` returns scalar fields, traits and the gifts, events, identifiers, source_records, merges, enrichment, and consents arrays; viewer contact data is masked recursively and each view is audited.
+- Data Health API: `GET /api/data-health` reports unresolved source records, daily merges, source-record blocklist hits, high-cardinality auto-blocklists awaiting review, rejected rows, and recent imports. Admins can approve (retain block) or unblock (remove block) using the paired blocklist actions.
 
 Acceptance: after seeding, the number of profiles is within 2% of the generator's known ground-truth person count (the generator writes `ground_truth.json` mapping every record to its true person ID); precision check reports the share of profiles containing records from more than one true person, which must be under 1% (excluding intentional shared-household cases the generator marks). Tests: all listed in `IDENTITY_RESOLUTION.md`.
 

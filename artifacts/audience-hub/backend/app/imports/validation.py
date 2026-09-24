@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -21,13 +22,19 @@ ALLOWED_CONSENTS = {"opted_in", "opted_out", "unknown"}
 
 def normalize_email(value: str) -> str | None:
     try:
-        email = validate_email(value.strip(), check_deliverability=False).normalized.casefold()
+        raw = value.strip()
+        email = validate_email(
+            raw, check_deliverability=False,
+            test_environment=raw.lower().endswith("@gmail.test"),
+        ).normalized.casefold()
     except EmailNotValidError:
         return None
     local, domain = email.rsplit("@", 1)
+    # gmail.test is a reserved, non-deliverable domain used by the seed data.
     gmail_domains = {
         item.strip().casefold() for item in
-        os.getenv("GMAIL_STYLE_DOMAINS", "gmail.com,googlemail.com").split(",") if item.strip()
+        os.getenv("GMAIL_STYLE_DOMAINS", "gmail.com,googlemail.com,gmail.test").split(",")
+        if item.strip()
     }
     if domain in gmail_domains:
         local = local.split("+", 1)[0].replace(".", "")
@@ -145,6 +152,10 @@ def map_and_validate_row(row: dict[str, str], columns: dict[str, Any], record_ty
                     raise ValueError("must have no more than two decimal places")
             elif target == "gift_date":
                 values[target] = _date(raw_value, options.get("date_format"))
+                if not options.get("date_format") and not re.fullmatch(
+                    r"\d{4}-\d{2}-\d{2}", raw_value.strip()
+                ):
+                    warnings.append(f"{header}: date format coerced to ISO")
             elif target in {"occurred_at", "received_at"}:
                 values[target] = _datetime(raw_value, options.get("datetime_format"))
             elif target == "captured_at":

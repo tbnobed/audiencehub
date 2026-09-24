@@ -46,6 +46,12 @@ def test_configured_gmail_style_domains(settings):
     assert normalize_email("A.B+tag@example.org", settings) == "ab@example.org"
 
 
+def test_reserved_seed_gmail_domain_is_valid_and_normalized(settings):
+    settings.gmail_style_domains = "gmail.com,googlemail.com,gmail.test"
+    assert normalize_email("  A.B+seed@GMAIL.TEST  ", settings) == "ab@gmail.test"
+    assert normalize_email("a.b@other.test", settings) is None
+
+
 @pytest.mark.parametrize(
     "raw,expected",
     [

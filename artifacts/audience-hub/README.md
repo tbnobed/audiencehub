@@ -1,6 +1,6 @@
 # Audience Hub
 
-Self-hosted customer data operations console for OBTV/TBN. Milestones 1 and 2 provide login, a role-aware console, PostgreSQL job processing, the full data schema, synthetic CSV generation, source management, and CSV imports. No real donor data is included.
+Self-hosted customer data operations console for OBTV/TBN. The console provides login, PostgreSQL job processing, synthetic CSV generation, source management, imports, deterministic identity resolution, profile search/detail, and Data Health. No real donor data is included.
 
 ## Development
 
@@ -12,11 +12,13 @@ Check `GET /healthz` and `GET /readyz`. Run backend checks from `backend/` with 
 
 ## Synthetic imports (M2)
 
-Run `cd backend && python -m app.cli seed --profiles 50000 --scale small --load` with the same database, secret and `UPLOAD_DIR` environment as the development server. This produces five CSVs and `ground_truth.json` under `backend/seed-data/`, then enqueues all five files through the same `import.run` worker path as the UI and waits for accurate per-import counts. `--random-seed` makes generation reproducible; `--scale small|medium|large` changes the event and one-time-gift density. Use `--output-dir` to retain the files elsewhere. A repeat with identical files is skipped after a completed import. The ground-truth file maps every generated record to its true person and marks shared households; it is intentionally ignored by Git.
+Run `cd backend && python -m app.cli seed --profiles 50000 --scale small --load` with the same database, secret and `UPLOAD_DIR` environment as the development server. This produces five CSVs, `ground_truth.json`, and `generator_stats.json` under `backend/seed-data/`, then enqueues all five files through the same `import.run` worker path as the UI and waits for per-import counts and timing. The stats file compares injected messiness with import warnings, rejections, normalization, deduplication, and error-CSV evidence. `--random-seed` makes generation reproducible; `--scale small|medium|large` changes the event and one-time-gift density. Use `--output-dir` to retain the files elsewhere. A repeat with identical files is skipped after a completed import. The ground-truth file maps every importable generated record to its true person and marks shared households. Generated seed files and reports under the default directory are ignored by Git.
 
 In production, use `docker compose exec -w /app/backend api python -m app.cli seed --profiles 50000 --scale small --output-dir /data/seed-data --load` so the generated files and ground truth persist on the shared volume. The worker service must be running. The `/sources` page manages source definitions and priority, while `/imports` uploads CSVs and guides mapping, dry-run validation, queued processing, progress, and error CSV downloads. Source deletion is refused if historical imports or records reference it; deactivate instead.
 
-M2 imports retain unlinked source records and gifts/events until the M3 identity resolver is implemented. Profile matching, the M3 precision report, activation, and ingestion are not included here.
+Successful imports enqueue `identity.resolve_batch`. The resolver links source records by normalized strong identifiers, merges existing profiles transitively, applies source-priority survivorship, and keeps blocklisted identifiers out of matching. Profiles can be searched by source and identifier presence, with email and phone masked for viewers. Data Health shows pending resolutions, merges, recent rejected rows, and high-cardinality identifiers awaiting admin review. Shared family contact details can still merge household members; there is no unmerge UI.
+
+For a reproducible acceptance report, run `python scripts/identity_acceptance.py --ground-truth /path/to/ground_truth.json` from this directory with `DATABASE_URL` pointing to the same **isolated** database used for the seed load. It compares ground truth with active resolved profiles and includes import metrics. Use a clean disposable database when measuring accuracy or performance; do not clear a database used by the running application.
 
 ## Worker recovery (M1)
 

@@ -11,10 +11,12 @@ import { Layout } from '@/components/layout/layout';
 import Login from '@/pages/login';
 import Dashboard from '@/pages/dashboard';
 import Profiles from '@/pages/profiles';
+import ProfileDetail from '@/pages/profile-detail';
 import Segments from '@/pages/segments';
 import Activations from '@/pages/activations';
 import Imports from '@/pages/imports';
 import Sources from '@/pages/sources';
+import DataHealth from '@/pages/data-health';
 import Admin from '@/pages/admin';
 import System from '@/pages/system';
 
@@ -30,6 +32,8 @@ function Router() {
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/profiles" element={<Profiles />} />
+          <Route path="/profiles/:id" element={<ProfileDetail />} />
+          <Route path="/data-health" element={<DataHealth />} />
           <Route path="/segments" element={<Segments />} />
           <Route path="/activations" element={user.role === 'viewer' ? <Navigate to="/" /> : <Activations />} />
           <Route path="/imports" element={user.role === 'viewer' ? <Navigate to="/" /> : <Imports />} />

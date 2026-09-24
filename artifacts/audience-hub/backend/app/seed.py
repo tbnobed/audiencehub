@@ -76,8 +76,11 @@ def _valid_us_phone(fake: Faker, rng: random.Random) -> str:
     raise RuntimeError("Could not generate a valid Faker US phone number")
 
 
-def _email(fake: Faker, rng: random.Random) -> str:
+def _email(fake: Faker, rng: random.Random, person_number: int) -> str:
+    # Faker usernames repeat at 50k scale. A fixed-width person suffix keeps
+    # unrelated people distinct even after Gmail dot/plus normalization.
     local = fake.user_name().replace(".", "").replace("-", "_").lower()
+    local = f"{local}{person_number:08d}"
     # Reserved example domains are safe for synthetic data. gmail.test exists
     # only to exercise Gmail-style normalization without reaching real users.
     domain = rng.choice(("example.com", "example.org", "example.net", "gmail.test"))
@@ -89,7 +92,7 @@ def _gmail_variant(email: str, rng: random.Random) -> str:
     if domain != "gmail.test":
         return rng.choice((email.lower(), email.upper(), f" {email} "))
     local = local.replace(".", "")
-    if len(local) > 2 and rng.random() < 0.65:
+    if len(local) > 2:
         split_at = rng.randint(1, len(local) - 1)
         local = local[:split_at] + "." + local[split_at:]
     if rng.random() < 0.6:
@@ -121,6 +124,15 @@ def _record_truth(records: dict[str, dict[str, str | None]], source: str,
     }
 
 
+def _messiness_counter() -> dict[str, dict[str, int]]:
+    return {name: {} for name in CSV_FILES}
+
+
+def _mark_messiness(stats: dict[str, dict[str, int]], filename: str,
+                    kind: str, count: int = 1) -> None:
+    stats[filename][kind] = stats[filename].get(kind, 0) + count
+
+
 def generate_seed(profiles: int = 50_000, scale: str = "small",
                   random_seed: int = 20250308, output_dir: str | Path | None = None) -> dict[str, Any]:
     """Write five deterministic CSVs and ground_truth.json; return output metadata."""
@@ -144,7 +156,7 @@ def generate_seed(profiles: int = 50_000, scale: str = "small",
             "external_id": f"crm-{index:08d}",
             "first_name": fake.first_name(),
             "last_name": fake.last_name(),
-            "email": _email(fake, rng),
+            "email": _email(fake, rng, index),
             "phone": _valid_us_phone(fake, rng),
             "address1": fake.street_address(),
             "address2": fake.secondary_address() if rng.random() < 0.12 else "",
@@ -173,6 +185,7 @@ def generate_seed(profiles: int = 50_000, scale: str = "small",
 
     records: dict[str, dict[str, str | None]] = {}
     counts = {name: 0 for name in CSV_FILES}
+    injected = _messiness_counter()
 
     crm_path = destination / "donor_crm_contacts.csv"
     crm_handle, crm_writer = _write_csv(crm_path, (
@@ -190,19 +203,24 @@ def generate_seed(profiles: int = 50_000, scale: str = "small",
             # values exercise validation without introducing a real email domain.
             if index % 113 == 0:
                 row["email"] = "noemail@example.com"
+                _mark_messiness(injected, CSV_FILES[0], "blocklisted_junk_email")
             if index % 97 == 0:
                 row["phone"] = "(000) 000-0000"
+                _mark_messiness(injected, CSV_FILES[0], "invalid_phone")
+            if index > 0 and index % 211 == 0:
+                row["email"] = "not-an-email"
+                _mark_messiness(injected, CSV_FILES[0], "invalid_email")
             crm_writer.writerow(row)
             _record_truth(records, "donor_crm", person["external_id"], person["person_id"],
                           household_ids.get(person["person_id"]))
             counts[CSV_FILES[0]] += 1
             if index % 101 == 0:
-                duplicate = dict(row)
-                duplicate["external_id"] = f"{person['external_id']}-dup"
-                crm_writer.writerow(duplicate)
-                _record_truth(records, "donor_crm", duplicate["external_id"], person["person_id"],
-                              household_ids.get(person["person_id"]))
+                crm_writer.writerow(row)
+                _mark_messiness(injected, CSV_FILES[0], "duplicate_row")
                 counts[CSV_FILES[0]] += 1
+        crm_writer.writerow({})
+        _mark_messiness(injected, CSV_FILES[0], "unrecoverable_row")
+        counts[CSV_FILES[0]] += 1
     finally:
         crm_handle.close()
 
@@ -217,16 +235,29 @@ def generate_seed(profiles: int = 50_000, scale: str = "small",
         "external_id", "contact_external_id", "email", "phone", "first_name", "last_name",
         "email_consent", "sms_consent", "consent_captured_at", "hard_bounce", "bounce_reason",
     ))
+    duplicated_esp = False
     try:
         for index, person in enumerate(people):
             if index not in email_overlap and index not in phone_overlap:
                 continue
             email = (_gmail_variant(person["email"], rng) if index in email_overlap
-                     else _email(fake, rng))
+                     else _email(fake, rng, profiles + index + 1))
+            if index in phone_overlap:
+                _mark_messiness(injected, CSV_FILES[2], "phone_only_match")
+            elif email.casefold() != person["email"].casefold():
+                _mark_messiness(injected, CSV_FILES[2], "email_case_variant")
+            if email != email.strip() or email != email.lower():
+                _mark_messiness(injected, CSV_FILES[2], "email_case_whitespace_variant")
+            variant_local = email.split("@", 1)[0]
+            original_local = person["email"].split("@", 1)[0]
+            if "." in variant_local and original_local.replace(".", "") == variant_local.replace(".", ""):
+                _mark_messiness(injected, CSV_FILES[2], "gmail_dot_variant")
+            if "+" in email.split("@", 1)[0]:
+                _mark_messiness(injected, CSV_FILES[2], "gmail_plus_variant")
             bounced = rng.random() < 0.025
             esp_id = f"esp-{index + 1:08d}"
             captured = datetime(2020, 1, 1, tzinfo=timezone.utc) + timedelta(days=rng.randrange(1826))
-            esp_writer.writerow({
+            row = {
                 "external_id": esp_id,
                 "contact_external_id": person["external_id"],
                 "email": email,
@@ -238,29 +269,19 @@ def generate_seed(profiles: int = 50_000, scale: str = "small",
                 "consent_captured_at": _mixed_datetime(captured, rng),
                 "hard_bounce": str(bounced).lower(),
                 "bounce_reason": "hard_bounce" if bounced else "",
-            })
+            }
+            esp_writer.writerow(row)
             _record_truth(records, "esp", esp_id, person["person_id"],
                           household_ids.get(person["person_id"]))
             counts[CSV_FILES[2]] += 1
-            if index % 173 == 0:
-                duplicate_id = f"{esp_id}-dup"
-                duplicate = {
-                    "external_id": duplicate_id,
-                    "contact_external_id": person["external_id"],
-                    "email": email,
-                    "phone": person["phone"],
-                    "first_name": person["first_name"],
-                    "last_name": person["last_name"],
-                    "email_consent": "unknown",
-                    "sms_consent": "unknown",
-                    "consent_captured_at": _mixed_datetime(captured, rng),
-                    "hard_bounce": "false",
-                    "bounce_reason": "",
-                }
-                esp_writer.writerow(duplicate)
-                _record_truth(records, "esp", duplicate_id, person["person_id"],
-                              household_ids.get(person["person_id"]))
+            if not duplicated_esp or index % 173 == 0:
+                esp_writer.writerow(row)
+                _mark_messiness(injected, CSV_FILES[2], "duplicate_row")
                 counts[CSV_FILES[2]] += 1
+                duplicated_esp = True
+        esp_writer.writerow({})
+        _mark_messiness(injected, CSV_FILES[2], "unrecoverable_row")
+        counts[CSV_FILES[2]] += 1
     finally:
         esp_handle.close()
 
@@ -271,6 +292,7 @@ def generate_seed(profiles: int = 50_000, scale: str = "small",
         "is_recurring", "recurring_plan_id",
     ))
     gift_rng = random.Random(random_seed ^ 0xBEEF)
+    duplicated_gift = False
     try:
         for person_index, person in enumerate(people):
             recurring = gift_rng.random() < 0.15
@@ -286,18 +308,23 @@ def generate_seed(profiles: int = 50_000, scale: str = "small",
                         dates.append((date(year, month, day), True))
             for _ in range(max(0, int(gift_rng.expovariate(1 / (2.2 * density))))):
                 dates.append((_sample_gift_date(gift_rng), False))
+            if person_index == 0 and not dates:
+                dates.append((date(2024, 12, 15), False))
             for gift_date, is_recurring in dates:
                 gift_number += 1
                 amount = min(25000.0, max(5.0, gift_rng.lognormvariate(3.75, 0.85)))
                 gift_id = f"gift-{person_index + 1:08d}-{gift_number:03d}"
-                gifts_writer.writerow({
+                formatted_date = _mixed_date(gift_date, gift_rng)
+                if "/" in formatted_date or "," in formatted_date:
+                    _mark_messiness(injected, CSV_FILES[1], "mixed_date_format")
+                row = {
                     "external_id": gift_id,
                     "contact_external_id": person["external_id"],
                     "email": person["email"],
                     "phone": person["phone"],
                     "amount": f"{amount:.2f}",
                     "currency": "USD",
-                    "gift_date": _mixed_date(gift_date, gift_rng),
+                    "gift_date": formatted_date,
                     "fund": gift_rng.choice(FUNDS),
                     "campaign": gift_rng.choice(CAMPAIGNS),
                     "appeal_code": gift_rng.choice(APPEALS),
@@ -305,10 +332,22 @@ def generate_seed(profiles: int = 50_000, scale: str = "small",
                     "payment_method": gift_rng.choice(("card", "ach", "check", "cash")),
                     "is_recurring": str(is_recurring).lower(),
                     "recurring_plan_id": recurring_plan if is_recurring else "",
-                })
+                }
+                gifts_writer.writerow(row)
                 _record_truth(records, "giving_platform", gift_id, person["person_id"],
                               household_ids.get(person["person_id"]))
                 counts[CSV_FILES[1]] += 1
+                if not duplicated_gift:
+                    gifts_writer.writerow(row)
+                    _mark_messiness(injected, CSV_FILES[1], "duplicate_row")
+                    counts[CSV_FILES[1]] += 1
+                    duplicated_gift = True
+        gifts_writer.writerow({
+            "external_id": "", "contact_external_id": "", "email": "", "phone": "",
+            "amount": "not-a-number", "currency": "USD", "gift_date": "",
+        })
+        _mark_messiness(injected, CSV_FILES[1], "unrecoverable_row")
+        counts[CSV_FILES[1]] += 1
     finally:
         gifts_handle.close()
 
@@ -318,14 +357,17 @@ def generate_seed(profiles: int = 50_000, scale: str = "small",
         "occurred_at", "received_at", "properties", "context",
     ))
     event_rng = random.Random(random_seed ^ 0xF1F9)
+    duplicated_call = False
     try:
         for person_index, person in enumerate(people):
             call_count = int(event_rng.expovariate(1 / (0.75 * density)))
+            if person_index == 0 and call_count == 0:
+                call_count = 1
             for call_number in range(call_count):
                 occurred = datetime(2020, 1, 1, tzinfo=timezone.utc) + timedelta(
                     days=event_rng.randrange(1826), seconds=event_rng.randrange(86400))
                 call_id = f"call-{person_index + 1:08d}-{call_number + 1:03d}"
-                calls_writer.writerow({
+                row = {
                     "external_id": call_id,
                     "message_id": call_id,
                     "email": person["email"],
@@ -340,10 +382,22 @@ def generate_seed(profiles: int = 50_000, scale: str = "small",
                         "disposition": event_rng.choice(("connected", "voicemail", "no_answer", "follow_up")),
                     }, sort_keys=True, separators=(",", ":")),
                     "context": json.dumps({"channel": "phone", "vendor": "five9"}, sort_keys=True),
-                })
+                }
+                calls_writer.writerow(row)
                 _record_truth(records, "five9", call_id, person["person_id"],
                               household_ids.get(person["person_id"]))
                 counts[CSV_FILES[3]] += 1
+                if not duplicated_call:
+                    calls_writer.writerow(row)
+                    _mark_messiness(injected, CSV_FILES[3], "duplicate_row")
+                    counts[CSV_FILES[3]] += 1
+                    duplicated_call = True
+        calls_writer.writerow({
+            "external_id": "", "message_id": "", "email": "", "phone": "", "type": "",
+            "name": "", "occurred_at": "", "received_at": "", "properties": "", "context": "",
+        })
+        _mark_messiness(injected, CSV_FILES[3], "unrecoverable_row")
+        counts[CSV_FILES[3]] += 1
     finally:
         calls_handle.close()
 
@@ -353,11 +407,12 @@ def generate_seed(profiles: int = 50_000, scale: str = "small",
         "age_band", "interests", "donor_propensity_score", "enriched_at",
     ))
     enrichment_rng = random.Random(random_seed ^ 0x2E7A)
+    duplicated_enrichment = False
     try:
         for index, person in enumerate(people):
             enrichment_id = f"zeta-{index + 1:08d}"
             enriched = datetime(2024, 1, 1, tzinfo=timezone.utc) + timedelta(days=enrichment_rng.randrange(366))
-            enrichment_writer.writerow({
+            row = {
                 "external_id": enrichment_id,
                 "contact_external_id": person["external_id"],
                 "email": person["email"],
@@ -367,10 +422,23 @@ def generate_seed(profiles: int = 50_000, scale: str = "small",
                 "interests": enrichment_rng.choice(INTERESTS),
                 "donor_propensity_score": f"{enrichment_rng.random():.4f}",
                 "enriched_at": _mixed_datetime(enriched, enrichment_rng),
-            })
+            }
+            enrichment_writer.writerow(row)
             _record_truth(records, "zeta_enrichment", enrichment_id, person["person_id"],
                           household_ids.get(person["person_id"]))
             counts[CSV_FILES[4]] += 1
+            if not duplicated_enrichment:
+                enrichment_writer.writerow(row)
+                _mark_messiness(injected, CSV_FILES[4], "duplicate_row")
+                counts[CSV_FILES[4]] += 1
+                duplicated_enrichment = True
+        enrichment_writer.writerow({
+            "external_id": "", "contact_external_id": "", "email": "", "phone": "",
+            "hh_income_band": "", "age_band": "", "interests": "",
+            "donor_propensity_score": "not-a-number", "enriched_at": "",
+        })
+        _mark_messiness(injected, CSV_FILES[4], "unrecoverable_row")
+        counts[CSV_FILES[4]] += 1
     finally:
         enrichment_handle.close()
 
@@ -388,10 +456,47 @@ def generate_seed(profiles: int = 50_000, scale: str = "small",
         json.dump(ground_truth, handle, sort_keys=True, separators=(",", ":"))
         handle.write("\n")
 
+    expected_handling = {
+        "blocklisted_junk_email": "warning",
+        "invalid_email": "warning",
+        "invalid_phone": "warning",
+        "email_case_variant": "normalized",
+        "email_case_whitespace_variant": "normalized",
+        "gmail_dot_variant": "normalized",
+        "gmail_plus_variant": "normalized",
+        "phone_only_match": "accepted_normalized_phone_for_resolution",
+        "mixed_date_format": "warning_and_coerced",
+        "duplicate_row": "deduplicated",
+        "unrecoverable_row": "rejected_and_error_csv",
+    }
+    stats = {
+        "format_version": 1,
+        "random_seed": random_seed,
+        "scale": scale,
+        "requested_people": profiles,
+        "files": {
+            name: {
+                "rows_generated": counts[name],
+                "messiness_injected": injected[name],
+                "expected_handling": {
+                    kind: expected_handling[kind] for kind in injected[name]
+                    if kind in expected_handling
+                },
+                "import_handling": None,
+            }
+            for name in CSV_FILES
+        },
+    }
+    stats_path = destination / "generator_stats.json"
+    with stats_path.open("w", encoding="utf-8", newline="\n") as handle:
+        json.dump(stats, handle, sort_keys=True, separators=(",", ":"))
+        handle.write("\n")
+
     return {
         "output_dir": destination,
         "files": {name: destination / name for name in CSV_FILES},
         "ground_truth": ground_truth_path,
+        "generator_stats": stats_path,
         "counts": counts,
         "record_count": len(records),
     }

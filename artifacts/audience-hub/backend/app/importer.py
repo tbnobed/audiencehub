@@ -1,6 +1,8 @@
 """Submit deterministic seed CSVs to the same job pipeline used by uploads."""
 
 import hashlib
+import csv
+import io
 import json
 import os
 import shutil
@@ -27,8 +29,25 @@ SEED_SOURCES = {
 }
 
 
+def _error_csv_contains_row_error(path: Path, row_number: int) -> bool:
+    """Inspect the tail only; generated unrecoverable rows are appended last."""
+    size = path.stat().st_size
+    start = max(0, size - 16 * 1024)
+    with path.open("rb") as stream:
+        stream.seek(start)
+        data = stream.read()
+    if start:
+        newline = data.find(b"\n")
+        data = data[newline + 1:] if newline >= 0 else b""
+    for entry in csv.reader(io.StringIO(data.decode("utf-8", errors="replace"))):
+        if len(entry) >= 2 and entry[0] == str(row_number) and entry[1] == "error":
+            return True
+    return False
+
+
 def _mapping(headers: list[str], record_type: str) -> dict:
     columns = suggest_mapping(headers, record_type)
+    options = {}
     if record_type == "contact":
         for header in headers:
             if header in {"email_consent", "sms_consent", "consent_captured_at",
@@ -47,7 +66,11 @@ def _mapping(headers: list[str], record_type: str) -> dict:
         ):
             if header in headers:
                 columns[header] = {"enrichment": header, "data_type": data_type}
-    return {"columns": validate_mapping(columns, record_type, headers), "options": {}}
+    if record_type in {"gift", "enrichment"} and any(
+        target == "contact_external_id" for target in columns.values()
+    ):
+        options["reference_source"] = "donor_crm"
+    return {"columns": validate_mapping(columns, record_type, headers), "options": options}
 
 
 def import_seed_files(files: Mapping[str, Path]) -> None:
@@ -57,6 +80,7 @@ def import_seed_files(files: Mapping[str, Path]) -> None:
     upload_dir = Path(get_settings().upload_dir).resolve()
     upload_dir.mkdir(parents=True, exist_ok=True)
     submitted: list[tuple[int, str]] = []
+    import_ids: dict[str, int] = {}
     for filename, file in files.items():
         source_key, source_name, record_type = SEED_SOURCES[filename]
         path = Path(file).resolve()
@@ -94,6 +118,7 @@ def import_seed_files(files: Mapping[str, Path]) -> None:
                    "record_type": record_type}).scalar()
             if previous is not None:
                 print(f"{filename}: unchanged (already completed import {previous})", flush=True)
+                import_ids[filename] = previous
                 db.commit()
                 continue
             import_id = db.execute(text("""
@@ -111,6 +136,7 @@ def import_seed_files(files: Mapping[str, Path]) -> None:
                     dedupe_key=f"import:{import_id}", max_attempts=1)
             db.commit()
             submitted.append((import_id, filename))
+            import_ids[filename] = import_id
             print(f"Queued {filename}: import {import_id}, {count:,} rows", flush=True)
 
     pending = dict(submitted)
@@ -119,6 +145,8 @@ def import_seed_files(files: Mapping[str, Path]) -> None:
         with Session(engine) as db:
             rows = db.execute(text("""
                 SELECT i.id, i.status, i.rows_total, i.rows_ok, i.rows_rejected,
+                       i.warning_count, i.warning_counts, i.rows_normalized,
+                       i.rows_deduplicated, i.duration_ms, i.error_file_path,
                        j.status AS job_status
                 FROM imports AS i
                 LEFT JOIN jobs AS j ON j.type='import.run'
@@ -135,10 +163,61 @@ def import_seed_files(files: Mapping[str, Path]) -> None:
                         db.commit()
                     print(f"{filename}: {status} "
                           f"(ok={row['rows_ok']:,}, rejected={row['rows_rejected']:,}, "
-                          f"total={row['rows_total']:,})", flush=True)
+                          f"warnings={row['warning_count']:,}, total={row['rows_total']:,}, "
+                          f"duration={(row['duration_ms'] or 0) / 1000:.3f}s)", flush=True)
                     if status != "completed":
                         raise RuntimeError(f"Seed import {row['id']} failed: {filename}")
         if pending:
             if time.monotonic() >= deadline:
                 raise TimeoutError(f"Seed imports did not finish: {list(pending)}")
             time.sleep(2)
+
+    stats_path = next(iter(files.values())).resolve().parent / "generator_stats.json"
+    if stats_path.is_file():
+        with stats_path.open(encoding="utf-8") as stream:
+            stats = json.load(stream)
+        with Session(engine) as db:
+            for filename, import_id in import_ids.items():
+                row = db.execute(text("""
+                    SELECT status, rows_total, rows_ok, rows_rejected, warning_count,
+                           warning_counts, rows_normalized, rows_deduplicated,
+                           duration_ms, error_file_path
+                    FROM imports WHERE id=:id
+                """), {"id": import_id}).mappings().first()
+                if not row:
+                    raise RuntimeError(f"Import metrics missing for {filename} (import {import_id})")
+                error_file_available = bool(row["error_file_path"] and
+                                            Path(row["error_file_path"]).is_file())
+                error_file_has_errors = bool(error_file_available and row["rows_rejected"])
+                unrecoverable_row_in_error_csv = bool(
+                    error_file_available and _error_csv_contains_row_error(
+                        Path(row["error_file_path"]), row["rows_total"] + 1
+                    )
+                )
+                elapsed = (row["duration_ms"] or 0) / 1000
+                has_injected_unrecoverable = (
+                    stats["files"][filename]["messiness_injected"].get("unrecoverable_row", 0) > 0
+                )
+                stats["files"][filename]["import_handling"] = {
+                    "status": row["status"],
+                    "rows_total": row["rows_total"],
+                    "rows_ok": row["rows_ok"],
+                    "rows_rejected": row["rows_rejected"],
+                    "warning_count": row["warning_count"],
+                    "warning_counts": row["warning_counts"] or {},
+                    "rows_normalized": row["rows_normalized"],
+                    "rows_deduplicated": row["rows_deduplicated"],
+                    "duration_seconds": elapsed,
+                    "rows_per_second": row["rows_total"] / elapsed if elapsed else None,
+                    "error_csv_available": error_file_available,
+                    "error_csv_contains_error": error_file_has_errors,
+                    "unrecoverable_row_rejected": (
+                        row["rows_rejected"] > 0 if has_injected_unrecoverable else None
+                    ),
+                    "unrecoverable_row_in_error_csv": (
+                        unrecoverable_row_in_error_csv if has_injected_unrecoverable else None
+                    ),
+                }
+        with stats_path.open("w", encoding="utf-8", newline="\n") as stream:
+            json.dump(stats, stream, sort_keys=True, separators=(",", ":"))
+            stream.write("\n")

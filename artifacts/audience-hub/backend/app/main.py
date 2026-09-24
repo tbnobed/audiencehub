@@ -16,6 +16,7 @@ from app.logging_config import configure_logging
 from app.models import AuditLog, Job, ScheduledRun, User
 from app.sources import router as sources_router
 from app.imports.api import router as imports_router
+from app.profiles.api import router as profiles_router
 
 
 @asynccontextmanager
@@ -32,6 +33,7 @@ app.include_router(dev.router)
 app.include_router(oidc.router)
 app.include_router(sources_router)
 app.include_router(imports_router)
+app.include_router(profiles_router)
 
 
 @app.exception_handler(HTTPException)

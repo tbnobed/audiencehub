@@ -8,7 +8,7 @@ export default function Admin() {
       
       <div className="rounded-lg border bg-card p-12 text-center shadow-sm">
         <h3 className="text-lg font-medium">Admin Settings Placeholder</h3>
-        <p className="text-sm text-muted-foreground mt-2">Platform configuration will be implemented in a future milestone.</p>
+        <p className="text-sm text-muted-foreground mt-2">Platform configuration will be implemented in a future update.</p>
       </div>
     </div>
   );

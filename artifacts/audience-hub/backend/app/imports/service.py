@@ -8,6 +8,7 @@ import hmac
 import json
 import os
 import re
+import time
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -27,6 +28,35 @@ CSV_BATCH_SIZE = 500
 
 class ImportProblem(ValueError):
     """Expected, user-correctable import input problem."""
+
+
+def _warning_category(message: str) -> str:
+    lowered = message.casefold()
+    if "invalid email" in lowered:
+        return "invalid_email"
+    if "invalid phone" in lowered:
+        return "invalid_phone"
+    if "date format coerced" in lowered:
+        return "date_format_coerced"
+    if "blocklisted identifier" in lowered:
+        return "blocklisted_identifier"
+    return "other"
+
+
+def _row_was_normalized(raw: dict[str, str], columns: dict[str, Any],
+                        values: dict[str, Any]) -> bool:
+    canonical_targets = {
+        "email": "email_norm", "phone": "phone_e164",
+        "first_name": "first_name", "last_name": "last_name",
+        "postal_code": "postal_code",
+    }
+    for header, target in columns.items():
+        if not isinstance(target, str) or target not in canonical_targets:
+            continue
+        canonical = values.get(canonical_targets[target])
+        if canonical is not None and raw.get(header, "") != canonical:
+            return True
+    return False
 
 
 def safe_filename(filename: str | None) -> str:
@@ -132,41 +162,78 @@ def _register_hard_bounce_suppressions(db: Session, hashes: set[str]) -> None:
     """), [{"value_hash": value_hash} for value_hash in hashes])
 
 
-def _identifiers_blocked(db: Session, source_id: int, email: str | None,
-                         phone: str | None, pepper: str) -> tuple[bool, bool]:
-    """Return (suppressed, blocklisted) without exposing identifiers in diagnostics."""
-    pairs = []
-    if email:
-        pairs.extend((("email", email), ("email", email.casefold())))
-    if phone:
-        pairs.append(("phone", phone))
-    suppressed = False
-    if pairs:
-        hashes = [(_type, _identity_hash(pepper, value)) for _type, value in pairs]
-        for _type, value_hash in hashes:
-            if db.execute(text(
-                "SELECT 1 FROM suppressions WHERE type=:type AND value_hash=:value_hash LIMIT 1"
-            ), {"type": _type, "value_hash": value_hash}).first():
-                suppressed = True
-                break
-    blocked = False
-    if email and db.execute(text(
-        "SELECT 1 FROM identifier_blocklist WHERE type='email' AND "
-        "(lower(value)=lower(:value) OR (value='*@test.com' AND lower(:value) LIKE '%@test.com') "
-        "OR (value='noemail@*' AND lower(:value) LIKE 'noemail@%')) LIMIT 1"
-    ), {"value": email}).first():
-        blocked = True
-    repeated_phone = False
-    if phone:
-        national = re.sub(r"\D", "", phone)
-        if national.startswith("1") and len(national) == 11:
-            national = national[1:]
-        repeated_phone = len(national) == 10 and len(set(national)) == 1
-    if phone and (repeated_phone or db.execute(text(
-        "SELECT 1 FROM identifier_blocklist WHERE type='phone' AND value=:value LIMIT 1"
-    ), {"value": phone}).first()):
-        blocked = True
-    return suppressed, blocked
+def _identifiers_blocked_batch(
+    db: Session,
+    identities: set[tuple[str | None, str | None]],
+    pepper: str,
+) -> dict[tuple[str | None, str | None], tuple[bool, bool]]:
+    """Resolve suppression and blocklist status for a batch in two DB queries."""
+    emails = {email for email, _phone in identities if email}
+    phones = {phone for _email, phone in identities if phone}
+    if not emails and not phones:
+        return {identity: (False, False) for identity in identities}
+    email_hash_values: dict[str, set[str]] = {}
+    phone_hash_values: dict[str, set[str]] = {}
+    for email in emails:
+        for value in {email, email.casefold()}:
+            email_hash_values.setdefault(_identity_hash(pepper, value), set()).add(email)
+    for phone in phones:
+        phone_hash_values.setdefault(_identity_hash(pepper, phone), set()).add(phone)
+
+    suppressed_emails: set[str] = set()
+    suppressed_phones: set[str] = set()
+    if email_hash_values or phone_hash_values:
+        rows = db.execute(text("""
+            SELECT type, value_hash FROM suppressions
+            WHERE (type='email' AND value_hash=ANY(CAST(:email_hashes AS text[])))
+               OR (type='phone' AND value_hash=ANY(CAST(:phone_hashes AS text[])))
+        """), {"email_hashes": list(email_hash_values),
+               "phone_hashes": list(phone_hash_values)}).mappings()
+        for row in rows:
+            if row["type"] == "email":
+                suppressed_emails.update(email_hash_values[row["value_hash"]])
+            else:
+                suppressed_phones.update(phone_hash_values[row["value_hash"]])
+
+    blocked_emails: set[str] = set()
+    blocked_phones: set[str] = set()
+    blocklist_rows = db.execute(text("""
+        SELECT type, lower(value) AS value FROM identifier_blocklist
+        WHERE (type='email' AND (
+                 lower(value)=ANY(CAST(:emails AS text[]))
+                 OR value IN ('*@test.com', 'noemail@*')))
+           OR (type='phone' AND value=ANY(CAST(:phones AS text[])))
+    """), {"emails": list(emails), "phones": list(phones)}).mappings()
+    wildcard_email_rules: set[str] = set()
+    for row in blocklist_rows:
+        if row["type"] == "email":
+            if row["value"] in {"*@test.com", "noemail@*"}:
+                wildcard_email_rules.add(row["value"])
+            else:
+                blocked_emails.add(row["value"])
+        else:
+            blocked_phones.add(row["value"])
+
+    results = {}
+    for email, phone in identities:
+        suppressed = email in suppressed_emails or phone in suppressed_phones
+        lowered_email = email.casefold() if email else ""
+        blocked_email = lowered_email in blocked_emails
+        if "*@test.com" in wildcard_email_rules and lowered_email.endswith("@test.com"):
+            blocked_email = True
+        if "noemail@*" in wildcard_email_rules and lowered_email.startswith("noemail@"):
+            blocked_email = True
+        repeated_phone = False
+        if phone:
+            national = re.sub(r"\D", "", phone)
+            if national.startswith("1") and len(national) == 11:
+                national = national[1:]
+            repeated_phone = len(national) == 10 and len(set(national)) == 1
+        blocked = blocked_email or bool(phone and (
+            repeated_phone or phone in blocked_phones
+        ))
+        results[(email, phone)] = (suppressed, blocked)
+    return results
 
 
 def _attribute_values(mapped: dict[str, Any]) -> dict[str, Any]:
@@ -203,9 +270,17 @@ def _external_id(record_type: str, values: dict[str, Any]) -> str:
     return "auto:" + values["raw_hash"]
 
 
-def _row_payload(record_type: str, values: dict[str, Any]) -> dict[str, Any]:
+def _row_payload(
+    record_type: str, values: dict[str, Any], reference_source: str | None = None
+) -> dict[str, Any]:
     ext_id = _external_id(record_type, values)
     attributes = _attribute_values(values)
+    contact_external_id = values.get("contact_external_id")
+    if record_type in {"gift", "enrichment"} and reference_source and contact_external_id:
+        attributes["_identity_reference"] = {
+            "contact_external_id": contact_external_id,
+            "source_key": reference_source,
+        }
     if record_type == "consent":
         attributes["_import_consent"] = {
             key: _json_value(values.get(key)) for key in ("channel", "status", "captured_at")
@@ -439,12 +514,13 @@ class _ErrorCsv:
 
 
 def run_import(import_id: int, progress_callback: Callable[[dict[str, Any]], None] | None = None,
-               db: Session | None = None) -> dict[str, int]:
+               db: Session | None = None) -> dict[str, Any]:
     """Execute an import. Pass a worker-owned SQLAlchemy Session when available.
 
     The job runner should call this for ``import.run``. The optional callback is
     invoked with ``{"done", "total", "message"}`` as batches complete.
     """
+    started = time.perf_counter()
     owns_session = db is None
     if owns_session:
         db = Session(engine)
@@ -526,8 +602,9 @@ def run_import(import_id: int, progress_callback: Callable[[dict[str, Any]], Non
         _register_hard_bounce_suppressions(db, bounce_hashes)
 
         accepted = rejected = seen = 0
+        warning_count = normalized_count = deduplicated_count = 0
+        warning_counts: dict[str, int] = {}
         last_record_number = 1
-        identity_checks: dict[tuple[str | None, str | None], tuple[bool, bool]] = {}
         for _ in range(0, total, CSV_BATCH_SIZE):
             staged = db.execute(text("""
                 SELECT record_number, raw_row FROM ah_import_staging
@@ -539,6 +616,8 @@ def run_import(import_id: int, progress_callback: Callable[[dict[str, Any]], Non
             last_record_number = staged[-1]["record_number"]
             processed: list[dict[str, Any]] = []
             source_rows: list[dict[str, Any]] = []
+            batch_rows: list[tuple[int, dict[str, str], dict[str, Any], dict[str, Any]]] = []
+            identities: set[tuple[str | None, str | None]] = set()
             for staged_row in staged:
                 seen += 1
                 raw = staged_row["raw_row"]
@@ -546,23 +625,34 @@ def run_import(import_id: int, progress_callback: Callable[[dict[str, Any]], Non
                     raw = json.loads(raw)
                 converted = map_and_validate_row(raw, columns, record_type, options)
                 line = staged_row["record_number"]
+                values = converted["values"]
+                batch_rows.append((line, raw, converted, values))
+                if converted["errors"] or (
+                    record_type == "contact" and _is_hard_bounce(values)
+                ):
+                    continue
+                identities.add((values.get("email_norm"), values.get("phone_e164")))
+
+            identity_checks = _identifiers_blocked_batch(db, identities, pepper)
+            for line, raw, converted, values in batch_rows:
                 for message in converted["errors"]:
                     error_sink.write({"row": line, "severity": "error", "message": message})
                 for message in converted["warnings"]:
                     error_sink.write({"row": line, "severity": "warning", "message": message})
+                    warning_count += 1
+                    category = _warning_category(message)
+                    warning_counts[category] = warning_counts.get(category, 0) + 1
                 if converted["errors"]:
                     rejected += 1
                     continue
-                values = converted["values"]
                 if record_type == "contact" and _is_hard_bounce(values):
                     rejected += 1
                     error_sink.write({"row": line, "severity": "error",
                                       "message": "Hard-bounce row was not imported"})
                     continue
+                if _row_was_normalized(raw, columns, values):
+                    normalized_count += 1
                 identity_key = (values.get("email_norm"), values.get("phone_e164"))
-                if identity_key not in identity_checks:
-                    identity_checks[identity_key] = _identifiers_blocked(
-                        db, imported["source_id"], *identity_key, pepper)
                 suppressed, blocklisted = identity_checks[identity_key]
                 if suppressed:
                     rejected += 1
@@ -574,10 +664,22 @@ def run_import(import_id: int, progress_callback: Callable[[dict[str, Any]], Non
                     values["phone_e164"] = None
                     error_sink.write({"row": line, "severity": "warning",
                                       "message": "Blocklisted identifier excluded from identity matching"})
-                item = _row_payload(record_type, values)
+                    warning_count += 1
+                    warning_counts["blocklisted_identifier"] = (
+                        warning_counts.get("blocklisted_identifier", 0) + 1
+                    )
+                item = _row_payload(record_type, values, options.get("reference_source"))
                 item.update(record_type=record_type, values=values, line=line)
                 processed.append(item)
                 source_rows.append(item)
+            # Count duplicate external IDs collapsed by this batch's unique-key
+            # upsert without retaining identifiers across the entire file.
+            ids_in_batch: set[str] = set()
+            for item in processed:
+                if item["external_id"] in ids_in_batch:
+                    deduplicated_count += 1
+                else:
+                    ids_in_batch.add(item["external_id"])
             id_map = _upsert_source_records(db, imported["source_id"], import_id, source_rows)
             record_ids = list(id_map.values())
             profiles: dict[int, int | None] = {}
@@ -594,29 +696,48 @@ def run_import(import_id: int, progress_callback: Callable[[dict[str, Any]], Non
             _upsert_consents(db, imported["source_id"], processed)
             accepted += len(processed)
             db.execute(text(
-                "UPDATE imports SET rows_ok=:ok, rows_rejected=:rejected WHERE id=:id"
-            ), {"ok": accepted, "rejected": rejected, "id": import_id})
+                "UPDATE imports SET rows_ok=:ok, rows_rejected=:rejected, "
+                "warning_count=:warning_count, warning_counts=CAST(:warning_counts AS jsonb), "
+                "rows_normalized=:normalized, rows_deduplicated=:deduplicated WHERE id=:id"
+            ), {"ok": accepted, "rejected": rejected, "warning_count": warning_count,
+                "warning_counts": json.dumps(warning_counts), "normalized": normalized_count,
+                "deduplicated": deduplicated_count, "id": import_id})
             db.flush()
             if progress_callback:
                 progress_callback({"done": min(seen, total), "total": total,
                                    "message": f"Processed {min(seen, total)} of {total} rows"})
         error_path = error_sink.finish()
+        elapsed_ms = max(0, int((time.perf_counter() - started) * 1000))
         db.execute(text("""
             UPDATE imports SET status='completed', rows_total=:total, rows_ok=:ok,
-              rows_rejected=:rejected, error_file_path=:error_path, finished_at=now()
+              rows_rejected=:rejected, warning_count=:warning_count,
+              warning_counts=CAST(:warning_counts AS jsonb), rows_normalized=:normalized,
+              rows_deduplicated=:deduplicated, duration_ms=:duration_ms,
+              error_file_path=:error_path, finished_at=now()
             WHERE id=:id
         """), {"total": seen, "ok": accepted, "rejected": rejected,
-               "error_path": error_path, "id": import_id})
+               "warning_count": warning_count, "warning_counts": json.dumps(warning_counts),
+               "normalized": normalized_count, "deduplicated": deduplicated_count,
+               "duration_ms": elapsed_ms, "error_path": error_path, "id": import_id})
+        if record_type in {"contact", "consent", "gift", "event"}:
+            from app.jobs.queue import enqueue
+
+            enqueue(db, "identity.resolve_batch", {}, dedupe_key="identity")
         db.commit()
-        return {"rows_total": seen, "rows_ok": accepted, "rows_rejected": rejected}
+        return {"rows_total": seen, "rows_ok": accepted, "rows_rejected": rejected,
+                "warning_count": warning_count, "warning_counts": warning_counts,
+                "rows_normalized": normalized_count, "rows_deduplicated": deduplicated_count,
+                "duration_ms": elapsed_ms}
     except Exception as exc:
         db.rollback()
         # Never persist raw exception text from database errors, which can
         # contain values. Keep the import status useful without exposing PII.
         try:
             db.execute(text(
-                "UPDATE imports SET status='failed', finished_at=now() WHERE id=:id"
-            ), {"id": import_id})
+                "UPDATE imports SET status='failed', duration_ms=:duration_ms, "
+                "finished_at=now() WHERE id=:id"
+            ), {"id": import_id,
+                "duration_ms": max(0, int((time.perf_counter() - started) * 1000))})
             db.commit()
         except Exception:
             db.rollback()

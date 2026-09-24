@@ -264,8 +264,23 @@ def validate_import(import_id: int, user: User = Depends(require_role("analyst")
     except (ImportProblem, UnicodeDecodeError, OSError) as exc:
         raise HTTPException(422, detail=str(exc)) from exc
     db.execute(text(
-        "UPDATE imports SET rows_ok=:ok, rows_rejected=:rejected, status='mapped' WHERE id=:id"
-    ), {"ok": result["rows_ok"], "rejected": result["rows_rejected"], "id": import_id})
+        "UPDATE imports SET rows_ok=:ok, rows_rejected=:rejected, warning_count=:warnings, "
+        "warning_counts=CAST(:warning_counts AS jsonb), status='mapped' WHERE id=:id"
+    ), {"ok": result["rows_ok"], "rejected": result["rows_rejected"],
+        "warnings": result["warning_count"],
+        "warning_counts": json.dumps({
+            "invalid_email": sum("invalid email" in row["message"].casefold()
+                                 for row in result["warnings"]),
+            "invalid_phone": sum("invalid phone" in row["message"].casefold()
+                                 for row in result["warnings"]),
+            "date_format_coerced": sum("date format coerced" in row["message"].casefold()
+                                       for row in result["warnings"]),
+            "other": sum(
+                not any(term in row["message"].casefold() for term in
+                        ("invalid email", "invalid phone", "date format coerced"))
+                for row in result["warnings"]
+            ),
+        }), "id": import_id})
     db.commit()
     return result
 

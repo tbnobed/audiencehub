@@ -13,7 +13,7 @@ export default function Segments() {
           Define rules to group your profiles into actionable audiences for targeting.
         </p>
       </div>
-      <Button variant="outline" className="mt-4" disabled>Create Segment (Coming Soon)</Button>
+      <Button variant="outline" className="mt-4" disabled>Not available yet</Button>
     </div>
   );
 }

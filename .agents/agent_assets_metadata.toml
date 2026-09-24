@@ -1,0 +1,16 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "fcObrzyboRDGfZa5LEo86"
+uri = "file://artifacts/audience-hub/backend/seed-data/acceptance/identity_report.txt"
+type = "text"
+title = "Audience Hub M3 identity acceptance report"
+description = "Full 50,000-person ground-truth comparison and per-file seed/import statistics."
+logical_id = "573bcaf2-530c-4cc3-9510-95b290f9e00c"
+content_hash = "sha256:cf05db7e48ace304fede6dc8f885b95fd0941434ce1ba790de446afffa26dbfc"
+size = 5604
+mtime_ms = 1790273668609
+storage_uri = "gcs://replit-rams-assets-janeway/rams/assets/repl:e5cb43bd-1e3c-4895-8728-2f6a0c8a7f98/573bcaf2-530c-4cc3-9510-95b290f9e00c/a7e4adff-47a2-400f-bd31-55500a9166b3"
+storage_version_token = "1790274545542721"
+content_type = "text/plain"

@@ -8,7 +8,7 @@ export default function Dashboard() {
       
       <div className="rounded-lg border bg-card p-12 text-center shadow-sm">
         <h3 className="text-lg font-medium">No audience data yet</h3>
-        <p className="text-sm text-muted-foreground mt-2">Dashboard metrics are planned for Milestone 4. Milestone 1 only includes system operations and the foundation.</p>
+        <p className="text-sm text-muted-foreground mt-2">Dashboard metrics are not available yet. This area only includes system operations and the foundation.</p>
       </div>
     </div>
   );

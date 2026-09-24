@@ -54,7 +54,7 @@ export default function Imports() {
               <TableHead>Source</TableHead>
               <TableHead>Type</TableHead>
               <TableHead>Status</TableHead>
-              <TableHead className="text-right">Rows (OK / Err)</TableHead>
+              <TableHead className="text-right">Rows (OK / Err / Warn)</TableHead>
               <TableHead className="w-[120px] text-right">Date</TableHead>
               <TableHead className="w-[80px] text-right">Actions</TableHead>
             </TableRow>
@@ -93,6 +93,10 @@ export default function Imports() {
                         <span className="text-muted-foreground mx-1">/</span>
                         <span className={job.rows_rejected > 0 ? "text-destructive" : "text-muted-foreground"}>
                           {job.rows_rejected}
+                        </span>
+                        <span className="text-muted-foreground mx-1">/</span>
+                        <span className={job.warning_count ? "text-amber-500" : "text-muted-foreground"}>
+                          {job.warning_count || 0}
                         </span>
                         {job.status === 'mapped' && (
                           <span className="block text-[10px] text-muted-foreground">validation sample · first 5,000</span>
@@ -214,13 +218,17 @@ function ImportWizardDialog({
               <p className="text-muted-foreground text-sm mb-6 text-center">
                 Successfully processed {job.rows_total} records.
               </p>
-              <div className="grid grid-cols-2 gap-4 w-full max-w-sm">
-                <div className="bg-muted p-4 rounded-md text-center">
+              <div className="grid grid-cols-3 gap-4 w-full max-w-md">
+                <div className="bg-muted p-4 rounded-md text-center border border-transparent">
                   <div className="text-2xl font-mono font-medium text-emerald-500">{job.rows_ok}</div>
                   <div className="text-xs text-muted-foreground mt-1 uppercase tracking-wider">Accepted</div>
                 </div>
-                <div className="bg-muted p-4 rounded-md text-center">
-                  <div className="text-2xl font-mono font-medium text-destructive">{job.rows_rejected}</div>
+                <div className={`p-4 rounded-md text-center border ${job.warning_count ? 'bg-amber-500/10 border-amber-500/20' : 'bg-muted border-transparent'}`}>
+                  <div className={`text-2xl font-mono font-medium ${job.warning_count ? 'text-amber-500' : 'text-muted-foreground'}`}>{job.warning_count || 0}</div>
+                  <div className="text-xs text-muted-foreground mt-1 uppercase tracking-wider">Warnings</div>
+                </div>
+                <div className={`p-4 rounded-md text-center border ${job.rows_rejected > 0 ? 'bg-destructive/10 border-destructive/20' : 'bg-muted border-transparent'}`}>
+                  <div className={`text-2xl font-mono font-medium ${job.rows_rejected > 0 ? 'text-destructive' : 'text-muted-foreground'}`}>{job.rows_rejected}</div>
                   <div className="text-xs text-muted-foreground mt-1 uppercase tracking-wider">Rejected</div>
                 </div>
               </div>
@@ -460,32 +468,48 @@ function ReadyStep({ job }: { job: ImportJob }) {
         </p>
       </div>
 
-      <div className="grid grid-cols-2 gap-6 w-full max-w-md mx-auto">
+      <div className="grid grid-cols-3 gap-4 w-full max-w-lg mx-auto">
         <div className="bg-emerald-500/10 border border-emerald-500/20 p-4 rounded-lg flex flex-col items-center text-center">
           <div className="text-3xl font-mono font-medium text-emerald-500 mb-1">{job.rows_ok}</div>
-          <div className="text-xs font-semibold text-emerald-600 uppercase tracking-wider">Valid in Scope</div>
-          <div className="text-[10px] text-muted-foreground mt-2">Dry-run sample only</div>
+          <div className="text-xs font-semibold text-emerald-600 uppercase tracking-wider">Valid</div>
+          <div className="text-[10px] text-muted-foreground mt-2">In scope</div>
         </div>
 
-        <div className={`p-4 rounded-lg flex flex-col items-center text-center border ${hasErrors ? 'bg-amber-500/10 border-amber-500/20' : 'bg-muted/50 border-transparent'}`}>
-          <div className={`text-3xl font-mono font-medium mb-1 ${hasErrors ? 'text-amber-500' : 'text-muted-foreground'}`}>{job.rows_rejected}</div>
-          <div className={`text-xs font-semibold uppercase tracking-wider ${hasErrors ? 'text-amber-600' : 'text-muted-foreground'}`}>Rejected in Scope</div>
-          <div className="text-[10px] text-muted-foreground mt-2">Dry-run sample only</div>
+        <div className={`p-4 rounded-lg flex flex-col items-center text-center border ${job.warning_count ? 'bg-amber-500/10 border-amber-500/20' : 'bg-muted/50 border-transparent'}`}>
+          <div className={`text-3xl font-mono font-medium mb-1 ${job.warning_count ? 'text-amber-500' : 'text-muted-foreground'}`}>{job.warning_count || 0}</div>
+          <div className={`text-xs font-semibold uppercase tracking-wider ${job.warning_count ? 'text-amber-600' : 'text-muted-foreground'}`}>Warnings</div>
+          <div className="text-[10px] text-muted-foreground mt-2">In scope</div>
+        </div>
+
+        <div className={`p-4 rounded-lg flex flex-col items-center text-center border ${hasErrors ? 'bg-destructive/10 border-destructive/20' : 'bg-muted/50 border-transparent'}`}>
+          <div className={`text-3xl font-mono font-medium mb-1 ${hasErrors ? 'text-destructive' : 'text-muted-foreground'}`}>{job.rows_rejected}</div>
+          <div className={`text-xs font-semibold uppercase tracking-wider ${hasErrors ? 'text-destructive' : 'text-muted-foreground'}`}>Rejected</div>
+          <div className="text-[10px] text-muted-foreground mt-2">In scope</div>
         </div>
       </div>
 
-      {hasErrors && (
-        <div className="bg-amber-500/10 text-amber-600 p-4 rounded-md text-sm flex gap-3 max-w-md mx-auto mt-4">
+      {(hasErrors || (job.warning_count && job.warning_count > 0)) && (
+        <div className={`${hasErrors ? 'bg-destructive/10 text-destructive' : 'bg-amber-500/10 text-amber-600'} p-4 rounded-md text-sm flex gap-3 max-w-lg mx-auto mt-4`}>
           <AlertTriangle className="h-5 w-5 shrink-0" />
           <div>
-            <p>{job.rows_rejected} rows were rejected in the validation scope. Review the validation issues before proceeding.</p>
+            <p>{job.rows_rejected} rows rejected, {job.warning_count || 0} warnings in validation scope.</p>
             {validationErrors.length > 0 && (
               <ul className="mt-2 list-disc space-y-1 pl-5 text-xs">
-                {validationErrors.slice(0, 20).map((error, index) => (
+                {validationErrors.slice(0, 10).map((error, index) => (
                   <li key={index}>{formatValidationError(error)}</li>
                 ))}
-                {validationErrors.length > 20 && <li>And {validationErrors.length - 20} more validation issues.</li>}
+                {validationErrors.length > 10 && <li>And {validationErrors.length - 10} more validation issues.</li>}
               </ul>
+            )}
+            {job.warning_counts && Object.keys(job.warning_counts).length > 0 && (
+               <div className="mt-2 text-xs">
+                 <p className="font-semibold mb-1">Warning summary:</p>
+                 <ul className="list-disc pl-5">
+                   {Object.entries(job.warning_counts).filter(([_, v]) => v > 0).map(([k, v]) => (
+                     <li key={k}>{v} {k.replace('_', ' ')}</li>
+                   ))}
+                 </ul>
+               </div>
             )}
           </div>
         </div>

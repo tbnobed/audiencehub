@@ -78,3 +78,14 @@ For each profile field (email, phone, name, address block):
 
 - Shared family emails or phones will merge household members. This is accepted for MVP; the high-cardinality guard catches the worst cases.
 - No unmerge in the UI. Admins can see merge history; an unmerge tool is a later phase.
+
+## Profile and Data Health API
+
+The profile read API is available at:
+
+- `GET /api/profiles?search=&source_id=&has_email=&has_phone=&donor_status=&page=&page_size=`. Search uses PostgreSQL `pg_trgm` similarity over the maintained `profiles.search_text`; results contain only active profiles and return `{items,total,page,page_size}`. Source filtering uses linked source records. `has_email` and `has_phone` filter the profile's resolved contact fields; missing traits report donor status `prospect`.
+- `GET /api/profiles/{id}` returns the profile's scalar fields and traits, plus `gifts`, `events`, `identifiers`, `source_records`, `merges`, `enrichment`, and `consents` arrays. Source-record history is ordered by source priority (lowest number first), then newest update. Expired enrichment values are omitted. A request for a merged profile returns HTTP 301 with its `merged_into` ID; deleted/unknown profiles return 404.
+- `GET /api/data-health` returns `pending_count`, `merges_per_day`, `blocklist_hits`, `auto_blocklisted`, `rejected_rows`, and `recent_imports`. Pending means unresolved source records; blocklist hits are source records whose email/phone currently matches the blocklist.
+- Admins may `POST /api/data-health/blocklist/{id}/approve` to record review while keeping the identifier blocked, or `POST /api/data-health/blocklist/{id}/unblock` to remove it from the blocklist. Both actions are audited. Only automatic `high_cardinality` blocklist entries are reviewable from this API.
+
+All profile/list/detail/data-health responses mask email and phone values for the viewer role, including identifier values and nested source-record/event attributes. Analyst/admin callers receive unmasked values. Profile detail views write a `profile.view` audit entry for all roles.

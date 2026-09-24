@@ -28,6 +28,7 @@ export function Sidebar() {
     { name: 'Segments', path: '/segments', icon: PieChart, roles: ['viewer', 'analyst', 'admin'] },
     { name: 'Activations', path: '/activations', icon: Activity, roles: ['analyst', 'admin'] },
     { name: 'Imports', path: '/imports', icon: ArrowDownToLine, roles: ['analyst', 'admin'] },
+    { name: 'Data Health', path: '/data-health', icon: Server, roles: ['analyst', 'admin', 'viewer'] },
     { name: 'Sources', path: '/sources', icon: Database, roles: ['analyst', 'admin'] },
     { name: 'Admin', path: '/admin', icon: Settings, roles: ['admin'] },
     { name: 'System', path: '/system', icon: Server, roles: ['admin'] },
