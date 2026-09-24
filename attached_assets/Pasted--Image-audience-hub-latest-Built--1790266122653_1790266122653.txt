@@ -1,0 +1,108 @@
+ ✔ Image audience-hub:latest       Built                                                                                      1.3s
+ ✔ Container audience-hub-backup-1 Running                                                                                    0.0s
+ ✔ Container audience-hub-db-1     Healthy                                                                                    3.1s
+ ✘ Container audience-hub-api-1    Error dependency api failed to start                                                      78.1s
+ ✔ Container audience-hub-worker-1 Recreated                                                                                  0.2s
+dependency failed to start: container audience-hub-api-1 is unhealthy
+obtv-admin@audiencehub:~/audiencehub/artifacts/audience-hub$ docker compose logs --no-color --tail=100 api
+api-1  |   File "/usr/local/lib/python3.12/asyncio/runners.py", line 195, in run
+api-1  |     return runner.run(main)
+api-1  |            ^^^^^^^^^^^^^^^^
+api-1  |   File "/usr/local/lib/python3.12/asyncio/runners.py", line 118, in run
+api-1  |     return self._loop.run_until_complete(task)
+api-1  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+api-1  |   File "/usr/local/lib/python3.12/asyncio/base_events.py", line 691, in run_until_complete
+api-1  |     return future.result()
+api-1  |            ^^^^^^^^^^^^^^^
+api-1  |   File "/usr/local/lib/python3.12/site-packages/uvicorn/server.py", line 70, in serve
+api-1  |     await self._serve(sockets)
+api-1  |   File "/usr/local/lib/python3.12/site-packages/uvicorn/server.py", line 77, in _serve
+api-1  |     config.load()
+api-1  |   File "/usr/local/lib/python3.12/site-packages/uvicorn/config.py", line 435, in load
+api-1  |     self.loaded_app = import_from_string(self.app)
+api-1  |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+api-1  |   File "/usr/local/lib/python3.12/site-packages/uvicorn/importer.py", line 22, in import_from_string
+api-1  |     raise exc from None
+api-1  |   File "/usr/local/lib/python3.12/site-packages/uvicorn/importer.py", line 19, in import_from_string
+api-1  |     module = importlib.import_module(module_str)
+api-1  |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+api-1  |   File "/usr/local/lib/python3.12/importlib/__init__.py", line 90, in import_module
+api-1  |     return _bootstrap._gcd_import(name[level:], package, level)
+api-1  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+api-1  |   File "<frozen importlib._bootstrap>", line 1387, in _gcd_import
+api-1  |   File "<frozen importlib._bootstrap>", line 1360, in _find_and_load
+api-1  |   File "<frozen importlib._bootstrap>", line 1331, in _find_and_load_unlocked
+api-1  |   File "<frozen importlib._bootstrap>", line 935, in _load_unlocked
+api-1  |   File "<frozen importlib._bootstrap_external>", line 999, in exec_module
+api-1  |   File "<frozen importlib._bootstrap>", line 488, in _call_with_frames_removed
+api-1  |   File "/app/backend/app/main.py", line 10, in <module>
+api-1  |     from app.auth import dev, oidc
+api-1  |   File "/app/backend/app/auth/oidc.py", line 1, in <module>
+api-1  |     from authlib.integrations.starlette_client import OAuth
+api-1  |   File "/usr/local/lib/python3.12/site-packages/authlib/integrations/starlette_client/__init__.py", line 3, in <module>
+api-1  |     from .apps import StarletteOAuth1App
+api-1  |   File "/usr/local/lib/python3.12/site-packages/authlib/integrations/starlette_client/apps.py", line 9, in <module>
+api-1  |     from ..httpx_client import AsyncOAuth1Client
+api-1  |   File "/usr/local/lib/python3.12/site-packages/authlib/integrations/httpx_client/__init__.py", line 9, in <module>
+api-1  |     from .assertion_client import AssertionClient
+api-1  |   File "/usr/local/lib/python3.12/site-packages/authlib/integrations/httpx_client/assertion_client.py", line 1, in <module>
+api-1  |     import httpx
+api-1  | ModuleNotFoundError: No module named 'httpx'
+api-1  | Process SpawnProcess-51:
+api-1  | Traceback (most recent call last):
+api-1  |   File "/usr/local/lib/python3.12/multiprocessing/process.py", line 314, in _bootstrap
+api-1  |     self.run()
+api-1  |   File "/usr/local/lib/python3.12/multiprocessing/process.py", line 108, in run
+api-1  |     self._target(*self._args, **self._kwargs)
+api-1  |   File "/usr/local/lib/python3.12/site-packages/uvicorn/_subprocess.py", line 80, in subprocess_started
+api-1  |     target(sockets=sockets)
+api-1  |   File "/usr/local/lib/python3.12/site-packages/uvicorn/supervisors/multiprocess.py", line 63, in target
+api-1  |     return self.real_target(sockets)
+api-1  |            ^^^^^^^^^^^^^^^^^^^^^^^^^
+api-1  |   File "/usr/local/lib/python3.12/site-packages/uvicorn/server.py", line 66, in run
+api-1  |     return asyncio.run(self.serve(sockets=sockets))
+api-1  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+api-1  |   File "/usr/local/lib/python3.12/asyncio/runners.py", line 195, in run
+api-1  |     return runner.run(main)
+api-1  |            ^^^^^^^^^^^^^^^^
+api-1  |   File "/usr/local/lib/python3.12/asyncio/runners.py", line 118, in run
+api-1  |     return self._loop.run_until_complete(task)
+api-1  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+api-1  |   File "/usr/local/lib/python3.12/asyncio/base_events.py", line 691, in run_until_complete
+api-1  |     return future.result()
+api-1  |            ^^^^^^^^^^^^^^^
+api-1  |   File "/usr/local/lib/python3.12/site-packages/uvicorn/server.py", line 70, in serve
+api-1  |     await self._serve(sockets)
+api-1  |   File "/usr/local/lib/python3.12/site-packages/uvicorn/server.py", line 77, in _serve
+api-1  |     config.load()
+api-1  |   File "/usr/local/lib/python3.12/site-packages/uvicorn/config.py", line 435, in load
+api-1  |     self.loaded_app = import_from_string(self.app)
+api-1  |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+api-1  |   File "/usr/local/lib/python3.12/site-packages/uvicorn/importer.py", line 22, in import_from_string
+api-1  |     raise exc from None
+api-1  |   File "/usr/local/lib/python3.12/site-packages/uvicorn/importer.py", line 19, in import_from_string
+api-1  |     module = importlib.import_module(module_str)
+api-1  |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+api-1  |   File "/usr/local/lib/python3.12/importlib/__init__.py", line 90, in import_module
+api-1  |     return _bootstrap._gcd_import(name[level:], package, level)
+api-1  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+api-1  |   File "<frozen importlib._bootstrap>", line 1387, in _gcd_import
+api-1  |   File "<frozen importlib._bootstrap>", line 1360, in _find_and_load
+api-1  |   File "<frozen importlib._bootstrap>", line 1331, in _find_and_load_unlocked
+api-1  |   File "<frozen importlib._bootstrap>", line 935, in _load_unlocked
+api-1  |   File "<frozen importlib._bootstrap_external>", line 999, in exec_module
+api-1  |   File "<frozen importlib._bootstrap>", line 488, in _call_with_frames_removed
+api-1  |   File "/app/backend/app/main.py", line 10, in <module>
+api-1  |     from app.auth import dev, oidc
+api-1  |   File "/app/backend/app/auth/oidc.py", line 1, in <module>
+api-1  |     from authlib.integrations.starlette_client import OAuth
+api-1  |   File "/usr/local/lib/python3.12/site-packages/authlib/integrations/starlette_client/__init__.py", line 3, in <module>
+api-1  |     from .apps import StarletteOAuth1App
+api-1  |   File "/usr/local/lib/python3.12/site-packages/authlib/integrations/starlette_client/apps.py", line 9, in <module>
+api-1  |     from ..httpx_client import AsyncOAuth1Client
+api-1  |   File "/usr/local/lib/python3.12/site-packages/authlib/integrations/httpx_client/__init__.py", line 9, in <module>
+api-1  |     from .assertion_client import AssertionClient
+api-1  |   File "/usr/local/lib/python3.12/site-packages/authlib/integrations/httpx_client/assertion_client.py", line 1, in <module>
+api-1  |     import httpx
+api-1  | ModuleNotFoundError: No module named 'httpx'
+obtv-admin@audiencehub:~/audiencehub/artifacts/audience-hub$
