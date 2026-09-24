@@ -1,5 +1,5 @@
 from datetime import timedelta
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select, update, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 from app.models import Job, now
@@ -15,10 +15,16 @@ def enqueue(db: Session, job_type: str, payload: dict | None = None, *,
                               priority=priority, max_attempts=max_attempts).on_conflict_do_nothing(
                                   index_elements=[Job.dedupe_key],
                                   index_where=Job.status.in_(("queued", "running"))).returning(Job.id)
-    job_id = db.scalar(stmt)
-    if job_id is None:
-        return db.scalar(select(Job).where(Job.dedupe_key == dedupe_key, Job.status.in_(("queued", "running"))))
-    return db.get(Job, job_id)
+    while True:
+        job_id = db.scalar(stmt)
+        if job_id is not None:
+            return db.get(Job, job_id)
+        existing = db.scalar(select(Job).where(
+            Job.dedupe_key == dedupe_key, Job.status.in_(("queued", "running"))))
+        if existing is not None:
+            return existing
+        # READ COMMITTED: the conflicting job may finish between INSERT and
+        # SELECT, leaving no active row. Retry INSERT rather than return None.
 
 
 def claim(db: Session) -> Job | None:
@@ -38,6 +44,27 @@ def heartbeat(db: Session, job_id: int, progress: dict | None = None) -> bool:
     if progress is not None:
         values["progress"] = progress
     return bool(db.execute(update(Job).where(Job.id == job_id, Job.status == "running").values(**values)).rowcount)
+
+
+def identity_import_running(db: Session) -> bool:
+    """Queue-level courtesy check; the advisory lock is the race-free guard."""
+    return bool(db.scalar(text("""
+        SELECT EXISTS (
+            SELECT 1 FROM jobs j JOIN imports i
+              ON j.payload->>'import_id' = i.id::text
+            WHERE j.type='import.run' AND j.status='running'
+              AND i.record_type IN ('contact', 'consent', 'enrichment')
+        )
+    """)))
+
+
+def defer(db: Session, job_id: int, seconds: int = 30) -> None:
+    """Yield claimed work without spending its failure/retry budget."""
+    db.execute(update(Job).where(Job.id == job_id, Job.status == "running").values(
+        status="queued", run_after=func.clock_timestamp() + timedelta(seconds=seconds),
+        attempts=func.greatest(Job.attempts - 1, 0),
+        started_at=None, heartbeat_at=None, finished_at=None,
+    ))
 
 
 def succeed(db: Session, job_id: int) -> None:

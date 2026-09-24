@@ -153,13 +153,14 @@ export default function System() {
                   <TableHead>Name</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Created</TableHead>
+                  <TableHead>Failure reason</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {jobs.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">
+                     <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
                       No jobs in the queue.
                     </TableCell>
                   </TableRow>
@@ -183,8 +184,10 @@ export default function System() {
                        <TableCell className="text-muted-foreground text-sm">
                          {new Date(job.created_at).toLocaleString()}
                          {job.progress?.total ? <span className="block">{job.progress.done ?? 0} / {job.progress.total}</span> : null}
-                         {job.error ? <span className="block text-destructive">{job.error}</span> : null}
                       </TableCell>
+                       <TableCell className="max-w-sm whitespace-pre-wrap break-words text-sm text-destructive">
+                         {job.error || '—'}
+                       </TableCell>
                       <TableCell className="text-right">
                         {job.status === 'failed' && (
                           <Button 

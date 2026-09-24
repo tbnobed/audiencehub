@@ -135,6 +135,8 @@ def import_seed_files(files: Mapping[str, Path]) -> None:
                    "count": count}).scalar_one()
             enqueue(db, "import.run", {"import_id": import_id},
                     dedupe_key=f"import:{import_id}", max_attempts=1)
+            db.execute(text("UPDATE imports SET status='running' WHERE id=:id"),
+                       {"id": import_id})
             db.commit()
             submitted.append((import_id, filename))
             import_ids[filename] = import_id

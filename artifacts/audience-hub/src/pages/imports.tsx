@@ -98,6 +98,11 @@ export default function Imports() {
                     )}
                   </TableCell>
                   <TableCell className="text-right font-mono text-xs">
+                    {job.status === 'failed' && job.job_error && (
+                      <p className="text-xs text-destructive max-w-md break-words mb-2" data-testid={`text-import-error-${job.id}`}>
+                        {job.job_error}
+                      </p>
+                    )}
                     {job.rows_total > 0 ? (
                       <>
                         <span className="text-emerald-500">{job.rows_ok}</span>
@@ -227,6 +232,12 @@ function ImportWizardDialog({
               <AlertTriangle className="h-12 w-12 text-destructive mx-auto" />
               <h3 className="font-medium text-lg">Import Failed</h3>
               <p className="text-muted-foreground text-sm">The import could not be completed. Review the job and try again.</p>
+              {job.job_error && (
+                <p className="text-sm text-destructive break-words" data-testid={`text-import-failure-${job.id}`}>
+                  {job.job_error}
+                </p>
+              )}
+              <RetryImport job={job} />
             </div>
           )}
           {currentStep === 'completed' && job && (
@@ -457,6 +468,38 @@ function MappingStep({ job }: { job: ImportJob }) {
           Save Mapping &amp; Validate
         </Button>
       </div>
+    </div>
+  );
+}
+
+function RetryImport({ job }: { job: ImportJob }) {
+  const runImport = useRunImport();
+  const committed = Math.max(0, (job.last_committed_record_number || 1) - 1);
+  const retry = async () => {
+    try {
+      await runImport.mutateAsync(job.id);
+    } catch (error: unknown) {
+      toast({ title: 'Could not resume import',
+        description: error instanceof Error ? error.message : 'Please try again.',
+        variant: 'destructive' });
+    }
+  };
+  return (
+    <div className="space-y-3">
+      <p className="text-sm text-muted-foreground" data-testid="text-import-checkpoint">
+        {committed > 0
+          ? `${committed.toLocaleString()} rows checkpointed. Resume keeps accepted rows, rejections, and warnings; committed batches will not run again.`
+          : 'No batches have been committed. Retry uses the saved file and mapping.'}
+      </p>
+      {committed > 0 && (
+        <p className="text-xs text-muted-foreground">
+          {job.rows_ok.toLocaleString()} accepted · {job.rows_rejected.toLocaleString()} rejected · {(job.warning_count || 0).toLocaleString()} warnings
+        </p>
+      )}
+      <Button onClick={retry} disabled={runImport.isPending} data-testid="button-retry-import">
+        {runImport.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+        {committed > 0 ? 'Resume Import' : 'Retry Import'}
+      </Button>
     </div>
   );
 }

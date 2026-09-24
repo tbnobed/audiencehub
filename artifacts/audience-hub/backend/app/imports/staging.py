@@ -57,6 +57,31 @@ import_statistics: ContextVar[ImportStatistics | None] = ContextVar(
 
 
 @contextmanager
+def import_lock(db: Session, import_id: int):
+    """Serialize one import across commits; never return a locked pooled connection."""
+    bind = db.get_bind()
+    with bind.engine.connect() as connection:
+        params = {"key": f"audience-hub:import:{import_id}"}
+        acquired = False
+        try:
+            connection.execute(text(
+                "SELECT pg_advisory_lock(hashtextextended(:key, 0))"), params)
+            acquired = True
+            connection.commit()
+            yield
+        finally:
+            if acquired:
+                try:
+                    connection.rollback()
+                    connection.execute(text(
+                        "SELECT pg_advisory_unlock(hashtextextended(:key, 0))"), params)
+                    connection.commit()
+                except BaseException:
+                    connection.invalidate()
+                    raise
+
+
+@contextmanager
 def staging_table(db: Session, columns: str) -> Iterator[str]:
     # A fresh name isolates concurrent jobs, including jobs sharing a source.
     # Creation/drop participate in the caller's transaction: rollback removes
@@ -96,6 +121,18 @@ def copy_upsert(
                     copy.write_row(tuple(row[key] for key in keys))
         sql = re.sub(r"(?<!:):([a-zA-Z_][a-zA-Z_0-9]*)",
                      lambda m: f'staged."{m[1]}"', statement)
+        # Sort the SELECT by the actual unique key, not COPY arrival order.
+        # Conflict keys can be aliases (attribute_key <- staged.key).
+        conflict = re.search(r"ON CONFLICT\s*\(([^)]+)\)", sql, re.IGNORECASE)
+        if conflict:
+            aliases = {"attribute_key": "key"}
+            keys = [key.strip() for key in conflict[1].split(",")]
+            order = ", ".join(
+                f'staged."{aliases.get(key, key)}"' for key in keys
+                if aliases.get(key, key) in rows[0]
+            )
+            if order:
+                sql = sql[:conflict.start()] + f"ORDER BY {order}\n" + sql[conflict.start():]
         result = db.execute(text(sql.replace("{stage}", f"{stage} AS staged")))
         statistics = import_statistics.get()
         if statistics is not None:

@@ -42,10 +42,11 @@ def _http_input_error(error: Exception) -> HTTPException:
 
 def _get_import(db: Session, import_id: int):
     row = db.execute(text("""
-        SELECT i.*, job.id AS job_id, job.status AS job_status, job.progress AS progress
+        SELECT i.*, job.id AS job_id, job.status AS job_status, job.progress AS progress,
+               job.error AS job_error
         FROM imports AS i
         LEFT JOIN LATERAL (
-          SELECT id, status, progress FROM jobs
+          SELECT id, status, progress, error FROM jobs
           WHERE type='import.run' AND payload->>'import_id'=i.id::text
           ORDER BY id DESC LIMIT 1
         ) AS job ON true
@@ -58,6 +59,10 @@ def _get_import(db: Session, import_id: int):
 
 def _json_import(row) -> dict[str, Any]:
     result = dict(row)
+    if result.get("job_status") in {"queued", "running"}:
+        result["status"] = "running"
+    elif result.get("job_status") == "failed":
+        result["status"] = "failed"
     for key, value in list(result.items()):
         if hasattr(value, "isoformat"):
             result[key] = value.isoformat()
@@ -181,10 +186,11 @@ def list_imports(limit: int = 50, cursor: int | None = None,
                  db: Session = Depends(session_scope)):
     limit = min(max(limit, 1), 100)
     stmt = """
-        SELECT i.*, job.id AS job_id, job.status AS job_status, job.progress AS progress
+        SELECT i.*, job.id AS job_id, job.status AS job_status, job.progress AS progress,
+               job.error AS job_error
         FROM imports AS i
         LEFT JOIN LATERAL (
-          SELECT id, status, progress FROM jobs
+          SELECT id, status, progress, error FROM jobs
           WHERE type='import.run' AND payload->>'import_id'=i.id::text
           ORDER BY id DESC LIMIT 1
         ) AS job ON true
@@ -226,6 +232,8 @@ def set_mapping(import_id: int, body: MappingBody,
                 user: User = Depends(require_role("analyst")),
                 db: Session = Depends(session_scope)):
     row = _get_import(db, import_id)
+    if (row.get("last_committed_record_number") or 1) > 1:
+        raise HTTPException(409, detail="This import has committed batches. Resume with its saved mapping or upload a new import.")
     if row["status"] in {"running", "completed", "cancelled"}:
         raise HTTPException(409, detail="Mapping cannot be changed in this import state")
     try:
@@ -254,6 +262,8 @@ def re_fullmatch_region(region: Any) -> bool:
 def validate_import(import_id: int, user: User = Depends(require_role("analyst")),
                     db: Session = Depends(session_scope)):
     row = _get_import(db, import_id)
+    if (row.get("last_committed_record_number") or 1) > 1:
+        raise HTTPException(409, detail="This import has committed batches. Resume it without replacing committed counters.")
     if row["status"] in {"running", "completed", "cancelled"}:
         raise HTTPException(409, detail="Import cannot be validated in this state")
     mapping = row["mapping"] or {}
@@ -282,9 +292,14 @@ def validate_import(import_id: int, user: User = Depends(require_role("analyst")
 def start_import(import_id: int, user: User = Depends(require_role("analyst")),
                  db: Session = Depends(session_scope)):
     row = _get_import(db, import_id)
-    if row["status"] == "running":
+    status = row["status"]
+    # A killed worker cannot update imports, but stale-job recovery marks its
+    # job failed. Use that terminal state so the visible Retry action works.
+    if status == "running" and row.get("job_status") == "failed":
+        status = "failed"
+    if status == "running" or row.get("job_status") in {"queued", "running"}:
         raise HTTPException(409, detail="Import is already running")
-    if row["status"] not in {"mapped", "uploaded", "failed"}:
+    if status not in {"mapped", "uploaded", "failed"}:
         raise HTTPException(409, detail="Import cannot be run in this state")
     if not (row["mapping"] or {}).get("columns"):
         raise HTTPException(409, detail="Set a column mapping before running the import")
@@ -293,8 +308,9 @@ def start_import(import_id: int, user: User = Depends(require_role("analyst")),
     # The job row is committed with the running import, so polling can show
     # a determinate total even before the worker reports its first batch.
     job.progress = {
-        "done": 0, "total": row["rows_total"] or 0,
-        "message": "Preparing validation…",
+        "done": max(0, (row.get("last_committed_record_number") or 1) - 1),
+        "total": row["rows_total"] or 0,
+        "message": "Preparing resume…" if (row.get("last_committed_record_number") or 1) > 1 else "Preparing validation…",
     }
     db.execute(text("UPDATE imports SET status='running' WHERE id=:id"), {"id": import_id})
     db.commit()

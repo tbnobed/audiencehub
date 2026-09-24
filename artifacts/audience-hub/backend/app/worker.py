@@ -10,8 +10,9 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.db import engine
+from app.identity.locking import IdentityResolutionDeferred
 from app.jobs import handlers, queue, scheduler
-from app.logging_config import configure_logging
+from app.logging_config import configure_logging, safe_job_error
 
 log = logging.getLogger(__name__)
 
@@ -32,6 +33,10 @@ def run_job(job_id: int, job_type: str, payload: dict) -> None:
     heart = threading.Thread(target=keep_alive, daemon=True)
     heart.start()
     try:
+        if job_type == "identity.resolve_batch":
+            with Session(engine) as db:
+                if queue.identity_import_running(db):
+                    raise IdentityResolutionDeferred("Identity resolution is waiting for running imports")
         if job_type == "import.run":
             from app.imports.service import run_import
 
@@ -47,10 +52,14 @@ def run_job(job_id: int, job_type: str, payload: dict) -> None:
         with Session(engine) as db:
             queue.succeed(db, job_id)
             db.commit()
-    except Exception:
+    except IdentityResolutionDeferred:
+        with Session(engine) as db:
+            queue.defer(db, job_id)
+            db.commit()
+    except Exception as exc:
         log.exception("Job failed: %s", job_id)
         with Session(engine) as db:
-            queue.fail(db, job_id, "Job handler failed; see server logs")
+            queue.fail(db, job_id, safe_job_error(exc))
             db.commit()
     finally:
         stop.set()

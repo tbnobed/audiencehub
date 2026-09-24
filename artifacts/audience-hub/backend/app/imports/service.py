@@ -11,9 +11,9 @@ import re
 import time
 from datetime import date, datetime
 from decimal import Decimal
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Any, Callable, Iterator
-from uuid import uuid4
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -21,7 +21,9 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.db import engine
 from app.imports.mapping import RECORD_TYPES
-from app.imports.staging import ImportStatistics, copy_upsert, import_statistics
+from app.imports.staging import (
+    IMPORT_TABLES, ImportStatistics, copy_upsert, import_statistics, import_lock,
+)
 from app.imports.validation import map_and_validate_row
 
 MAX_IMPORT_BYTES = int(os.getenv("IMPORT_MAX_BYTES", str(100 * 1024 * 1024)))
@@ -595,6 +597,19 @@ class _ErrorCsv:
 
 def run_import(import_id: int, progress_callback: Callable[[dict[str, Any]], None] | None = None,
                db: Session | None = None) -> dict[str, Any]:
+    """Own lifecycle locks independently of batch transactions."""
+    with ExitStack() as stack:
+        if db is None:
+            db = stack.enter_context(Session(engine))
+        stack.enter_context(import_lock(db, import_id))
+        from app.identity.locking import import_identity_lock
+
+        # All imports write source_records, and gifts/events can carry identifiers.
+        stack.enter_context(import_identity_lock(db.get_bind().engine))
+        return _run_import(import_id, progress_callback, db)
+
+
+def _run_import(import_id: int, progress_callback=None, db: Session | None = None) -> dict[str, Any]:
     """Execute an import. Pass a worker-owned SQLAlchemy Session when available.
 
     The job runner should call this for ``import.run``. The optional callback is
@@ -606,15 +621,25 @@ def run_import(import_id: int, progress_callback: Callable[[dict[str, Any]], Non
         db = Session(engine)
     assert db is not None
     error_sink: _ErrorCsv | None = None
+    stage = f"ah_import_rows_{int(import_id)}"
     statistics = ImportStatistics()
     statistics_token = import_statistics.set(statistics)
     try:
         imported = db.execute(text(
-            "SELECT id, source_id, filename, file_path, record_type, mapping, rows_total "
+            "SELECT * "
             "FROM imports WHERE id=:id FOR UPDATE"
         ), {"id": import_id}).mappings().first()
         if not imported:
             raise ImportProblem("Import not found")
+        if imported["status"] == "completed":
+            return {key: imported[key] for key in (
+                "rows_total", "rows_ok", "rows_rejected", "warning_count", "warning_counts",
+                "rows_normalized", "rows_deduplicated", "duration_ms")}
+        checkpoint = imported["last_committed_record_number"]
+        if checkpoint > 1:
+            # The previous process may have died after its final batch commit
+            # but before end-of-import ANALYZE. Include its targets on resume.
+            statistics.written.update({table: 0 for table in IMPORT_TABLES})
         record_type = imported["record_type"]
         mapping = imported["mapping"] or {}
         columns = mapping.get("columns", {})
@@ -630,7 +655,8 @@ def run_import(import_id: int, progress_callback: Callable[[dict[str, Any]], Non
             total = sum(1 for _ in rows)
             headers, rows = csv_reader(path)
         db.execute(text(
-            "UPDATE imports SET status='running', started_at=now(), rows_total=:total "
+            "UPDATE imports SET status='running', started_at=COALESCE(started_at, now()), "
+            "finished_at=NULL, rows_total=:total "
             "WHERE id=:id"
         ), {"id": import_id, "total": total})
         db.flush()
@@ -642,11 +668,13 @@ def run_import(import_id: int, progress_callback: Callable[[dict[str, Any]], Non
         # the JSON, so JSONB parsing/storage/re-encoding would be wasted work.
         # Full-file bounce registration
         # must precede accepting even the first row.
-        stage = "ah_import_rows_" + uuid4().hex
         conn = db.connection()
         raw_connection = conn.connection.driver_connection
         bounce_hashes: set[str] = set()
         with raw_connection.cursor() as cursor:
+            # A process kill may leave a committed unlogged stage. The import
+            # lock makes this deterministic name safe to reclaim on retry.
+            cursor.execute(f"DROP TABLE IF EXISTS {stage}")
             cursor.execute(f"""
                 CREATE UNLOGGED TABLE {stage} (
                   record_number bigint NOT NULL, was_normalized boolean NOT NULL, converted text NOT NULL
@@ -656,6 +684,8 @@ def run_import(import_id: int, progress_callback: Callable[[dict[str, Any]], Non
                 f"COPY {stage} (record_number, was_normalized, converted) FROM STDIN"
             ) as copy:
                 for record_number, row in enumerate(rows, start=2):
+                    if record_number <= checkpoint:
+                        continue
                     converted = map_and_validate_row(row, columns, record_type, options)
                     values = converted["values"]
                     email = values.get("email_norm")
@@ -670,16 +700,27 @@ def run_import(import_id: int, progress_callback: Callable[[dict[str, Any]], Non
         db.flush()
 
         Path(settings.upload_dir).mkdir(parents=True, exist_ok=True)
-        error_sink = _ErrorCsv(Path(settings.upload_dir), import_id)
+        diagnostics: list[dict[str, Any]] = []
+        class DiagnosticSink:
+            def write(self, row):
+                diagnostics.append(row)
+        diagnostic_sink = DiagnosticSink()
         # Register every hard-bounced address before accepting any row. The
         # suppression is an email-channel opt-out, not an import-row block.
         _register_hard_bounce_suppressions(db, bounce_hashes)
-        _report_progress(progress_callback, "Writing", 0, total)
+        db.commit()  # Preserve staging and complete-file suppressions across batches.
+        _report_progress(progress_callback, "Writing", checkpoint - 1, total)
 
-        accepted = rejected = seen = 0
-        warning_count = normalized_count = deduplicated_count = 0
-        warning_counts: dict[str, int] = {}
-        last_record_number = 1
+        # Preview validation also writes rows_ok/rejected; only a durable
+        # writing checkpoint makes these cumulative import counters.
+        accepted = imported["rows_ok"] if checkpoint > 1 else 0
+        rejected = imported["rows_rejected"] if checkpoint > 1 else 0
+        seen = checkpoint - 1
+        warning_count = imported["warning_count"] if checkpoint > 1 else 0
+        normalized_count = imported["rows_normalized"] if checkpoint > 1 else 0
+        deduplicated_count = imported["rows_deduplicated"] if checkpoint > 1 else 0
+        warning_counts: dict[str, int] = dict(imported["warning_counts"] or {}) if checkpoint > 1 else {}
+        last_record_number = checkpoint
         for _ in range(0, total, CSV_BATCH_SIZE):
             staged = db.execute(text(f"""
                 SELECT record_number, was_normalized, converted FROM {stage}
@@ -709,9 +750,9 @@ def run_import(import_id: int, progress_callback: Callable[[dict[str, Any]], Non
             identity_checks = _identifiers_blocked_batch(db, identities, pepper)
             for line, was_normalized, converted, values in batch_rows:
                 for message in converted["errors"]:
-                    error_sink.write({"row": line, "severity": "error", "message": message})
+                    diagnostic_sink.write({"row": line, "severity": "error", "message": message})
                 for message in converted["warnings"]:
-                    error_sink.write({"row": line, "severity": "warning", "message": message})
+                    diagnostic_sink.write({"row": line, "severity": "warning", "message": message})
                     warning_count += 1
                     category = _warning_category(message)
                     warning_counts[category] = warning_counts.get(category, 0) + 1
@@ -724,13 +765,13 @@ def run_import(import_id: int, progress_callback: Callable[[dict[str, Any]], Non
                 deletion_blocked, blocklisted, email_opted_out = identity_checks[identity_key]
                 if deletion_blocked:
                     rejected += 1
-                    error_sink.write({"row": line, "severity": "error",
+                    diagnostic_sink.write({"row": line, "severity": "error",
                                       "message": "Identifier has a deletion-request suppression; row was not imported"})
                     continue
                 if blocklisted:
                     values["email_norm"] = None
                     values["phone_e164"] = None
-                    error_sink.write({"row": line, "severity": "warning",
+                    diagnostic_sink.write({"row": line, "severity": "warning",
                                       "message": "Blocklisted identifier excluded from identity matching"})
                     warning_count += 1
                     warning_counts["blocklisted_identifier"] = (
@@ -774,13 +815,31 @@ def run_import(import_id: int, progress_callback: Callable[[dict[str, Any]], Non
             db.execute(text(
                 "UPDATE imports SET rows_ok=:ok, rows_rejected=:rejected, "
                 "warning_count=:warning_count, warning_counts=CAST(:warning_counts AS jsonb), "
-                "rows_normalized=:normalized, rows_deduplicated=:deduplicated WHERE id=:id"
+                "rows_normalized=:normalized, rows_deduplicated=:deduplicated, "
+                "last_committed_record_number=:record_number WHERE id=:id"
             ), {"ok": accepted, "rejected": rejected, "warning_count": warning_count,
                 "warning_counts": json.dumps(warning_counts), "normalized": normalized_count,
-                "deduplicated": deduplicated_count, "id": import_id})
-            db.flush()
+                "deduplicated": deduplicated_count, "id": import_id,
+                "record_number": last_record_number})
+            if diagnostics:
+                db.execute(text("""
+                    INSERT INTO import_batch_diagnostics (import_id, record_number, diagnostics)
+                    VALUES (:id, :record, CAST(:diagnostics AS jsonb))
+                    ON CONFLICT (import_id, record_number) DO UPDATE
+                    SET diagnostics=EXCLUDED.diagnostics
+                """), {"id": import_id, "record": last_record_number,
+                       "diagnostics": json.dumps(diagnostics)})
+            db.commit()
+            diagnostics.clear()
             _report_progress(progress_callback, "Writing", min(seen, total), total)
         statistics.finish(db)
+        error_sink = _ErrorCsv(Path(settings.upload_dir), import_id)
+        for batch in db.execute(text(
+            "SELECT diagnostics FROM import_batch_diagnostics WHERE import_id=:id "
+            "ORDER BY record_number"
+        ), {"id": import_id}).yield_per(1):
+            for diagnostic in batch[0]:
+                error_sink.write(diagnostic)
         error_path = error_sink.finish()
         elapsed_ms = max(0, int((time.perf_counter() - started) * 1000))
         db.execute(text("""
@@ -821,6 +880,13 @@ def run_import(import_id: int, progress_callback: Callable[[dict[str, Any]], Non
             raise
         raise
     finally:
+        # CREATE may have committed; rollback alone no longer cleans the stage.
+        try:
+            db.rollback()
+            db.execute(text(f"DROP TABLE IF EXISTS {stage}"))
+            db.commit()
+        except Exception:
+            db.rollback()
         import_statistics.reset(statistics_token)
         if error_sink is not None and not error_sink.handle.closed:
             error_sink.handle.close()

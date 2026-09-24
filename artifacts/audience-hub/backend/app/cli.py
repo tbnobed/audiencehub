@@ -36,6 +36,9 @@ def main():
     commands = parser.add_subparsers(dest="command", required=True)
     admin = commands.add_parser("create-admin")
     admin.add_argument("--email", required=True)
+    reset = commands.add_parser("reset-demo", help="Erase dataset rows, preserving users and configuration.")
+    reset.add_argument("--yes", action="store_true", help="Required explicit acknowledgement.")
+    reset.add_argument("--force", action="store_true", help="With --yes, permit APP_ENV=production.")
     from app.benchmark import add_arguments, run_benchmark
     benchmark = commands.add_parser("benchmark", help="Run synthetic imports in a disposable local database.")
     add_arguments(benchmark)
@@ -63,6 +66,21 @@ def main():
             raise SystemExit(run_benchmark(args))
         except (ValueError, RuntimeError) as exc:
             raise SystemExit(str(exc)) from exc
+    if args.command == "reset-demo":
+        from app.reset_demo import reset_demo
+        # Do not even create a database engine before the environment guard.
+        if not args.yes or (os.environ.get("APP_ENV", "").strip().lower() == "production"
+                            and not args.force):
+            try:
+                reset_demo(None, yes=args.yes, force=args.force)
+            except ValueError as exc:
+                raise SystemExit(str(exc)) from exc
+        from app.db import engine
+        try:
+            reset_demo(engine, yes=args.yes, force=args.force)
+        except (ValueError, RuntimeError) as exc:
+            raise SystemExit(str(exc)) from exc
+        return
     from app.db import engine
     from app.models import AuditLog, User
     if args.command == "seed":

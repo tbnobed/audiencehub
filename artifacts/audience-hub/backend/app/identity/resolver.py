@@ -8,6 +8,8 @@ from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
+from app.identity.locking import IdentityResolutionDeferred, acquire_resolver_lock
+from app.jobs.queue import identity_import_running
 
 from app.identity.normalize import (
     normalize_anonymous_id,
@@ -175,7 +177,7 @@ def _move_profile_references(db: Session, winner_id: int, loser_id: int) -> None
                {"winner": winner_id, "loser": loser_id})
 
     consents = db.execute(
-        text("SELECT * FROM consents WHERE profile_id=:loser"),
+        text("SELECT * FROM consents WHERE profile_id=:loser ORDER BY channel"),
         {"loser": loser_id},
     ).mappings().all()
     for consent in consents:
@@ -215,6 +217,7 @@ def _move_profile_references(db: Session, winner_id: int, loser_id: int) -> None
             SELECT :winner, source_id, attribute_key, value_text, value_num, value_bool,
                    value_date, imported_at, license_expires_at
             FROM enrichment_values WHERE profile_id=:loser
+            ORDER BY source_id, attribute_key
             ON CONFLICT (profile_id, source_id, attribute_key) DO UPDATE SET
               value_text=EXCLUDED.value_text, value_num=EXCLUDED.value_num,
               value_bool=EXCLUDED.value_bool, value_date=EXCLUDED.value_date,
@@ -253,6 +256,7 @@ def _materialize_source_attributes_batch(db: Session, assignments: list[tuple[di
                 "imported_at": record["updated_at"],
             })
     if consents:
+        consents.sort(key=lambda row: (row["profile_id"], row["channel"]))
         db.execute(
             text("""
                 INSERT INTO consents (profile_id, channel, status, source_id, captured_at, evidence)
@@ -269,6 +273,7 @@ def _materialize_source_attributes_batch(db: Session, assignments: list[tuple[di
             consents,
         )
     if enrichments:
+        enrichments.sort(key=lambda row: (row["profile_id"], row["source_id"], row["key"]))
         db.execute(
             text("""
                 INSERT INTO enrichment_values
@@ -295,7 +300,7 @@ def _assign_record_references(
 ) -> None:
     if not record_profiles:
         return
-    record_ids = list(record_profiles)
+    record_ids = sorted(record_profiles)
     profile_ids = [record_profiles[record_id] for record_id in record_ids]
     db.execute(
         text("""
@@ -311,6 +316,9 @@ def _assign_record_references(
         record_id for record_id in record_ids
         if records_by_id[record_id].get("imported_record_type") == "gift"
     ]
+    gift_record_ids.sort(key=lambda rid: (
+        records_by_id[rid]["source_id"], records_by_id[rid]["external_id"]
+    ))
     if gift_record_ids:
         # Drive this update from gift keys so PostgreSQL uses the existing
         # (source_id, external_id) unique index instead of scanning gifts by
@@ -409,7 +417,9 @@ def _assign_record_references(
 def resolve_batch(db: Session, limit: int = BATCH_SIZE, job_id: int | None = None) -> dict[str, int]:
     """Resolve up to ``limit`` pending source records in one transaction."""
     limit = max(1, min(int(limit), BATCH_SIZE))
-    db.execute(text("SELECT pg_advisory_xact_lock(hashtext('identity.resolve_batch'))"))
+    acquire_resolver_lock(db)
+    if identity_import_running(db):
+        raise IdentityResolutionDeferred("Identity resolution is waiting for running imports")
     pending = db.execute(
         text("""
             SELECT sr.*, s.key AS source_key, s.priority, i.record_type AS imported_record_type
@@ -575,7 +585,7 @@ def resolve_batch(db: Session, limit: int = BATCH_SIZE, job_id: int | None = Non
 
     _assign_record_references(db, record_by_id, record_profiles)
     if key_profiles_to_write:
-        key_rows = list(key_profiles_to_write.items())
+        key_rows = sorted(key_profiles_to_write.items())
         db.execute(
             text("""
                 INSERT INTO identifiers (type, value, profile_id)
@@ -583,6 +593,7 @@ def resolve_batch(db: Session, limit: int = BATCH_SIZE, job_id: int | None = Non
                 FROM unnest(CAST(:types AS text[]), CAST(:values AS text[]),
                             CAST(:profile_ids AS bigint[]))
                      AS keys(key_type, key_value, profile_id)
+                ORDER BY key_type, key_value
                 ON CONFLICT (type, value) DO UPDATE SET profile_id=EXCLUDED.profile_id
                 WHERE identifiers.profile_id IS DISTINCT FROM EXCLUDED.profile_id
             """),
@@ -605,6 +616,7 @@ def resolve_batch(db: Session, limit: int = BATCH_SIZE, job_id: int | None = Non
             INSERT INTO trait_dirty_profiles (profile_id, dirtied_at)
             SELECT DISTINCT profile_id, clock_timestamp()
             FROM unnest(CAST(:profile_ids AS bigint[])) AS changed(profile_id)
+            ORDER BY profile_id
             ON CONFLICT (profile_id) DO UPDATE SET dirtied_at=EXCLUDED.dirtied_at
         """), {"profile_ids": list(affected)})
     return {"records": len(records), "profiles_created": profiles_created, "merges": merges}

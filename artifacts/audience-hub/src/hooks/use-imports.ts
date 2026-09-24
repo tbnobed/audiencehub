@@ -10,7 +10,9 @@ export type ImportJob = {
   rows_total: number;
   rows_ok: number;
   rows_rejected: number;
+  last_committed_record_number?: number;
   warning_count?: number;
+  job_error?: string | null;
   warning_counts?: Record<string, number>;
   mapping: Record<string, string>;
   created_at: string;
@@ -120,7 +122,11 @@ export function useRunImport() {
       // starts. Preserve the last-known job while the next GET is in flight.
       queryClient.setQueryData<ImportJob>(['imports', id], current =>
         current ? { ...current, status: 'running',
-          progress: { done: 0, total: current.rows_total, message: 'Preparing validation…' } } : current
+          progress: {
+            done: Math.max(0, (current.last_committed_record_number || 1) - 1),
+            total: current.rows_total,
+            message: (current.last_committed_record_number || 1) > 1 ? 'Preparing resume…' : 'Preparing validation…',
+          } } : current
       );
       queryClient.invalidateQueries({ queryKey: ['imports'] });
     },

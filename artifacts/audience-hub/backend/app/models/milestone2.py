@@ -46,6 +46,8 @@ class Import(Base):
     warning_counts: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
     rows_normalized: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     rows_deduplicated: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    last_committed_record_number: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default="1")
     duration_ms: Mapped[int | None] = mapped_column(Integer)
     error_file_path: Mapped[str | None] = mapped_column(Text)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -53,6 +55,14 @@ class Import(Base):
     created_by: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+
+class ImportBatchDiagnostic(Base):
+    __tablename__ = "import_batch_diagnostics"
+    import_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("imports.id", ondelete="CASCADE"), primary_key=True)
+    record_number: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    diagnostics: Mapped[list] = mapped_column(JSONB, nullable=False)
 
 
 class Profile(Base):
