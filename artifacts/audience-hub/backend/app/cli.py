@@ -44,10 +44,12 @@ def main():
     add_arguments(benchmark)
     seed = commands.add_parser(
         "seed",
-        help="Generate synthetic CSV files under backend/seed-data (or --output-dir).",
+        help="Generate synthetic CSV files under UPLOAD_DIR/seed-data (or --output-dir).",
         description=(
-            "Write five synthetic source CSVs and ground_truth.json to backend/seed-data "
-            "by default. --load expects app.importer.import_seed_files(files), where "
+            "Write five synthetic source CSVs and ground_truth.json to "
+            "UPLOAD_DIR/seed-data (default /data/uploads/seed-data). "
+            "Without --load, no database or credentials are needed. "
+            "--load expects app.importer.import_seed_files(files), where "
             "files maps CSV filenames to Path objects and the callable submits them "
             "through the real import-job pipeline."
         ),
@@ -55,7 +57,7 @@ def main():
     seed.add_argument("--profiles", type=int, default=50_000)
     seed.add_argument("--scale", choices=("small", "medium", "large"), default="small")
     seed.add_argument("--random-seed", type=int, default=20250308)
-    seed.add_argument("--output-dir", help="Output directory (default: backend/seed-data).")
+    seed.add_argument("--output-dir", help="Output directory (default: UPLOAD_DIR/seed-data; UPLOAD_DIR defaults to /data/uploads).")
     seed.add_argument(
         "--load", action="store_true",
         help="After writing files, call app.importer.import_seed_files(files) if available.",
@@ -81,8 +83,6 @@ def main():
         except (ValueError, RuntimeError) as exc:
             raise SystemExit(str(exc)) from exc
         return
-    from app.db import engine
-    from app.models import AuditLog, User
     if args.command == "seed":
         from app.seed import generate_seed, load_generated_files
 
@@ -106,6 +106,8 @@ def main():
         except (ValueError, RuntimeError) as exc:
             raise SystemExit(str(exc)) from exc
         return
+    from app.db import engine
+    from app.models import AuditLog, User
     with Session(engine) as db:
         # Break-glass bootstrap uses a future OIDC subject linked by verified email on login.
         user = db.scalar(select(User).where(User.email == args.email))

@@ -1,6 +1,7 @@
 """Deterministic, CSV-only synthetic seed data for Audience Hub.
 
-The default output directory is ``backend/seed-data``.  ``--load`` is an
+The default output directory is ``UPLOAD_DIR/seed-data`` (with UPLOAD_DIR
+defaulting to ``/data/uploads``). ``--load`` is an
 integration hook for a future real importer: it expects
 ``app.importer.import_seed_files(files: Mapping[str, Path])`` to synchronously
 submit the generated CSV paths through the normal import-job pipeline.  This
@@ -9,6 +10,7 @@ module deliberately never writes generated records directly to the database.
 
 import csv
 import json
+import os
 import random
 from collections.abc import Callable
 from datetime import date, datetime, timedelta, timezone
@@ -146,7 +148,10 @@ def generate_seed(profiles: int = 50_000, scale: str = "small",
     rng = random.Random(random_seed)
     fake = Faker("en_US")
     fake.seed_instance(random_seed)
-    destination = Path(output_dir) if output_dir is not None else Path(__file__).resolve().parent.parent / "seed-data"
+    # CSV generation must work without database/auth credentials, so do not
+    # instantiate Settings here. Keep output off the installed package path.
+    destination = (Path(output_dir) if output_dir is not None else
+                   Path(os.environ.get("UPLOAD_DIR") or "/data/uploads") / "seed-data")
     destination = destination.expanduser().resolve()
     destination.mkdir(parents=True, exist_ok=True)
     density = SCALE_DENSITY[scale]
