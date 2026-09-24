@@ -1,3 +1,4 @@
 - [Standalone container lockfiles](standalone-lockfiles.md) — generate npm lockfiles outside the pnpm workspace with the container's npm version.
 - [Audience Hub writable paths](audience-hub-writable-paths.md) — Replit dev cannot write to /data; keep local uploads in the workspace while production uses its volume.
 - [Audience Hub seed seasonality](audience-hub-seed-seasonality.md) — recurring gifts flatten the aggregate year-end uplift; distinguish all gifts from nonrecurring gifts in sanity reports.
+- [Import performance evidence](import-performance-evidence.md) — distinguish profiled CPU comparisons from unprofiled concurrent throughput acceptance.

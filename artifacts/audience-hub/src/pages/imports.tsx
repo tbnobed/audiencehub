@@ -85,6 +85,17 @@ export default function Imports() {
                   </TableCell>
                   <TableCell>
                     <StatusBadge status={job.status} />
+                    {job.status === 'running' && (
+                      <div className="mt-2 min-w-[170px]" data-testid={`status-import-progress-${job.id}`}>
+                        <p className="text-xs text-muted-foreground" data-testid={`text-import-phase-${job.id}`}>
+                          {job.progress?.message || 'Preparing validation…'}
+                        </p>
+                        <Progress value={job.progress?.total ? Math.min(100, (job.progress.done || 0) / job.progress.total * 100) : 0} className="h-1.5 mt-1" />
+                        <p className="text-[10px] text-muted-foreground font-mono mt-1">
+                          {(job.progress?.done || 0).toLocaleString()} / {(job.progress?.total || job.rows_total).toLocaleString()}
+                        </p>
+                      </div>
+                    )}
                   </TableCell>
                   <TableCell className="text-right font-mono text-xs">
                     {job.rows_total > 0 ? (
@@ -194,21 +205,28 @@ function ImportWizardDialog({
               <RefreshCw className="h-8 w-8 text-primary animate-spin" />
               <div className="text-center w-full max-w-sm">
                 <h3 className="font-medium text-lg">Import Running</h3>
-                <p className="text-muted-foreground text-sm mb-4">
-                  {job.progress?.message || 'Ingesting validated records into the hub...'}
+                <p className="text-muted-foreground text-sm mb-4" data-testid="text-import-phase-detail">
+                  {job.progress?.message || 'Preparing validation…'}
                 </p>
-                {job.progress?.total ? (
+                {(job.progress?.total || job.rows_total) ? (
                   <>
-                    <Progress value={Math.min(100, ((job.progress.done || 0) / job.progress.total) * 100)} className="h-2" />
-                    <div className="flex justify-between text-xs text-muted-foreground mt-2 font-mono">
-                      <span>{job.progress.done || 0} processed</span>
-                      <span>{job.progress.total} total</span>
+                    <Progress value={Math.min(100, ((job.progress?.done || 0) / (job.progress?.total || job.rows_total)) * 100)} className="h-2" />
+                    <div className="flex justify-between text-xs text-muted-foreground mt-2 font-mono" data-testid="text-import-count-detail">
+                      <span>{(job.progress?.done || 0).toLocaleString()} processed</span>
+                      <span>{(job.progress?.total || job.rows_total).toLocaleString()} total</span>
                     </div>
                   </>
                 ) : (
                   <p className="text-xs text-muted-foreground">Waiting for progress update…</p>
                 )}
               </div>
+            </div>
+          )}
+          {currentStep === 'failed' && job && (
+            <div className="py-12 text-center space-y-3">
+              <AlertTriangle className="h-12 w-12 text-destructive mx-auto" />
+              <h3 className="font-medium text-lg">Import Failed</h3>
+              <p className="text-muted-foreground text-sm">The import could not be completed. Review the job and try again.</p>
             </div>
           )}
           {currentStep === 'completed' && job && (

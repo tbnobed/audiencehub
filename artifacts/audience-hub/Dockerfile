@@ -15,13 +15,17 @@ RUN useradd --create-home --uid 10001 app
 WORKDIR /app
 COPY backend/pyproject.toml ./backend/
 COPY backend/app/__init__.py ./backend/app/
+# Install pinned dependencies in a cacheable layer.
 RUN pip install --upgrade pip && pip install ./backend
 COPY backend/ ./backend/
+# Replace the minimal package with the complete app and console entry point.
+RUN pip install --no-deps ./backend
 COPY --from=web /web/dist/public ./static
 COPY scripts/ ./scripts/
 RUN chmod +x scripts/*.sh && mkdir -p /data/uploads /data/exports \
   && chown -R app:app /data /app
+WORKDIR /app/backend
 USER app
 EXPOSE 8000
 ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["./scripts/start-api.sh"]
+CMD ["/app/scripts/start-api.sh"]

@@ -1,4 +1,6 @@
 from decimal import Decimal
+from contextlib import contextmanager
+from types import SimpleNamespace
 
 from app.importer import _mapping
 from app.imports.mapping import suggest_mapping, validate_mapping
@@ -208,10 +210,32 @@ class _ExecuteRecorder:
     def __init__(self):
         self.statement = ""
         self.params = None
+        self.calls = []
+        self.copies = []
 
-    def execute(self, statement, params):
-        self.statement = str(statement)
-        self.params = params
+    def execute(self, statement, params=None):
+        sql = str(statement)
+        self.calls.append(sql)
+        assert not isinstance(params, list), "Import SQL must not use executemany"
+        if "INSERT INTO" in sql:
+            self.statement = sql
+
+    def connection(self):
+        return SimpleNamespace(connection=SimpleNamespace(driver_connection=self))
+
+    @contextmanager
+    def cursor(self):
+        yield self
+
+    @contextmanager
+    def copy(self, statement):
+        self.copies.append(statement)
+        self.keys = statement.split("(", 1)[1].split(")", 1)[0].split(", ")
+        self.params = []
+        yield self
+
+    def write_row(self, row):
+        self.params.append(dict(zip(self.keys, row)))
 
 
 def test_event_upsert_includes_mapped_fields_and_remains_idempotent():
@@ -286,22 +310,22 @@ class _BatchLookupDb:
     def execute(self, statement, params):
         statement = str(statement)
         self.calls.append(statement)
+        rows = []
         if "FROM suppressions" in statement:
-            rows = [
-                {"type": kind, "value_hash": digest,
+            rows.extend([
+                {"kind": "suppression", "type": kind, "value": digest,
                  "reason": self.suppression_reasons[digest]}
                 for kind, hashes in (
                     ("email", params["email_hashes"]),
                     ("phone", params["phone_hashes"]),
                 )
                 for digest in hashes if digest in self.suppression_reasons
-            ]
-        else:
-            rows = []
+            ])
+        if "FROM identifier_blocklist" in statement:
             for email in self.emails:
                 if email in params["emails"] or email in {"*@test.com", "noemail@*"}:
-                    rows.append({"type": "email", "value": email})
-            rows.extend({"type": "phone", "value": phone}
+                    rows.append({"kind": "blocklist", "type": "email", "value": email})
+            rows.extend({"kind": "blocklist", "type": "phone", "value": phone}
                         for phone in self.phones if phone in params["phones"])
 
         class Result:
@@ -352,7 +376,7 @@ def test_identifier_checks_block_only_deletion_suppressions_and_preserve_blockli
     assert result[(None, "+11111111111")] == (False, True, False)
     assert result[("good@example.org", "+12145551234")] == (False, False, False)
     assert len(result) == len(identities)
-    assert len(db.calls) == 2
+    assert len(db.calls) == 1
 
 
 def test_hard_bounced_donor_gift_is_accepted_and_remains_trait_eligible():

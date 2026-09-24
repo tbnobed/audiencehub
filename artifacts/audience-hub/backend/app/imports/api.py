@@ -290,6 +290,12 @@ def start_import(import_id: int, user: User = Depends(require_role("analyst")),
         raise HTTPException(409, detail="Set a column mapping before running the import")
     job = enqueue(db, "import.run", {"import_id": import_id},
                   dedupe_key=f"import:{import_id}", max_attempts=1)
+    # The job row is committed with the running import, so polling can show
+    # a determinate total even before the worker reports its first batch.
+    job.progress = {
+        "done": 0, "total": row["rows_total"] or 0,
+        "message": "Preparing validation…",
+    }
     db.execute(text("UPDATE imports SET status='running' WHERE id=:id"), {"id": import_id})
     db.commit()
     return {"id": import_id, "job_id": job.id, "status": "running"}

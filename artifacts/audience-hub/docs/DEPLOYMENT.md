@@ -15,10 +15,12 @@ Production runs on our own Linux server with Docker Engine and the Compose plugi
 # ---- frontend build ----
 FROM node:20-bookworm-slim AS web
 WORKDIR /web
-COPY frontend/package.json frontend/package-lock.json ./
+COPY package.json package-lock.json ./
 RUN npm ci
-COPY frontend/ ./
-RUN npm run build          # outputs /web/dist
+COPY index.html vite.config.ts tsconfig.json ./
+COPY src/ ./src/
+COPY public/ ./public/
+RUN PORT=5000 BASE_PATH=/ npm run build
 
 # ---- python runtime ----
 FROM python:3.12-slim-bookworm
@@ -27,16 +29,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends libpq5 tini cur
     && rm -rf /var/lib/apt/lists/*
 RUN useradd --create-home --uid 10001 app
 WORKDIR /app
-COPY backend/pyproject.toml ./
-RUN pip install --upgrade pip && pip install .
-COPY backend/ ./
-COPY --from=web /web/dist ./static
+COPY backend/pyproject.toml ./backend/
+COPY backend/app/__init__.py ./backend/app/
+RUN pip install --upgrade pip && pip install ./backend
+COPY backend/ ./backend/
+RUN pip install --no-deps ./backend
+COPY --from=web /web/dist/public ./static
 COPY scripts/ ./scripts/
 RUN chmod +x scripts/*.sh && mkdir -p /data/uploads /data/exports && chown -R app:app /data /app
+WORKDIR /app/backend
 USER app
 EXPOSE 8000
 ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["./scripts/start-api.sh"]
+CMD ["/app/scripts/start-api.sh"]
 ```
 
 Notes for the implementer:
@@ -78,7 +83,7 @@ services:
     env_file: .env
     depends_on:
       db: { condition: service_healthy }
-    command: ["./scripts/start-api.sh"]
+    command: ["/app/scripts/start-api.sh"]
     volumes:
       - appdata:/data
     ports:
@@ -97,7 +102,8 @@ services:
     depends_on:
       db: { condition: service_healthy }
       api: { condition: service_healthy }
-    command: ["./scripts/start-worker.sh"]
+    command: ["/app/scripts/start-worker.sh"]
+    stop_grace_period: 30m
     volumes:
       - appdata:/data
     networks: [internal]
@@ -146,6 +152,30 @@ Note: with more than one uvicorn worker the in-process rate limiter and dashboar
 set -euo pipefail
 exec python -m app.worker
 ```
+
+The image defaults to `/app/backend`, including for `docker compose exec api`, so
+`python -m app.cli ...` (or the installed `kinship ...` console command) works
+without `-w`. Scripts live at `/app/scripts` and are invoked by absolute path.
+
+`WORKER_CONCURRENCY` controls the number of **spawned child processes per worker
+container**, not threads or a stack-wide limit. Each child claims at most one
+job at a time with PostgreSQL `FOR UPDATE SKIP LOCKED` and maintains its
+heartbeat while executing it. To add capacity, use
+`docker compose up -d --scale worker=N`; total concurrent jobs can reach
+`N * WORKER_CONCURRENCY`. The parent restarts dead children, and a crashed
+child's claimed job is recovered after `JOB_STALE_SECONDS` by the existing
+stale-job retry policy. Only one worker parent at a time holds the PostgreSQL
+session advisory scheduler leader lock. Other replicas continue processing
+jobs and can take over scheduling when that connection is released. The
+scheduled-run keys protect against duplicate daily/hourly jobs on failover.
+During shutdown the parent releases scheduler leadership immediately, then
+gives children up to `WORKER_STOP_GRACE_SECONDS` (default 1750 seconds) total
+to finish current jobs before force-killing them. This leaves a margin within
+Compose's 30-minute `stop_grace_period`. An interrupted job is **not** requeued
+on shutdown; it is retried only after `JOB_STALE_SECONDS` without a heartbeat.
+If changing Compose's stop period, adjust the worker grace deadline accordingly
+(the built-in maximum is 1790 seconds). Never validate recovery against the
+production database; use a migrated isolated test database.
 
 `scripts/backup.sh` — loops forever: once a day at `BACKUP_HOUR` (default 02:00 container local time), runs `pg_dump -Fc` to `/backups/audience_hub-YYYYmmdd-HHMM.dump`, verifies with `pg_restore --list`, deletes dumps older than `BACKUP_KEEP_DAYS`, logs one line per run.
 

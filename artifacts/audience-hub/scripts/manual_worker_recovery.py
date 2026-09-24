@@ -4,6 +4,7 @@
 import argparse
 import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
 import time
@@ -19,17 +20,29 @@ def worker_process(environment):
         [sys.executable, "-m", "app.worker"],
         cwd=BACKEND,
         env=environment,
+        # Own only this invocation's supervisor and its spawned children.
+        start_new_session=True,
     )
 
 
-def stop_owned_worker(process):
-    if process is None or process.poll() is not None:
+def stop_owned_worker(process, *, crash=False):
+    if process is None:
         return
-    process.terminate()
+    # SIGKILL simulates a crash of both the supervisor AND the busy child.
+    # Sending SIGTERM only to the supervisor would drain the running handler,
+    # leaving attempts=1 and failing to exercise stale-job recovery.
+    try:
+        os.killpg(process.pid, signal.SIGKILL if crash else signal.SIGTERM)
+    except ProcessLookupError:
+        pass
     try:
         process.wait(timeout=10)
     except subprocess.TimeoutExpired:
-        process.kill()
+        # Also reap children if the supervisor did not shut down gracefully.
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
         process.wait(timeout=10)
 
 
@@ -80,6 +93,7 @@ def main():
         db.commit()
 
     environment = os.environ.copy()
+    environment["WORKER_CONCURRENCY"] = "1"
     worker = None
     try:
         worker = worker_process(environment)
@@ -98,7 +112,7 @@ def main():
         # Give the handler time to enter its bounded sleep before killing only
         # the child process created by this script.
         time.sleep(0.5)
-        stop_owned_worker(worker)
+        stop_owned_worker(worker, crash=True)
         worker = None
         print(f"Killed owned worker during synthetic sleep job {job_id}.")
 

@@ -25,7 +25,7 @@ services:
     env_file: .env
     depends_on:
       db: {condition: service_healthy}
-    command: ["./scripts/start-api.sh"]
+    command: ["/app/scripts/start-api.sh"]
     volumes: [appdata:/data]
     ports: ["${API_BIND_HOST:-127.0.0.1}:${API_PORT:-8080}:8000"]
     healthcheck:
@@ -41,7 +41,8 @@ services:
     depends_on:
       db: {condition: service_healthy}
       api: {condition: service_healthy}
-    command: ["./scripts/start-worker.sh"]
+    command: ["/app/scripts/start-worker.sh"]
+    stop_grace_period: 30m
     volumes: [appdata:/data]
     networks: [internal]
   backup:

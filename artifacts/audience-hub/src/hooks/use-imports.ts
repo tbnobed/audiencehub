@@ -37,6 +37,10 @@ export function useImports() {
   return useQuery({
     queryKey: ['imports'],
     queryFn: () => fetchApi('/api/imports').then(res => res as { items: ImportJob[] }),
+    refetchInterval: (query) => {
+      const imports = query.state.data as { items: ImportJob[] } | undefined;
+      return imports?.items.some(job => job.status === 'running') ? 2000 : false;
+    },
   });
 }
 
@@ -111,7 +115,15 @@ export function useRunImport() {
   return useMutation({
     mutationFn: (id: number) =>
       fetchApi(`/api/imports/${id}/run`, { method: 'POST' }),
-    onSuccess: (_, id) => queryClient.invalidateQueries({ queryKey: ['imports', id] }),
+    onSuccess: (_, id) => {
+      // The accepted response commits the running state before the detail poll
+      // starts. Preserve the last-known job while the next GET is in flight.
+      queryClient.setQueryData<ImportJob>(['imports', id], current =>
+        current ? { ...current, status: 'running',
+          progress: { done: 0, total: current.rows_total, message: 'Preparing validation…' } } : current
+      );
+      queryClient.invalidateQueries({ queryKey: ['imports'] });
+    },
   });
 }
 

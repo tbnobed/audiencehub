@@ -17,6 +17,7 @@ from app.config import get_settings
 from app.db import engine
 from app.imports.mapping import suggest_mapping, validate_mapping
 from app.imports.service import csv_reader
+from app.imports.staging import IMPORT_TABLES, analyze_tables
 from app.jobs.queue import enqueue
 
 
@@ -171,6 +172,11 @@ def import_seed_files(files: Mapping[str, Path]) -> None:
             if time.monotonic() >= deadline:
                 raise TimeoutError(f"Seed imports did not finish: {list(pending)}")
             time.sleep(2)
+
+    # Also refresh on an idempotent seed reload (all five imports may be skipped).
+    with Session(engine) as db:
+        analyze_tables(db, IMPORT_TABLES)
+        db.commit()
 
     stats_path = next(iter(files.values())).resolve().parent / "generator_stats.json"
     if stats_path.is_file():
