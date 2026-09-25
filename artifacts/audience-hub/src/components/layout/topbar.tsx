@@ -3,7 +3,8 @@ import { useAuth } from '@/hooks/use-auth';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Search, Activity, User as UserIcon, LogOut } from 'lucide-react';
+import { Search, User as UserIcon, LogOut } from 'lucide-react';
+import { JobsIcon } from '@/components/icons/KinshipIcons';
 import { JobActivityDrawer } from './job-activity-drawer';
 import { useQuery } from '@tanstack/react-query';
 import { fetchApi } from '@/lib/api';
@@ -59,8 +60,8 @@ export function TopBar() {
             </Badge>
           )}
           
-          <Button variant="ghost" size="icon" onClick={() => setDrawerOpen(true)} aria-label={`Job activity: ${runningCount} running`}>
-            <Activity className="h-5 w-5 text-muted-foreground" />
+          <Button variant="ghost" size="icon" onClick={() => setDrawerOpen(true)} aria-label={`Job activity: ${runningCount} running`} aria-expanded={drawerOpen} className="group">
+            <JobsIcon size={16} strokeWidth={1.75} className={drawerOpen || runningCount > 0 ? 'text-signal group-hover:text-ink group-focus-visible:text-ink' : 'text-ink-muted group-hover:text-ink group-focus-visible:text-ink'} />
           </Button>
           {user.role === 'admin' && <span className="font-mono text-xs text-muted-foreground" aria-live="polite">{runningCount} running</span>}
 
