@@ -25,6 +25,8 @@ export default function Profiles() {
   const [params, setParams] = useSearchParams();
   const [search, setSearch] = useState(params.get('search') || '');
   const [debounced, setDebounced] = useState(search);
+  const urlSearch = params.get('search') || '';
+  useEffect(() => { setSearch(urlSearch); setDebounced(urlSearch); }, [urlSearch]);
   useEffect(() => { const timer = setTimeout(() => setDebounced(search), 350); return () => clearTimeout(timer); }, [search]);
   useEffect(() => {
     if (debounced === (params.get('search') || '')) return;

@@ -58,9 +58,7 @@ def _scalar(db: Session, sql: str, params: dict[str, Any] | None = None) -> Any:
 def _email_opted_in_count(db: Session) -> int:
     """Count unified profiles with an eligible email-consent signal, without returning emails."""
     rows = db.execute(text("""
-        WITH active_profiles AS (
-          SELECT id FROM profiles WHERE merged_into_id IS NULL AND NOT is_deleted
-        ), profile_emails AS (
+        WITH profile_emails AS (
           SELECT p.id AS profile_id, lower(btrim(p.email::text)) AS email
           FROM profiles p JOIN active_profiles ap ON ap.id=p.id
           WHERE p.email IS NOT NULL AND btrim(p.email::text) <> ''
@@ -135,6 +133,9 @@ def _safe_rows(rows: list[dict]) -> list[dict]:
 
 def _build_dashboard(db: Session, name: str, start: date, end: date,
                      prior_start: date, prior_end: date) -> dict:
+    if name == "overview":
+        from app.dashboards.overview import build_overview
+        return build_overview(db, start, end, prior_start, prior_end)
     params = {
         "from_date": start, "to_exclusive": end + timedelta(days=1),
         "prior_from": prior_start, "prior_to_exclusive": prior_end + timedelta(days=1),
@@ -143,70 +144,7 @@ def _build_dashboard(db: Session, name: str, start: date, end: date,
     charts: dict[str, list[dict]] = {}
     metrics: dict[str, dict] = {}
 
-    if name == "overview":
-        metric_sql = {
-            "active_profiles": (
-                "SELECT count(*) FROM profiles WHERE merged_into_id IS NULL AND NOT is_deleted "
-                "AND first_seen_at < :cutoff",
-                end + timedelta(days=1), prior_end + timedelta(days=1)),
-            "donors": (
-                "SELECT count(DISTINCT profile_id) FROM gifts WHERE profile_id IS NOT NULL "
-                "AND gift_date < :cutoff",
-                end + timedelta(days=1), prior_end + timedelta(days=1)),
-            "active_donors_12m": (
-                "SELECT count(DISTINCT profile_id) FROM gifts WHERE profile_id IS NOT NULL "
-                "AND gift_date >= :window_start AND gift_date < :cutoff",
-                end + timedelta(days=1), prior_end + timedelta(days=1)),
-            "giving_12m": (
-                "SELECT COALESCE(sum(amount), 0) FROM gifts WHERE gift_date >= :window_start "
-                "AND gift_date < :cutoff",
-                end + timedelta(days=1), prior_end + timedelta(days=1)),
-            "avg_gift": (
-                "SELECT COALESCE(avg(amount), 0) FROM gifts WHERE gift_date >= :window_start "
-                "AND gift_date < :cutoff",
-                end + timedelta(days=1), prior_end + timedelta(days=1)),
-            "recurring_donors": (
-                "SELECT count(DISTINCT profile_id) FROM gifts WHERE profile_id IS NOT NULL "
-                "AND is_recurring AND gift_date >= :window_start AND gift_date < :cutoff",
-                end + timedelta(days=1), prior_end + timedelta(days=1)),
-            "email_opted_in": (
-                None, None, None),
-        }
-        for key, (sql, cutoff, prior_cutoff) in metric_sql.items():
-            if key == "email_opted_in":
-                current = previous = _email_opted_in_count(db)
-            else:
-                current = _scalar(db, sql, {
-                    "cutoff": cutoff, "window_start": cutoff - timedelta(days=365),
-                })
-                previous = _scalar(db, sql, {
-                    "cutoff": prior_cutoff, "window_start": prior_cutoff - timedelta(days=365),
-                })
-            current_number = float(current) if hasattr(current, "as_tuple") else int(current)
-            previous_number = float(previous) if hasattr(previous, "as_tuple") else int(previous)
-            difference = current_number - previous_number
-            metrics[key] = {
-                "value": current_number, "prior": previous_number, "change": difference,
-                "change_pct": (difference / previous_number * 100) if previous_number else None,
-            }
-        charts["monthly_giving"] = _rows(db, """
-            SELECT date_trunc('month', gift_date)::date AS month,
-                   COALESCE(sum(amount), 0) AS amount, count(*) AS gifts
-            FROM gifts WHERE gift_date >= :from_date AND gift_date < :to_exclusive
-            GROUP BY 1 ORDER BY 1
-        """, params)
-        charts["donor_status"] = _rows(db, """
-            SELECT donor_status AS status, count(*) AS profiles
-            FROM profile_traits GROUP BY donor_status ORDER BY donor_status
-        """)
-        charts["top_campaigns"] = _rows(db, """
-            SELECT COALESCE(campaign, '(unspecified)') AS campaign,
-                   count(*) AS gifts, COALESCE(sum(amount), 0) AS amount
-            FROM gifts WHERE gift_date >= :from_date AND gift_date < :to_exclusive
-            GROUP BY 1 ORDER BY amount DESC, gifts DESC LIMIT 5
-        """, params)
-
-    elif name == "giving":
+    if name == "giving":
         charts["monthly_giving"] = _rows(db, """
             SELECT date_trunc('month', gift_date)::date AS month,
                    COALESCE(sum(amount), 0) AS amount, count(*) AS gifts
@@ -458,18 +396,9 @@ def _build_dashboard(db: Session, name: str, start: date, end: date,
 
 def _dashboard(name: str, from_date: date | None, to_date: date | None, db: Session) -> dict:
     start, end, prior_start, prior_end = _date_range(from_date, to_date)
-    key = (name, start, end)
-    now = time.monotonic()
-    with _cache_lock:
-        cached = _cache.get(key)
-        if cached and now - cached[0] < _CACHE_TTL_SECONDS:
-            return cached[1]
-        if cached:
-            _cache.pop(key, None)
-    result = _build_dashboard(db, name, start, end, prior_start, prior_end)
-    with _cache_lock:
-        _cache[key] = (time.monotonic(), result)
-    return result
+    # Read committed data on every request. No process-local TTL can survive a
+    # traits recompute (or merge/import) committed by a different worker.
+    return _build_dashboard(db, name, start, end, prior_start, prior_end)
 
 
 def _date_params(from_date: date | None = Query(default=None, alias="from"),
@@ -484,7 +413,11 @@ def _endpoint(name: str):
         user: User = Depends(require_role("viewer")),
         db: Session = Depends(session_scope),
     ):
-        return _dashboard(name, from_date, to_date, db)
+        result = _dashboard(name, from_date, to_date, db)
+        if name == "overview":
+            from app.dashboards.overview import attention
+            result["overview"]["attention"] = attention(db, user.role, result["overview"]["stats"]["lapsing"]["value"])
+        return result
     endpoint.__name__ = f"get_{name.replace('-', '_')}_dashboard"
     return endpoint
 
@@ -495,6 +428,40 @@ router.add_api_route("/api/dashboards/retention", _endpoint("retention"), method
 router.add_api_route("/api/dashboards/engagement", _endpoint("engagement"), methods=["GET"])
 router.add_api_route("/api/dashboards/sources", _endpoint("sources"), methods=["GET"])
 router.add_api_route("/api/dashboards/data-health", _endpoint("data-health"), methods=["GET"])
+
+
+@router.get("/api/shell")
+def shell_summary(
+    user: User = Depends(require_role("viewer")),
+    db: Session = Depends(session_scope),
+):
+    from app.dashboards.overview import health_counts
+    health = health_counts(db)
+    result = {"imports_running": None, "active_import": None,
+              "open_issues": sum(health.values()), "issue_counts": health}
+    if user.role == "viewer":
+        return result
+    running = _rows(db, """
+        SELECT i.id, i.filename AS name, i.rows_total AS total,
+               i.rows_ok+i.rows_rejected AS done,
+               extract(epoch FROM (CURRENT_TIMESTAMP-i.started_at)) AS elapsed_seconds
+        FROM imports i
+        WHERE i.status='running' AND EXISTS (
+          SELECT 1 FROM jobs j WHERE j.type='import.run'
+            AND j.payload->>'import_id'=i.id::text AND j.status='running'
+        )
+        ORDER BY i.started_at, i.id
+    """)
+    result["imports_running"] = len(running)
+    if running:
+        row = running[0]
+        elapsed = float(row.pop("elapsed_seconds") or 0)
+        row["percent"] = min(100, 100*row["done"]/row["total"]) if row["total"] else None
+        row["rows_per_second"] = row["done"]/elapsed if elapsed > 0 else None
+        row["speed_basis"] = "committed_rows_since_import_started"
+        row["href"] = f"/imports?import_id={row['id']}"
+        result["active_import"] = row
+    return result
 
 
 _CSV_CHARTS = {

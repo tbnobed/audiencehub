@@ -7,11 +7,32 @@ export type DashboardPayload = {
   range: { from: string; to: string; prior_from: string; prior_to: string };
   metrics: Record<string, { value: number; prior: number | null; change: number | null; change_pct: number | null }>;
   charts: Record<string, ChartRow[]>;
+  overview?: OverviewPayload;
+};
+export type SparkPoint = { month: string; value: number };
+export type DeltaMetric = { value: number; prior: number; change: number; change_pct: number | null; delta_label: string | null };
+export type KpiMetric = DeltaMetric & { sparkline: SparkPoint[] };
+export type RetentionKpi = KpiMetric & { denominator: number; retained: number; prior_denominator: number };
+export type OverviewPayload = {
+  kpis: { giving: KpiMetric; active_partners: KpiMetric; retention_yoy: RetentionKpi; average_gift: KpiMetric };
+  stats: {
+    profiles: { value: number };
+    recurring_partners: DeltaMetric;
+    email_opted_in: { value: number; percentage: number };
+    lapsing: DeltaMetric;
+  };
+  monthly_giving: { month: string; from: string; to: string; prior_from: string; prior_to: string; amount: number; prior_amount: number; gifts: number }[];
+  top_two_month_share: number | null;
+  campaigns: { campaign: string; share: number; gifts: number; average_gift: number; amount: number }[];
+  campaigns_href: string;
+  partner_status: { givers: number; statuses: { status: string; count: number; share: number }[]; prospects: number };
+  attention: { severity: 'error' | 'warning' | 'notice' | 'healthy'; title: string; explanation: string; href: string | null }[];
 };
 export type DashboardSettings = { fiscal_year_start_month: number };
 
-export function useDashboard(name: DashboardName, from: string, to: string) {
+export function useDashboard(name: DashboardName, from: string, to: string, enabled = true) {
   return useQuery({
+    enabled,
     queryKey: ['dashboard', name, from, to],
     queryFn: () => fetchApi(`/api/dashboards/${name}?${new URLSearchParams({ from, to })}`) as Promise<DashboardPayload>,
     staleTime: 60_000,

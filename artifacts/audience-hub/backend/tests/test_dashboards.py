@@ -110,4 +110,5 @@ def test_all_dashboard_queries_against_isolated_m4_smoke_database():
                 date(2024, 1, 1), date(2024, 12, 31),
             )
             assert set(result["charts"]) == chart_keys
-            assert set(result) == {"range", "metrics", "charts"}
+            assert set(result) == ({"range", "metrics", "charts", "overview"} if tab == "overview"
+                                   else {"range", "metrics", "charts"})

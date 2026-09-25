@@ -1,5 +1,8 @@
 import { useEffect, useState } from 'react';
-import { Activity, ArrowDownRight, ArrowUpRight, CalendarDays, ChevronDown, Download, RefreshCw, Table2, TrendingUp } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
+import { parseRangeParams, rangeDays, validateCustomRange, withRangeParams, type Preset } from '@/lib/date-range';
+import { OverviewSkeleton, OverviewView } from '@/components/dashboard/overview';
+import { Activity, ArrowDownRight, ArrowUpRight, Download, RefreshCw, Table2 } from 'lucide-react';
 import { Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { useAuth } from '@/hooks/use-auth';
 import { useDashboard, useDashboardSettings, dashboardCsvUrl, type ChartRow, type DashboardName, type DashboardPayload } from '@/hooks/use-dashboards';
@@ -11,12 +14,12 @@ type Spec = { key: string; title: string; subtitle: string; label: string; value
 const specs: Record<DashboardName, Spec[]> = {
   overview: [
     { key: 'monthly_giving', title: 'Giving volume', subtitle: 'Monthly gift amount and count', label: 'month', value: 'amount', kind: 'bars' },
-    { key: 'donor_status', title: 'Donor composition', subtitle: 'Current computed donor status', label: 'status', value: 'profiles' },
+    { key: 'donor_status', title: 'Partner composition', subtitle: 'Current computed partner status', label: 'status', value: 'profiles' },
     { key: 'top_campaigns', title: 'Top campaigns', subtitle: 'Ranked by giving in selected period', label: 'campaign', value: 'amount', kind: 'table' },
   ],
   giving: [
     { key: 'monthly_giving', title: 'Giving by month', subtitle: 'Amount across the selected period', label: 'month', value: 'amount' },
-    { key: 'new_returning', title: 'New versus returning', subtitle: 'Gifts by donor relationship', label: 'month', value: 'new_donors', secondary: 'returning_donors' },
+    { key: 'new_returning', title: 'New versus returning', subtitle: 'Gifts by partner relationship', label: 'month', value: 'new_donors', secondary: 'returning_donors' },
     { key: 'by_channel', title: 'Giving by channel', subtitle: 'Amount and gift count', label: 'channel', value: 'amount' },
     { key: 'by_fund', title: 'Giving by fund', subtitle: 'Allocation of contributed dollars', label: 'fund', value: 'amount' },
     { key: 'appeal_codes', title: 'Appeal response', subtitle: 'Response counts and total amount', label: 'appeal_code', value: 'responses', kind: 'table' },
@@ -24,14 +27,14 @@ const specs: Record<DashboardName, Spec[]> = {
     { key: 'top_campaigns', title: 'Campaign performance', subtitle: 'Top campaigns by amount', label: 'campaign', value: 'amount', kind: 'table' },
   ],
   retention: [
-    { key: 'retention_by_year', title: 'Year-one retention', subtitle: 'Donors who returned the following year', label: 'year', value: 'retention_rate', kind: 'line' },
+    { key: 'retention_by_year', title: 'Year-one retention', subtitle: 'Partners who returned the following year', label: 'year', value: 'retention_rate', kind: 'line' },
     { key: 'cohorts', title: 'Cohort retention', subtitle: 'First gift year × years since first gift · percent retained', label: 'first_year', value: 'retention_pct', kind: 'heatmap' },
-    { key: 'status_over_time', title: 'Status snapshots', subtitle: 'Monthly donor status from computed traits', label: 'month', value: 'profiles', secondary: 'status' },
+    { key: 'status_over_time', title: 'Status snapshots', subtitle: 'Monthly partner status from computed traits', label: 'month', value: 'profiles', secondary: 'status' },
   ],
   engagement: [
     { key: 'events_by_day', title: 'Event volume', subtitle: 'Daily events across sources', label: 'day', value: 'events', secondary: 'source', kind: 'line' },
     { key: 'top_event_names', title: 'Top event names', subtitle: 'Most frequent tracked interactions', label: 'name', value: 'events', kind: 'table' },
-    { key: 'viewer_to_donor', title: 'Viewer to donor', subtitle: 'First gift after a tracked event', label: 'month', value: 'conversions' },
+    { key: 'viewer_to_donor', title: 'Viewer to partner', subtitle: 'First gift after a tracked event', label: 'month', value: 'conversions' },
   ],
   sources: [
     { key: 'profiles_by_source', title: 'Profiles by source', subtitle: 'Distinct unified profiles represented', label: 'source', value: 'profiles' },
@@ -52,7 +55,6 @@ const tabs: { id: DashboardName; label: string }[] = [
   { id: 'engagement', label: 'Engagement' }, { id: 'sources', label: 'Sources' }, { id: 'data-health', label: 'Data Health' },
 ];
 const palette = Array.from({ length: 8 }, (_, index) => `var(--kin-chart-${index + 1})`);
-const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 const dateLabel = (v: string | number | null) => typeof v === 'string' && /^\d{4}-\d\d-\d\d/.test(v)
   ? new Date(`${v.slice(0, 10)}T12:00:00`).toLocaleDateString(undefined, { month: 'short', year: '2-digit', day: v.endsWith('-01') ? undefined : 'numeric' })
   : String(v ?? '—');
@@ -61,23 +63,6 @@ const full = (v: string | number | null, key?: string) => v == null ? '—' : ty
   ? `${new Intl.NumberFormat('en-US', { maximumFractionDigits: key?.includes('pct') || key?.includes('rate') ? 1 : 2 }).format(v)}${key?.includes('pct') || key?.includes('rate') ? '%' : ''}`
   : dateLabel(v);
 const money = (n: number) => `$${compact(n)}`;
-
-function presetRange(preset: string, fiscalStart = 1): [string, string] {
-  const now = new Date();
-  const end = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const start = new Date(end);
-  if (preset === '30d') start.setDate(start.getDate() - 29);
-  if (preset === '90d') start.setDate(start.getDate() - 89);
-  if (preset === '12m') start.setFullYear(start.getFullYear() - 1), start.setDate(start.getDate() + 1);
-  if (preset === 'ytd') start.setMonth(0, 1);
-  if (preset === 'fy') {
-    const fyYear = end.getMonth() + 1 >= fiscalStart ? end.getFullYear() : end.getFullYear() - 1;
-    const fyStart = new Date(fyYear - 1, fiscalStart - 1, 1);
-    const fyEnd = new Date(fyYear, fiscalStart - 1, 0);
-    return [iso(fyStart), iso(fyEnd)];
-  }
-  return [iso(start), iso(end)];
-}
 
 function ChartPanel({ spec, rows, dashboard, from, to, canExport }: { spec: Spec; rows: ChartRow[]; dashboard: DashboardName; from: string; to: string; canExport: boolean }) {
   const [table, setTable] = useState(false);
@@ -112,7 +97,7 @@ function ChartPanel({ spec, rows, dashboard, from, to, canExport }: { spec: Spec
       {!rows.length ? <div className="h-[200px] flex flex-col items-center justify-center text-center"><Activity size={20} className="text-ink-muted mb-2" /><p className="text-xs text-ink-muted">No records in this range.</p><p className="text-[11px] text-ink-muted mt-1">Try a longer date range or import source data.</p></div>
       : table || spec.kind === 'table' ? <div className="overflow-auto max-h-[260px]">
           <table className="w-full text-xs tabular-nums">
-            <thead className="sticky top-0 bg-surface-raised text-ink-muted"><tr>{keys.map(k => <th key={k} className={`px-2 py-2 font-medium whitespace-nowrap ${typeof rows[0][k] === 'number' ? 'text-right' : 'text-left'}`}>{k.replaceAll('_', ' ')}</th>)}</tr></thead>
+            <thead className="sticky top-0 bg-surface-raised text-ink-muted"><tr>{keys.map(k => <th key={k} className={`px-2 py-2 font-medium whitespace-nowrap ${typeof rows[0][k] === 'number' ? 'text-right' : 'text-left'}`}>{k.replaceAll('_', ' ').replace('donor', 'partner')}</th>)}</tr></thead>
             <tbody>{rows.map((row, i) => <tr key={i} className="border-t border-line hover:bg-surface-raised">{keys.map(k => <td key={k} className={`px-2 py-2 whitespace-nowrap ${typeof row[k] === 'number' ? 'text-right font-mono text-ink' : 'text-ink-muted'}`}>{full(row[k], k)}</td>)}</tr>)}</tbody>
           </table>
         </div>
@@ -123,11 +108,11 @@ function ChartPanel({ spec, rows, dashboard, from, to, canExport }: { spec: Spec
             {spec.kind === 'line' ? <LineChart data={chartRows} margin={{ top: 8, right: 14, left: 0, bottom: 0 }}>
               <CartesianGrid stroke="var(--line)" vertical={false} /><XAxis dataKey={spec.label} tickFormatter={dateLabel} tick={{ fill: 'var(--ink-muted)', fontSize: 10 }} tickLine={false} axisLine={false} minTickGap={24} /><YAxis tickFormatter={compact} tick={{ fill: 'var(--ink-muted)', fontSize: 10 }} tickLine={false} axisLine={false} width={42} />
               <Tooltip contentStyle={{ background: 'var(--surface-raised)', color: 'var(--ink)', border: '1px solid var(--line)', borderRadius: 4, fontSize: 11 }} labelFormatter={dateLabel} />
-              {series.map((s, i) => <Line key={s} type="monotone" dataKey={s} name={s.replaceAll('_', ' ')} stroke={palette[i % palette.length]} strokeWidth={2} dot={false} activeDot={{ r: 3 }} />)}
+              {series.map((s, i) => <Line key={s} type="monotone" dataKey={s} name={s.replaceAll('_', ' ').replace('donors', 'partners').replace('donor', 'partner')} stroke={palette[i % palette.length]} strokeWidth={2} dot={false} activeDot={{ r: 3 }} />)}
             </LineChart> : <BarChart data={chartRows} margin={{ top: 8, right: 14, left: 0, bottom: 0 }}>
               <CartesianGrid stroke="var(--line)" vertical={false} /><XAxis dataKey={spec.label} tickFormatter={dateLabel} tick={{ fill: 'var(--ink-muted)', fontSize: 10 }} tickLine={false} axisLine={false} minTickGap={16} /><YAxis tickFormatter={compact} tick={{ fill: 'var(--ink-muted)', fontSize: 10 }} tickLine={false} axisLine={false} width={42} />
               <Tooltip contentStyle={{ background: 'var(--surface-raised)', color: 'var(--ink)', border: '1px solid var(--line)', borderRadius: 4, fontSize: 11 }} labelFormatter={dateLabel} formatter={(v: number, name: string) => [isCurrency ? `$${Number(v).toLocaleString()}` : full(Number(v), name), name]} />
-              {series.map((s, i) => <Bar key={s} dataKey={s} name={s.replaceAll('_', ' ')} stackId={series.length > 1 ? 'stack' : undefined} fill={palette[i % palette.length]} maxBarSize={36} radius={series.length === 1 ? [2, 2, 0, 0] : undefined} />)}
+              {series.map((s, i) => <Bar key={s} dataKey={s} name={s.replaceAll('_', ' ').replace('donors', 'partners').replace('donor', 'partner')} stackId={series.length > 1 ? 'stack' : undefined} fill={palette[i % palette.length]} maxBarSize={36} radius={series.length === 1 ? [2, 2, 0, 0] : undefined} />)}
             </BarChart>}
           </ResponsiveContainer>
         </div>}
@@ -137,7 +122,7 @@ function ChartPanel({ spec, rows, dashboard, from, to, canExport }: { spec: Spec
 }
 
 function Kpis({ data, dashboard }: { data: DashboardPayload; dashboard: DashboardName }) {
-  const labels: Record<string, string> = { active_profiles: 'Active profiles', donors: 'All-time donors', active_donors_12m: 'Active donors · 12m', giving_12m: 'Giving · 12m', avg_gift: 'Average gift · 12m', recurring_donors: 'Recurring donors', email_opted_in: 'Email opted in', pending_resolution_count: 'Pending resolution', blocklist_review_count: 'Awaiting review', expiring_enrichment_count: 'Expiring enrichment' };
+  const labels: Record<string, string> = { active_profiles: 'Active profiles', donors: 'All-time partners', active_donors_12m: 'Active partners · 12m', giving_12m: 'Giving · 12m', avg_gift: 'Average gift · 12m', recurring_donors: 'Recurring partners', new_donors: 'New partners', returning_donors: 'Returning partners', email_opted_in: 'Email opted in', pending_resolution_count: 'Pending resolution', blocklist_review_count: 'Awaiting review', expiring_enrichment_count: 'Expiring enrichment' };
   const entries = Object.entries(data.metrics);
   if (!entries.length) return null;
   return <div className={`grid gap-2 ${dashboard === 'overview' ? 'grid-cols-2 lg:grid-cols-4 xl:grid-cols-7' : 'grid-cols-1 sm:grid-cols-3'}`}>
@@ -157,51 +142,69 @@ function Kpis({ data, dashboard }: { data: DashboardPayload; dashboard: Dashboar
 }
 
 export default function Dashboard() {
-  const [initial] = useState(() => {
-    const params = new URLSearchParams(window.location.search);
-    const requestedTab = params.get('tab');
-    const tab = tabs.some(item => item.id === requestedTab) ? requestedTab as DashboardName : 'overview';
-    const from = params.get('from');
-    const to = params.get('to');
-    const valid = from && to && /^\d{4}-\d{2}-\d{2}$/.test(from) &&
-      /^\d{4}-\d{2}-\d{2}$/.test(to) && from <= to &&
-      (Date.parse(to) - Date.parse(from)) <= 3660 * 86400000;
-    return { tab, preset: valid ? 'custom' : '90d', range: valid ? [from, to] as [string, string] : presetRange('90d') };
-  });
-  const [tab, setTab] = useState<DashboardName>(initial.tab);
-  const [preset, setPreset] = useState(initial.preset);
-  const [[from, to], setRange] = useState<[string, string]>(initial.range);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const urlTab = searchParams.get('tab');
+  const tab: DashboardName = tabs.some(item => item.id === urlTab) ? urlTab as DashboardName : 'overview';
   const { user } = useAuth();
   const settings = useDashboardSettings();
-  const query = useDashboard(tab, from, to);
-  useEffect(() => {
-    if (preset === 'fy' && settings.data) setRange(presetRange('fy', settings.data.fiscal_year_start_month));
-  }, [preset, settings.data]);
-  const selectPreset = (value: string) => {
-    setPreset(value);
-    if (value !== 'custom' && (value !== 'fy' || settings.data)) {
-      setRange(presetRange(value, settings.data?.fiscal_year_start_month ?? 1));
-    }
+  const parsed = parseRangeParams(searchParams, settings.data?.fiscal_year_start_month ?? null);
+  const preset = parsed.preset;
+  const [from, to] = parsed.range ?? ['', ''];
+  const query = useDashboard(tab, from, to, parsed.range !== null);
+  // Tab changes replace history; range changes push so Back restores the prior selection.
+  const setTab = (next: DashboardName) => {
+    const params = new URLSearchParams(searchParams);
+    if (next === 'overview') params.delete('tab'); else params.set('tab', next);
+    setSearchParams(params, { replace: true });
   };
+  const [customOpen, setCustomOpen] = useState(preset === 'custom');
+  const [draft, setDraft] = useState<[string, string]>(() => parsed.range ?? ['', '']);
+  useEffect(() => { if (preset === 'custom') { setCustomOpen(true); setDraft([from, to]); } }, [preset, from, to]);
+  const draftError = validateCustomRange(draft[0], draft[1]);
+  const draftDirty = draft[0] !== from || draft[1] !== to || preset !== 'custom';
+  const applyCustom = () => { if (!draftError) setSearchParams(withRangeParams(searchParams, 'custom', draft)); };
+  const selectPreset = (value: Preset | string) => {
+    if (value === 'custom') { setCustomOpen(true); if (!draft[0]) setDraft([from, to]); return; }
+    setCustomOpen(false);
+    setSearchParams(withRangeParams(searchParams, value as Preset));
+  };
+  const activePreset: Preset = customOpen ? 'custom' : preset;
+  const days = parsed.range ? rangeDays(from, to) : 0;
+  const periodNoun = preset === '12m' ? '12 months' : preset === 'ytd' ? 'period of equal length' : preset === 'fy' ? 'fiscal year' : `${days} ${days === 1 ? 'day' : 'days'}`;
+  const fmtDay = (d: string) => new Date(`${d}T12:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  const activeTab = tabs.find(item => item.id === tab)!;
+  const canImport = user?.role === 'analyst' || user?.role === 'admin';
   return <div className="max-w-[1680px] mx-auto space-y-4 pb-8 animate-in fade-in duration-300">
-    <header className="flex flex-col xl:flex-row xl:items-end xl:justify-between gap-4">
-      <div><div className="flex items-center gap-2 text-[10px] uppercase tracking-[.16em] font-mono text-signal mb-1"><TrendingUp size={13} /> Audience intelligence <span className="text-ink-muted">/ 01</span></div><h1 className="kin-title">Dashboards</h1><p className="text-xs text-ink-muted mt-1">Unified audience signals, giving, and data operations.</p></div>
-      <div className="flex flex-wrap items-center gap-1.5 text-xs">
-        <CalendarDays size={14} className="text-ink-muted mr-1" />
-        {([['30d', '30 d'], ['90d', '90 d'], ['12m', '12 m'], ['ytd', 'YTD'], ['fy', 'Last FY'], ['custom', 'Custom']] as const).map(([id, label]) => <button key={id} type="button" data-testid={`preset-${id}`} disabled={id === 'fy' && !settings.data} onClick={() => selectPreset(id)} className={`px-2.5 py-1.5 rounded border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${preset === id ? 'border-signal bg-signal-soft text-signal' : 'border-line-strong text-ink-muted hover:text-ink hover:bg-surface-raised'}`}>{label}</button>)}
-        {preset === 'custom' ? <div className="flex items-center gap-1.5 ml-1"><input data-testid="input-range-from" aria-label="From date" type="date" max={to} value={from} onChange={e => setRange([e.target.value, to])} className="bg-surface border border-line-strong rounded px-2 py-1.5 text-ink [color-scheme:dark]" /><span className="text-ink-muted">to</span><input data-testid="input-range-to" aria-label="To date" type="date" min={from} value={to} onChange={e => setRange([from, e.target.value])} className="bg-surface border border-line-strong rounded px-2 py-1.5 text-ink [color-scheme:dark]" /></div> : <span className="ml-2 text-ink-muted font-mono whitespace-nowrap">{from} — {to}</span>}
+    <header className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
+      <div><h1 className="kin-title text-ink">{activeTab.label}</h1><p className="text-[13px] text-ink-muted mt-1">{tab === 'overview' ? 'Giving, partners and engagement across every source.' : 'Unified audience signals, giving, and data operations.'}</p></div>
+      <div className="flex flex-col items-start lg:items-end gap-1.5 text-xs">
+        <div role="group" aria-label="Date range" className="inline-flex flex-wrap rounded-md border border-line bg-surface p-0.5">
+          {([['30d', '30 d'], ['90d', '90 d'], ['12m', '12 m'], ['ytd', 'YTD'], ['fy', 'Last FY'], ['custom', 'Custom…']] as const).map(([id, label]) => <button key={id} type="button" data-testid={`preset-${id}`} aria-pressed={activePreset === id} disabled={id === 'fy' && !settings.data} onClick={() => selectPreset(id)} className={`px-2.5 py-1 rounded text-xs transition-colors disabled:opacity-40 disabled:cursor-not-allowed outline-none focus-visible:ring-2 focus-visible:ring-ring ${activePreset === id ? 'bg-signal-soft text-signal font-medium' : 'text-ink-muted hover:text-ink'}`}>{label}</button>)}
+        </div>
+        {customOpen && <form className="flex flex-wrap items-center gap-1.5" onSubmit={e => { e.preventDefault(); applyCustom(); }}>
+          <input data-testid="input-range-from" aria-label="From date" type="date" min="1900-01-01" max="2999-12-31" value={draft[0]} onChange={e => setDraft([e.target.value, draft[1]])} aria-invalid={!!draftError && draftDirty} aria-describedby="range-error" className="bg-surface border border-line-strong rounded px-2 py-1 text-ink [color-scheme:light] dark:[color-scheme:dark]" />
+          <span className="text-ink-muted">to</span>
+          <input data-testid="input-range-to" aria-label="To date" type="date" min="1900-01-01" max="2999-12-31" value={draft[1]} onChange={e => setDraft([draft[0], e.target.value])} aria-invalid={!!draftError && draftDirty} aria-describedby="range-error" className="bg-surface border border-line-strong rounded px-2 py-1 text-ink [color-scheme:light] dark:[color-scheme:dark]" />
+          <button type="submit" data-testid="button-apply-range" disabled={!!draftError || !draftDirty} className="px-2.5 py-1 rounded bg-signal text-ground font-medium disabled:opacity-40 disabled:cursor-not-allowed outline-none focus-visible:ring-2 focus-visible:ring-ring">Apply</button>
+          {preset !== 'custom' && <button type="button" onClick={() => setCustomOpen(false)} className="px-2 py-1 text-ink-muted hover:text-ink">Cancel</button>}
+          <span id="range-error" role="status" className="basis-full text-danger text-[11px] lg:text-right min-h-0">{draftDirty && draftError ? draftError : ''}</span>
+        </form>}
+        <p data-testid="dashboard-period" className="text-ink-muted">{parsed.range ? <>{fmtDay(query.data?.range.from ?? from)} – {fmtDay(query.data?.range.to ?? to)} · compared with the prior {periodNoun}</> : 'Loading fiscal year…'}</p>
       </div>
     </header>
     {settings.isError && <div role="alert" className="border border-danger/30 bg-danger/5 rounded-md px-4 py-3 text-xs text-ink"><span>Dashboard settings are unavailable; Last FY cannot be calculated.</span><Button variant="outline" size="sm" className="ml-3 h-7" onClick={() => settings.refetch()}><RefreshCw size={12} className="mr-1.5" /> Retry</Button><span className="ml-2 text-ink-muted">{settings.error instanceof Error ? settings.error.message : 'The request could not be completed.'}</span></div>}
     <nav aria-label="Dashboard sections" className="flex overflow-x-auto gap-0 border-b border-line">
-      {tabs.map(item => <button key={item.id} type="button" data-testid={`tab-${item.id}`} onClick={() => setTab(item.id)} className={`px-4 py-2.5 text-xs whitespace-nowrap border-b-2 transition-colors ${tab === item.id ? 'text-signal border-signal bg-signal-soft' : 'text-ink-muted border-transparent hover:text-ink'}`}>{item.label}</button>)}
+      {tabs.map(item => <button key={item.id} type="button" data-testid={`tab-${item.id}`} aria-current={tab === item.id ? 'page' : undefined} onClick={() => setTab(item.id)} className={`px-4 py-2.5 text-xs whitespace-nowrap border-b-2 transition-colors ${tab === item.id ? 'text-signal border-signal bg-signal-soft' : 'text-ink-muted border-transparent hover:text-ink'}`}>{item.label}</button>)}
     </nav>
-    <div className="flex items-center justify-between text-[11px] text-ink-muted"><span className="font-mono uppercase tracking-wider">{tab.replace('-', ' ')} <ChevronDown size={12} className="inline ml-1" /></span>{query.data && <span data-testid="dashboard-period">Current {query.data.range.from} → {query.data.range.to}<span className="mx-2 text-ink-muted">|</span>Prior {query.data.range.prior_from} → {query.data.range.prior_to}</span>}</div>
-    {query.isLoading ? <><div className="grid grid-cols-2 lg:grid-cols-4 gap-2">{Array.from({ length: 4 }, (_, i) => <Skeleton key={i} className="h-24 bg-surface-raised" />)}</div><div className="grid grid-cols-1 xl:grid-cols-2 gap-3">{Array.from({ length: 4 }, (_, i) => <Skeleton key={i} className="h-[295px] bg-surface-raised" />)}</div></>
+    {query.isPending && tab === 'overview' ? <OverviewSkeleton />
+      : query.isPending ? <><div className="grid grid-cols-2 lg:grid-cols-4 gap-2">{Array.from({ length: 4 }, (_, i) => <Skeleton key={i} className="h-24 bg-surface-raised" />)}</div><div className="grid grid-cols-1 xl:grid-cols-2 gap-3">{Array.from({ length: 4 }, (_, i) => <Skeleton key={i} className="h-[295px] bg-surface-raised" />)}</div></>
       : query.isError ? <div role="alert" className="border border-danger/30 bg-danger/5 rounded-md p-8 text-center"><p className="text-ink font-medium">Dashboard data is unavailable</p><p className="text-ink-muted text-xs mt-1">{query.error instanceof Error ? query.error.message : 'The request could not be completed.'}</p><Button variant="outline" size="sm" className="mt-4" onClick={() => query.refetch()}><RefreshCw size={13} className="mr-2" /> Retry</Button></div>
+      : query.data && tab === 'overview' ? (query.data.overview
+        ? <OverviewView data={query.data.overview} canImport={canImport} onWiden={() => selectPreset('12m')} periodNoun={periodNoun} />
+        : <div role="alert" className="border border-line rounded-md px-4 py-3 text-xs text-ink-muted">The overview response did not include live aggregates. <button type="button" className="text-signal hover:underline" onClick={() => query.refetch()}>Retry</button></div>)
       : query.data && <>
         <Kpis data={query.data} dashboard={tab} />
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">{specs[tab].map((spec, index) => <div key={spec.key} className={index === 0 && tab === 'overview' ? 'xl:col-span-2' : ''}><ChartPanel spec={spec} rows={query.data!.charts[spec.key] || []} dashboard={tab} from={from} to={to} canExport={user?.role === 'analyst' || user?.role === 'admin'} /></div>)}</div>
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">{specs[tab].map((spec, index) => <div key={spec.key} className={index === 0 && tab === 'overview' ? 'xl:col-span-2' : ''}><ChartPanel spec={spec} rows={query.data!.charts[spec.key] || []} dashboard={tab} from={from} to={to} canExport={canImport} /></div>)}</div>
         {tab === 'data-health' && <div className="border-t border-line pt-5 mt-5"><div className="text-[10px] uppercase tracking-widest text-signal font-mono mb-2">Operational controls</div><DataHealth /></div>}
       </>}
   </div>;

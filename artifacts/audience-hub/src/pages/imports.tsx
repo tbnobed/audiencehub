@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { FileUp, Database, ArrowRight, CheckCircle2, AlertTriangle, FileDown, RefreshCw, Eye, Settings2, PlayCircle, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -21,6 +22,25 @@ export default function Imports() {
   
   const [activeJobId, setActiveJobId] = useState<number | null>(null);
   const [isWizardOpen, setIsWizardOpen] = useState(false);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requestedImport = searchParams.get('import_id');
+
+  useEffect(() => {
+    const id = Number(requestedImport);
+    if (requestedImport && Number.isInteger(id) && id > 0) {
+      setActiveJobId(id);
+      setIsWizardOpen(true);
+    }
+  }, [requestedImport]);
+
+  const handleWizardOpenChange = (open: boolean) => {
+    setIsWizardOpen(open);
+    if (!open && searchParams.has('import_id')) {
+      const next = new URLSearchParams(searchParams);
+      next.delete('import_id');
+      setSearchParams(next, { replace: true });
+    }
+  };
 
   const startNewImport = () => {
     setActiveJobId(null);
@@ -139,7 +159,7 @@ export default function Imports() {
 
       <ImportWizardDialog 
         open={isWizardOpen} 
-        onOpenChange={setIsWizardOpen} 
+        onOpenChange={handleWizardOpenChange}
         jobId={activeJobId} 
         onJobIdChange={setActiveJobId} 
       />
