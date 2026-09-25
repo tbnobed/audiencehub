@@ -8,9 +8,12 @@ import { JobsIcon } from '@/components/icons/KinshipIcons';
 import { JobActivityDrawer } from './job-activity-drawer';
 import { useQuery } from '@tanstack/react-query';
 import { fetchApi } from '@/lib/api';
+import { useTheme } from '@/lib/theme';
+import { ThemeToggle } from '@/components/theme/theme-toggle';
 
 export function TopBar() {
   const { user, logout } = useAuth();
+  const { theme, toggleTheme } = useTheme();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const { data: jobs } = useQuery<{ items: { status: string }[] }>({
@@ -59,7 +62,7 @@ export function TopBar() {
               DEV AUTH
             </Badge>
           )}
-          
+          <ThemeToggle theme={theme} onToggle={toggleTheme} />
           <Button variant="ghost" size="icon" onClick={() => setDrawerOpen(true)} aria-label={`Job activity: ${runningCount} running`} aria-expanded={drawerOpen} className="group">
             <JobsIcon size={16} strokeWidth={1.75} className={drawerOpen || runningCount > 0 ? 'text-signal group-hover:text-ink group-focus-visible:text-ink' : 'text-ink-muted group-hover:text-ink group-focus-visible:text-ink'} />
           </Button>

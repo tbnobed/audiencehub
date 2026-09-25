@@ -4,9 +4,12 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { useQuery } from '@tanstack/react-query';
+import { brandAsset, useTheme } from '@/lib/theme';
+import { ThemeToggle } from '@/components/theme/theme-toggle';
 
 export default function Login() {
   const { login } = useAuth();
+  const { theme, toggleTheme } = useTheme();
   const [role, setRole] = useState<Role>('viewer');
   const [name, setName] = useState('');
   const [loading, setLoading] = useState(false);
@@ -35,11 +38,12 @@ export default function Login() {
   };
 
   return (
-    <div className="min-h-screen bg-background flex items-center justify-center p-4">
+    <div className="relative min-h-screen bg-background flex items-center justify-center p-4">
+      <ThemeToggle theme={theme} onToggle={toggleTheme} className="absolute right-4 top-4" />
       <Card className="w-full max-w-sm">
         <CardHeader className="text-center space-y-2">
           <CardTitle className="sr-only">Sign in to Kinship</CardTitle>
-          <img src={`${import.meta.env.BASE_URL}brand/kinship-logo-stacked-dark.svg`} alt="Kinship" className="mx-auto h-auto w-40" />
+          <img src={brandAsset('stacked', theme)} alt="Kinship" className="mx-auto h-auto w-40" />
           <CardDescription>{auth?.mode === 'dev' ? 'Select a role to enter the development console.' : 'Sign in to the operations console.'}</CardDescription>
         </CardHeader>
         <CardContent>

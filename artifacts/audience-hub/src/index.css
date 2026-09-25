@@ -92,6 +92,7 @@
 
 /* Dark console; legacy HSL channels remain available to existing components. */
 :root, .dark {
+  color-scheme: dark;
   --ground: #0B0F14;
   --surface: #121821;
   --surface-raised: #18202B;
@@ -169,6 +170,82 @@
   --shadow-2xl: 0 25px 50px -12px rgb(0 0 0 / 0.25);
   --tracking-normal: 0em;
   --spacing: 0.25rem;
+}
+
+
+/* Light console: same Kinship identity, daylight ground. Signal darkened for AA contrast on pale surfaces. */
+.light {
+  color-scheme: light;
+  --ground: #F4F6F9;
+  --surface: #FBFCFD;
+  --surface-raised: #EDF1F5;
+  --line: #D9E0E8;
+  --line-strong: #7C8B9E;
+  --ink: #0F1720;
+  --ink-muted: #56626F;
+  --signal: #0A7BC2;
+  --signal-soft: #DDEEFA;
+  --on-signal: #FBFCFD;
+  --ok: #148A58;
+  --warn: #A96500;
+  --danger: #C8264A;
+  --kin-chart-1: #0A7BC2;
+  --kin-chart-2: #17935F;
+  --kin-chart-3: #C77A00;
+  --kin-chart-4: #7A4FD6;
+  --kin-chart-5: #D0355A;
+  --kin-chart-6: #138C80;
+  --kin-chart-7: #A88400;
+  --kin-chart-8: #64717F;
+  --background: 216 29% 97%;
+  --foreground: 213 36% 9%;
+  --border: 213 23% 88%;
+  --card: 210 33% 99%;
+  --card-foreground: 213 36% 9%;
+  --card-border: 213 23% 88%;
+  --sidebar: 210 33% 99%;
+  --sidebar-foreground: 213 36% 9%;
+  --sidebar-border: 213 23% 88%;
+  --sidebar-primary: 203 90% 40%;
+  --sidebar-primary-foreground: 210 33% 99%;
+  --sidebar-accent: 205 73% 92%;
+  --sidebar-accent-foreground: 213 36% 9%;
+  --sidebar-ring: 203 90% 40%;
+  --popover: 210 26% 95%;
+  --popover-foreground: 213 36% 9%;
+  --popover-border: 213 23% 88%;
+  --primary: 203 90% 40%;
+  --primary-foreground: 210 33% 99%;
+  --secondary: 210 26% 95%;
+  --secondary-foreground: 213 36% 9%;
+  --muted: 210 26% 95%;
+  --muted-foreground: 211 13% 39%;
+  --accent: 205 73% 92%;
+  --accent-foreground: 213 36% 9%;
+  --destructive: 346 68% 47%;
+  --destructive-foreground: 210 33% 99%;
+  --input: 213 13% 55%;
+  --ring: 203 90% 40%;
+  --chart-1: 203 90% 40%;
+  --chart-2: 155 73% 33%;
+  --chart-3: 37 100% 39%;
+  --chart-4: 260 62% 57%;
+  --chart-5: 345 63% 51%;
+  --chart-6: 174 76% 31%;
+  --chart-7: 48 100% 33%;
+  --chart-8: 211 11% 45%;
+  --elevate-1: rgb(15 23 32 / 0.04);
+  --elevate-2: rgb(15 23 32 / 0.08);
+  --shadow-sm: 0 1px 3px 0 rgb(15 23 32 / 0.08), 0 1px 2px -1px rgb(15 23 32 / 0.06);
+  --shadow-md: 0 4px 10px -2px rgb(15 23 32 / 0.10), 0 2px 4px -2px rgb(15 23 32 / 0.06);
+  --shadow-lg: 0 12px 24px -6px rgb(15 23 32 / 0.14), 0 4px 8px -4px rgb(15 23 32 / 0.06);
+  /* Status palette utilities used across pages (amber/emerald/blue-500) are tuned for dark;
+     deepen them in light mode so text and badges keep contrast. */
+  --color-amber-500: #B36B00;
+  --color-amber-600: #8F5500;
+  --color-emerald-500: #13875A;
+  --color-emerald-600: #0E6C48;
+  --color-blue-500: #0A6FB0;
 }
 
 @layer base {

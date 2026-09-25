@@ -2,6 +2,7 @@ import { Link, useLocation } from 'react-router-dom';
 import { useState } from 'react';
 import { useAuth } from '@/hooks/use-auth';
 import { cn } from '@/lib/utils';
+import { brandAsset, useTheme } from '@/lib/theme';
 import { PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import {
   DashboardIcon, ProfilesIcon, SegmentsIcon, ActivationsIcon, ImportsIcon,
@@ -13,6 +14,7 @@ export function Sidebar() {
   const [collapsed, setCollapsed] = useState(false);
   const location = useLocation().pathname;
   const { user } = useAuth();
+  const { theme } = useTheme();
   
   if (!user) return null;
 
@@ -37,7 +39,7 @@ export function Sidebar() {
       <div className={cn("h-14 flex items-center px-4 border-b border-sidebar-border", collapsed && "justify-center")}>
         <Link to="/" aria-label="Kinship home">
           <img
-            src={`${import.meta.env.BASE_URL}brand/${collapsed ? 'kinship-mark-dark.svg' : 'kinship-sidebar-wordmark.svg'}`}
+            src={brandAsset(collapsed ? 'mark' : 'wordmark', theme)}
             alt="Kinship"
             className="h-6 w-auto max-w-full"
             height={24}

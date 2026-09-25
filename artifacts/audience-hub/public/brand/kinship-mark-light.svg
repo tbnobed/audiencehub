@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Kinship"><title>Kinship</title><g transform="translate(0,0) scale(1.0)" fill="none" stroke-linecap="round">
+<line x1="19" y1="12" x2="19" y2="52" stroke="#0F1720" stroke-width="5.5"/>
+<line x1="19" y1="34" x2="47" y2="12" stroke="#0F1720" stroke-width="5.5"/>
+<line x1="31" y1="26" x2="47" y2="52" stroke="#0F1720" stroke-width="5.5"/>
+<circle cx="47" cy="12" r="7" fill="#0A7BC2" stroke="none"/>
+<circle cx="47" cy="52" r="7" fill="#0A7BC2" stroke="none"/>
+<circle cx="19" cy="52" r="7" fill="#0A7BC2" stroke="none"/>
+<circle cx="19" cy="12" r="7" fill="#0A7BC2" stroke="none"/>
+</g></svg>
