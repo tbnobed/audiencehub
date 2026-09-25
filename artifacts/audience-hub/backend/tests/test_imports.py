@@ -140,6 +140,32 @@ def test_seed_gifts_and_enrichment_use_explicit_donor_crm_reference():
     }
 
 
+def test_row_validation_does_not_mutate_saved_mapping_options():
+    for record_type, headers, row in (
+        ("gift", ["external_id", "contact_external_id", "amount", "gift_date"],
+         {"external_id": "gift-1", "contact_external_id": "crm-1",
+          "amount": "25.00", "gift_date": "2025-01-01"}),
+        ("enrichment", ["external_id", "contact_external_id", "hh_income_band"],
+         {"external_id": "zeta-1", "contact_external_id": "crm-1",
+          "hh_income_band": "75k_149k"}),
+    ):
+        mapping = _mapping(headers, record_type)
+        original = {"columns": dict(mapping["columns"]), "options": dict(mapping["options"])}
+        for _ in range(2):
+            converted = map_and_validate_row(row, mapping["columns"], record_type, mapping["options"])
+            assert converted["errors"] == []
+            assert mapping == original
+
+    options = {"reference_source": "donor_crm", "phone_region": "GB"}
+    converted = map_and_validate_row(
+        {"phone": "020 7946 0958", "amount": "25.00", "gift_date": "2025-01-01"},
+        {"phone": "phone", "amount": "amount", "gift_date": "gift_date"},
+        "gift", options,
+    )
+    assert converted["values"]["phone_e164"] == "+442079460958"
+    assert options == {"reference_source": "donor_crm", "phone_region": "GB"}
+
+
 def test_stable_row_hash_generates_deterministic_natural_keys_for_reimport():
     row = {"external_id": "crm-42", "raw_hash": "f" * 64}
     assert _external_id("contact", row) == "crm-42"

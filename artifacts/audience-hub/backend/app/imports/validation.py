@@ -137,7 +137,7 @@ def _required_fields(record_type: str, mapped: dict[str, Any]) -> list[str]:
 def map_and_validate_row(row: dict[str, str], columns: dict[str, Any], record_type: str,
                          options: dict[str, Any] | None = None) -> dict[str, Any]:
     """Return mapped values, normalized identifiers, errors, and warnings."""
-    options = options or {}
+    options = dict(options or {})
     options.setdefault("phone_region", os.getenv("DEFAULT_PHONE_REGION", "US"))
     if record_type not in RECORD_TYPES:
         raise ValueError(f"Unsupported record type: {record_type}")

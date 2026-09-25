@@ -11,7 +11,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.db import engine
-from app.imports.service import run_import
+from app.imports.service import ImportProblem, run_import
 
 
 def test_import_mutex_and_identity_locks_are_transaction_owned():
@@ -30,6 +30,103 @@ def test_import_mutex_and_identity_locks_are_transaction_owned():
          {"key": "audience-hub:import:17"}),
         ("SELECT pg_advisory_xact_lock_shared(:key)", {"key": 0x41484944454E54}),
     ]
+
+
+@pytest.mark.skipif(
+    os.environ.get("KINSHIP_BENCHMARK_ISOLATED_TESTS") != "1",
+    reason="Requires benchmark's disposable PostgreSQL cluster",
+)
+@pytest.mark.parametrize("record_type", ["gift", "enrichment"])
+def test_seed_reference_mapping_import_commits_without_config_change(tmp_path, record_type):
+    from app.importer import _mapping
+
+    if record_type == "gift":
+        row = {"external_id": "gift-1", "contact_external_id": "crm-1",
+               "amount": "25.00", "gift_date": "2025-01-01"}
+        filename = "giving_platform_gifts.csv"
+    else:
+        row = {"external_id": "zeta-1", "contact_external_id": "crm-1",
+               "hh_income_band": "75k_149k", "donor_propensity_score": "0.75"}
+        filename = "zeta_enrichment.csv"
+    path = tmp_path / filename
+    with path.open("w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(row))
+        writer.writeheader()
+        writer.writerow(row)
+    mapping = _mapping(list(row), record_type)
+    assert mapping["options"] == {"reference_source": "donor_crm"}
+    with Session(engine) as db:
+        source = db.scalar(text("""
+            INSERT INTO sources (key,name,kind,record_types,priority,is_active)
+            VALUES (:key,'Seed mapping test','csv',:types,10,true) RETURNING id
+        """), {"key": "seed_mapping_" + uuid4().hex, "types": [record_type]})
+        import_id = db.scalar(text("""
+            INSERT INTO imports (source_id,filename,file_path,record_type,mapping,rows_total)
+            VALUES (:source,:filename,:path,:record_type,CAST(:mapping AS jsonb),1)
+            RETURNING id
+        """), {"source": source, "filename": filename, "path": str(path),
+               "record_type": record_type, "mapping": json.dumps(mapping)})
+        db.commit()
+
+    result = run_import(import_id)
+    assert result["rows_ok"] == 1
+    assert result["rows_rejected"] == 0
+    with Session(engine) as db:
+        imported = db.execute(text("SELECT * FROM imports WHERE id=:id"),
+                              {"id": import_id}).mappings().one()
+        assert imported["status"] == "completed"
+        assert imported["mapping"] == mapping
+        assert imported["last_committed_record_number"] == 2
+        assert db.scalar(text("SELECT count(*) FROM source_records WHERE source_id=:id"),
+                         {"id": source}) == 1
+        if record_type == "gift":
+            assert db.scalar(text("SELECT count(*) FROM gifts WHERE source_id=:id"),
+                             {"id": source}) == 1
+        assert db.scalar(text("""
+            SELECT attributes->'_identity_reference'->>'source_key'
+            FROM source_records WHERE source_id=:id
+        """), {"id": source}) == "donor_crm"
+
+
+@pytest.mark.skipif(
+    os.environ.get("KINSHIP_BENCHMARK_ISOLATED_TESTS") != "1",
+    reason="Requires benchmark's disposable PostgreSQL cluster",
+)
+def test_real_mapping_change_during_validation_is_rejected(tmp_path):
+    from app.importer import _mapping
+
+    path = tmp_path / "giving_platform_gifts.csv"
+    path.write_text("external_id,contact_external_id,amount,gift_date\n"
+                    "gift-1,crm-1,25.00,2025-01-01\n")
+    mapping = _mapping(["external_id", "contact_external_id", "amount", "gift_date"], "gift")
+    with Session(engine) as db:
+        source = db.scalar(text("""
+            INSERT INTO sources (key,name,kind,record_types,priority,is_active)
+            VALUES (:key,'Changed mapping test','csv',ARRAY['gift'],10,true) RETURNING id
+        """), {"key": "changed_mapping_" + uuid4().hex})
+        import_id = db.scalar(text("""
+            INSERT INTO imports (source_id,filename,file_path,record_type,mapping,rows_total)
+            VALUES (:source,'giving_platform_gifts.csv',:path,'gift',CAST(:mapping AS jsonb),1)
+            RETURNING id
+        """), {"source": source, "path": str(path), "mapping": json.dumps(mapping)})
+        db.commit()
+
+    def change_mapping(update):
+        if update["phase"] == "validating":
+            with Session(engine) as db:
+                db.execute(text("""
+                    UPDATE imports SET mapping=jsonb_set(mapping,'{options,phone_region}',
+                                                           '"GB"'::jsonb) WHERE id=:id
+                """), {"id": import_id})
+                db.commit()
+
+    with pytest.raises(ImportProblem, match="Import configuration changed during validation"):
+        run_import(import_id, change_mapping)
+    with Session(engine) as db:
+        assert db.scalar(text("SELECT count(*) FROM gifts WHERE source_id=:id"),
+                         {"id": source}) == 0
+        assert db.scalar(text("SELECT mapping->'options'->>'phone_region' FROM imports WHERE id=:id"),
+                         {"id": import_id}) == "GB"
 
 
 @pytest.mark.skipif(
@@ -285,3 +382,23 @@ def test_failed_import_resume_preserves_cursor_counters_and_progress(monkeypatch
     assert serialized["last_committed_record_number"] == 10_001
     assert serialized["rows_ok"] == 9_990
     assert serialized["warning_count"] == 7
+
+
+def test_failed_import_without_checkpoint_retries_saved_mapping(monkeypatch):
+    from types import SimpleNamespace
+    from app.imports import api
+
+    row = {"status": "failed", "job_status": "failed",
+           "last_committed_record_number": 1, "rows_total": 1,
+           "mapping": {"columns": {"amount": "amount"}, "options": {"reference_source": "donor_crm"}}}
+    job = SimpleNamespace(id=51, progress={})
+    class Db:
+        def execute(self, sql, params):
+            assert "UPDATE imports SET status='running'" in str(sql)
+        def commit(self):
+            pass
+    monkeypatch.setattr(api, "_get_import", lambda *_: row)
+    monkeypatch.setattr(api, "enqueue", lambda *args, **kwargs: job)
+    assert api.start_import(9, user=None, db=Db())["status"] == "running"
+    assert job.progress == {"done": 0, "total": 1, "message": "Preparing validation…"}
+    assert row["mapping"]["options"] == {"reference_source": "donor_crm"}
