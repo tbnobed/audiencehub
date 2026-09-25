@@ -6,7 +6,6 @@ import io
 import json
 import os
 import shutil
-import time
 from pathlib import Path
 from typing import Mapping
 
@@ -74,13 +73,12 @@ def _mapping(headers: list[str], record_type: str) -> dict:
     return {"columns": validate_mapping(columns, record_type, headers), "options": options}
 
 
-def import_seed_files(files: Mapping[str, Path]) -> None:
+def import_seed_files(files: Mapping[str, Path]) -> list[int]:
     """Create source/import rows, enqueue real import.run jobs, and await completion."""
     if set(files) != set(SEED_SOURCES):
         raise ValueError("Seed loader requires exactly the five generated CSV files")
     upload_dir = Path(get_settings().upload_dir).resolve()
     upload_dir.mkdir(parents=True, exist_ok=True)
-    submitted: list[tuple[int, str]] = []
     import_ids: dict[str, int] = {}
     for filename, file in files.items():
         source_key, source_name, record_type = SEED_SOURCES[filename]
@@ -138,42 +136,16 @@ def import_seed_files(files: Mapping[str, Path]) -> None:
             db.execute(text("UPDATE imports SET status='running' WHERE id=:id"),
                        {"id": import_id})
             db.commit()
-            submitted.append((import_id, filename))
             import_ids[filename] = import_id
             print(f"Queued {filename}: import {import_id}, {count:,} rows", flush=True)
 
-    pending = dict(submitted)
-    deadline = time.monotonic() + int(os.environ.get("SEED_LOAD_TIMEOUT_SECONDS", "7200"))
-    while pending:
-        with Session(engine) as db:
-            rows = db.execute(text("""
-                SELECT i.id, i.status, i.rows_total, i.rows_ok, i.rows_rejected,
-                       i.warning_count, i.warning_counts, i.rows_normalized,
-                       i.rows_deduplicated, i.duration_ms, i.error_file_path,
-                       j.status AS job_status
-                FROM imports AS i
-                LEFT JOIN jobs AS j ON j.type='import.run'
-                  AND j.payload->>'import_id'=i.id::text
-                WHERE i.id = ANY(:ids)
-            """), {"ids": list(pending)}).mappings()
-            for row in rows:
-                if row["status"] in {"completed", "failed"} or row["job_status"] == "failed":
-                    filename = pending.pop(row["id"])
-                    status = "failed" if row["job_status"] == "failed" else row["status"]
-                    if status == "failed" and row["status"] != "failed":
-                        db.execute(text("UPDATE imports SET status='failed' WHERE id=:id"),
-                                   {"id": row["id"]})
-                        db.commit()
-                    print(f"{filename}: {status} "
-                          f"(ok={row['rows_ok']:,}, rejected={row['rows_rejected']:,}, "
-                          f"warnings={row['warning_count']:,}, total={row['rows_total']:,}, "
-                          f"duration={(row['duration_ms'] or 0) / 1000:.3f}s)", flush=True)
-                    if status != "completed":
-                        raise RuntimeError(f"Seed import {row['id']} failed: {filename}")
-        if pending:
-            if time.monotonic() >= deadline:
-                raise TimeoutError(f"Seed imports did not finish: {list(pending)}")
-            time.sleep(2)
+    from app.load_status import run_load_status
+
+    if run_load_status(
+        engine, wait=True, import_ids=list(import_ids.values()),
+        timeout=int(os.environ.get("SEED_LOAD_TIMEOUT_SECONDS", "7200")),
+    ):
+        raise RuntimeError("Seed load failed; see load-status summary above.")
 
     # Also refresh on an idempotent seed reload (all five imports may be skipped).
     with Session(engine) as db:
@@ -229,3 +201,4 @@ def import_seed_files(files: Mapping[str, Path]) -> None:
         with stats_path.open("w", encoding="utf-8", newline="\n") as stream:
             json.dump(stats, stream, sort_keys=True, separators=(",", ":"))
             stream.write("\n")
+    return list(import_ids.values())

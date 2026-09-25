@@ -198,16 +198,13 @@ export default function Dashboard() {
     </nav>
     {query.isFetching && query.data && <p role="status" className="text-xs text-ink-muted">Refreshing dashboard data…</p>}
     {!parsed.range && settings.isError ? <div role="alert" className="border border-danger/30 bg-danger/5 rounded-md p-8 text-center text-sm text-ink">Last FY cannot be displayed without fiscal settings. Retry above or choose another date range.</div>
-      : query.isPending && tab === 'overview' ? <OverviewSkeleton />
+      : tab === 'overview' ? (parsed.range ? <OverviewView from={from} to={to} canImport={canImport} onWiden={() => selectPreset('12m')} periodNoun={periodNoun} /> : <OverviewSkeleton />)
       : query.isPending ? <><div className="grid grid-cols-2 lg:grid-cols-4 gap-2">{Array.from({ length: 4 }, (_, i) => <Skeleton key={i} className="h-24 bg-surface-raised" />)}</div><div className="grid grid-cols-1 xl:grid-cols-2 gap-3">{Array.from({ length: 4 }, (_, i) => <Skeleton key={i} className="h-[295px] bg-surface-raised" />)}</div></>
       : <>
       {query.isError && <div role="alert" className="border border-danger/30 bg-danger/5 rounded-md p-5 text-center"><p className="text-ink font-medium">{query.data ? 'Dashboard could not be refreshed; showing previously loaded data' : 'Dashboard data is unavailable'}</p><p className="text-ink-muted text-xs mt-1">{query.error instanceof Error ? query.error.message : 'The request could not be completed.'}</p><Button variant="outline" size="sm" className="mt-4" disabled={query.isFetching} onClick={() => query.refetch()}><RefreshCw size={13} className="mr-2" /> Retry</Button></div>}
-      {query.data && tab === 'overview' ? (query.data.overview
-        ? <OverviewView data={query.data.overview} canImport={canImport} onWiden={() => selectPreset('12m')} periodNoun={periodNoun} />
-        : <div role="alert" className="border border-line rounded-md px-4 py-3 text-xs text-ink-muted">The overview response did not include live aggregates. <button type="button" className="text-signal hover:underline" onClick={() => query.refetch()}>Retry</button></div>)
-      : query.data && <>
+      {query.data && <>
         <Kpis data={query.data} dashboard={tab} />
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">{specs[tab].map((spec, index) => <div key={spec.key} className={index === 0 && tab === 'overview' ? 'xl:col-span-2' : ''}><ChartPanel spec={spec} rows={query.data!.charts[spec.key] || []} dashboard={tab} from={from} to={to} canExport={canImport} /></div>)}</div>
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">{specs[tab].map(spec => <div key={spec.key}><ChartPanel spec={spec} rows={query.data!.charts[spec.key] || []} dashboard={tab} from={from} to={to} canExport={canImport} /></div>)}</div>
         {tab === 'data-health' && <div className="border-t border-line pt-5 mt-5"><div className="text-[10px] uppercase tracking-widest text-signal font-mono mb-2">Operational controls</div><DataHealth /></div>}
       </>}
       </>}

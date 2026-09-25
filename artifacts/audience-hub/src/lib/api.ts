@@ -6,13 +6,13 @@ export function setCsrfToken(token: string | null) {
 
 export class ApiTimeoutError extends Error {
   constructor() {
-    super('The request timed out after 30 seconds. Please try again.');
+    super('The request timed out after 15 seconds. Please try again.');
     this.name = 'ApiTimeoutError';
   }
 }
 
 type ApiRequestOptions = RequestInit & { timeoutMs?: number };
-export const API_TIMEOUT_MS = 30_000;
+export const API_TIMEOUT_MS = 15_000;
 
 export async function fetchApi(url: string, options: ApiRequestOptions = {}) {
   // Bound dashboard reads without changing long-running upload/validation writes.

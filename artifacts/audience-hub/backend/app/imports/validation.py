@@ -215,6 +215,24 @@ def map_and_validate_row(row: dict[str, str], columns: dict[str, Any], record_ty
             errors.append("channel must be one of " + ", ".join(sorted(ALLOWED_CHANNELS)))
         if values.get("status") and values["status"] not in ALLOWED_CONSENTS:
             errors.append("status must be one of " + ", ".join(sorted(ALLOWED_CONSENTS)))
+    if record_type == "contact":
+        attrs = values.get("attributes", {})
+        status = attrs.get("email_consent")
+        if status:
+            if status not in ALLOWED_CONSENTS:
+                errors.append("email_consent must be one of " + ", ".join(sorted(ALLOWED_CONSENTS)))
+            else:
+                captured_at = None
+                if attrs.get("consent_captured_at"):
+                    try:
+                        captured_at = _datetime(
+                            attrs["consent_captured_at"], options.get("datetime_format")
+                        ).isoformat()
+                    except ValueError as exc:
+                        errors.append(f"consent_captured_at: {exc}")
+                values["consent"] = {
+                    "channel": "email", "status": status, "captured_at": captured_at,
+                }
     if values.get("email"):
         raw_email = values["email"]
         values["email_raw"] = raw_email

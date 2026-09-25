@@ -289,9 +289,37 @@ function ImportWizardDialog({
             </div>
           )}
         </div>
+        {job && job.rows_rejected > 0 && ['completed', 'failed'].includes(job.status) && (
+          <RejectedReportReview job={job} />
+        )}
       </DialogContent>
     </Dialog>
   );
+}
+
+function RejectedReportReview({ job }: { job: ImportJob }) {
+  const queryClient = useQueryClient();
+  const [pending, setPending] = useState(false);
+  const review = async () => {
+    setPending(true);
+    try {
+      await fetchApi(`/api/imports/${job.id}/review-rejections`, { method: 'POST' });
+      await queryClient.invalidateQueries({ queryKey: ['imports', job.id] });
+      await queryClient.invalidateQueries({ queryKey: ['shell'] });
+      await queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+      toast({ title: 'Rejected-row report marked reviewed' });
+    } catch (error) {
+      toast({ title: 'Could not review report', description: error instanceof Error ? error.message : String(error), variant: 'destructive' });
+    } finally {
+      setPending(false);
+    }
+  };
+  return <div className="border-t p-4 flex items-center gap-3">
+    <Button variant="outline" onClick={() => downloadImportErrors(job.id)}>Download rejected-row report</Button>
+    <Button disabled={pending || job.rejected_report_reviewed} onClick={review}>
+      {job.rejected_report_reviewed ? 'Report reviewed' : pending ? 'Saving…' : 'Mark report reviewed'}
+    </Button>
+  </div>;
 }
 
 function UploadStep({ onJobCreated }: { onJobCreated: (id: number) => void }) {

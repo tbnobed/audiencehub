@@ -39,6 +39,9 @@ ALIASES = {
     "context": "context", "properties": "properties",
     "consent channel": "channel", "consent status": "status",
     "status": "status", "captured at": "captured_at",
+    "email consent": "attributes.email_consent",
+    "consent captured at": "attributes.consent_captured_at",
+    "hard bounce": "attributes.hard_bounce",
 }
 TYPE_TARGETS = {
     "contact": {"external_id", "email", "phone", "first_name", "last_name",
@@ -65,7 +68,9 @@ def suggest_mapping(headers: list[str], record_type: str) -> dict[str, object]:
     mapping: dict[str, object] = {}
     for header in headers:
         target = ALIASES.get(_header_key(header))
-        if target in TYPE_TARGETS[record_type]:
+        if target in TYPE_TARGETS[record_type] or (
+            record_type == "contact" and target and target.startswith("attributes.")
+        ):
             mapping[header] = target
     return mapping
 

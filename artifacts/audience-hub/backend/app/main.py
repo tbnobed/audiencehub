@@ -28,6 +28,7 @@ async def lifespan(app: FastAPI):
     settings = get_settings()  # Fail closed before accepting requests.
     configure_logging(settings.log_level)
     oidc.configure_oidc()
+    queue.startup_selfcheck(engine)
     yield
 
 

@@ -47,7 +47,7 @@ def upgrade():
         sa.Column("dedupe_key", sa.Text()), *timestamps())
     op.create_index("ix_jobs_claim", "jobs", ["status", "run_after", "priority", "id"])
     op.create_index("uq_jobs_active_dedupe", "jobs", ["dedupe_key"], unique=True,
-                    postgresql_where=sa.text("status IN ('queued','running')"))
+                    postgresql_where=sa.text("status IN ('queued', 'running')"))
     op.create_table("scheduled_runs", sa.Column("task", sa.Text(), primary_key=True),
         sa.Column("window_key", sa.Text(), primary_key=True),
         sa.Column("job_id", sa.BigInteger(), sa.ForeignKey("jobs.id"), nullable=False),

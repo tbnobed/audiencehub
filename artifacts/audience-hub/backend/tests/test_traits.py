@@ -119,7 +119,8 @@ def test_trait_registry_covers_documented_profile_trait_fields():
     assert "NTILE(5)" in statement
 
 
-def test_recompute_passes_the_pinned_as_of_date_to_one_set_based_upsert():
+def test_recompute_passes_the_pinned_as_of_date_to_one_set_based_upsert(monkeypatch):
+    monkeypatch.setattr("app.dashboards.rollups.refresh_dashboard_rollups", lambda *a, **kw: None)
     class Result:
         rowcount = 7
 

@@ -6,7 +6,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 
-def _compute_seed_traits() -> None:
+def _compute_seed_traits(import_ids: list[int]) -> None:
     """Wait for queued identity resolution, then compute seeded traits/history."""
     from app.traits.engine import backfill_trait_snapshots, recompute_traits
     from app.db import engine
@@ -15,8 +15,9 @@ def _compute_seed_traits() -> None:
     while True:
         with Session(engine) as db:
             pending = db.execute(text(
-                "SELECT count(*) FROM source_records WHERE resolved_at IS NULL"
-            )).scalar_one()
+                "SELECT count(*) FROM source_records WHERE resolved_at IS NULL "
+                "AND last_import_id = ANY(:ids)"
+            ), {"ids": import_ids}).scalar_one()
         if not pending:
             break
         if time.monotonic() >= deadline:
@@ -34,6 +35,13 @@ def main():
         description="Audience Hub administration and deterministic synthetic CSV generation."
     )
     commands = parser.add_subparsers(dest="command", required=True)
+    status = commands.add_parser(
+        "load-status", help="Report a fixed selection of imports and dependent work (read-only).")
+    status.add_argument("--wait", action="store_true", help="Poll to completion; progress every 30 seconds.")
+    status.add_argument("--import-id", type=int, action="append",
+                        help="Monitor only these IDs (repeatable); default: all imports existing at invocation.")
+    status.add_argument("--timeout", type=float, default=7200,
+                        help="Maximum wait in seconds (default: 7200).")
     admin = commands.add_parser("create-admin")
     admin.add_argument("--email", required=True)
     reset = commands.add_parser("reset-demo", help="Erase dataset rows, preserving users and configuration.")
@@ -63,6 +71,14 @@ def main():
         help="After writing files, call app.importer.import_seed_files(files) if available.",
     )
     args = parser.parse_args()
+    if args.command == "load-status":
+        from app.db import engine
+        from app.load_status import run_load_status
+        try:
+            raise SystemExit(run_load_status(
+                engine, wait=args.wait, import_ids=args.import_id, timeout=args.timeout))
+        except (ValueError, RuntimeError) as exc:
+            raise SystemExit(str(exc)) from exc
     if args.command == "benchmark":
         try:
             raise SystemExit(run_benchmark(args))
@@ -99,9 +115,9 @@ def main():
             print(f"  ground_truth.json: {result['record_count']:,} record mappings")
             print(f"Ground truth: {result['ground_truth']}")
             if args.load:
-                load_generated_files(result["files"])
+                import_ids = load_generated_files(result["files"])
                 print("CSV files submitted through app.importer.import_seed_files.")
-                _compute_seed_traits()
+                _compute_seed_traits(import_ids)
                 print("Computed profile traits and backfilled 24 monthly snapshots.")
         except (ValueError, RuntimeError) as exc:
             raise SystemExit(str(exc)) from exc

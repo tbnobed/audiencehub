@@ -10,7 +10,8 @@ services:
     command: >-
       postgres -c shared_buffers=8GB -c effective_cache_size=24GB
       -c work_mem=64MB -c maintenance_work_mem=1GB
-      -c max_wal_size=8GB -c random_page_cost=1.1 -c jit=off
+      -c checkpoint_timeout=15min -c max_wal_size=16GB -c wal_compression=on
+      -c random_page_cost=1.1 -c jit=off
       -c max_locks_per_transaction=1024
     volumes: [pgdata:/var/lib/postgresql/data]
     healthcheck:

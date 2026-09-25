@@ -509,7 +509,7 @@ def generate_seed(profiles: int = 50_000, scale: str = "small",
     }
 
 
-def load_generated_files(files: dict[str, Path]) -> None:
+def load_generated_files(files: dict[str, Path]) -> list[int]:
     """Call the documented real-importer hook, or fail explicitly if absent."""
     import importlib
     import importlib.util
@@ -526,4 +526,4 @@ def load_generated_files(files: dict[str, Path]) -> None:
             "--load requested, but app.importer.import_seed_files(files: Mapping[str, Path]) "
             "is not callable."
         )
-    hook(files)
+    return hook(files)

@@ -165,7 +165,7 @@ def _measure(directory: Path, gift_rows: int, contact_rows: int, profile: bool) 
 
 
 def run_benchmark(args) -> int:
-    if not args.imports and not getattr(args, "overview", False):
+    if not args.imports and not getattr(args, "overview", False) and not getattr(args, "dashboards", False):
         raise ValueError("Specify --imports to explicitly start an isolated synthetic benchmark.")
     if os.environ.get("APP_ENV", "").lower() == "production":
         raise ValueError("Benchmark is forbidden when APP_ENV=production.")
@@ -213,6 +213,7 @@ def run_benchmark(args) -> int:
                         "upgrade", "head"], cwd=backend, env=env, check=True)
         if args.test_suite:
             env["AH_WORKER_RECOVERY_TEST_DATABASE_URL"] = env["DATABASE_URL"]
+            env["CONSENT_TEST_DATABASE_URL"] = env["DATABASE_URL"]
             env["KINSHIP_BENCHMARK_ISOLATED_TESTS"] = "1"
             with (directory / "pytest.txt").open("w") as output:
                 test_result = subprocess.run(
@@ -221,6 +222,13 @@ def run_benchmark(args) -> int:
             print(f"Isolated test suite exit={test_result.returncode}: {directory / 'pytest.txt'}",
                   flush=True)
             return test_result.returncode
+        if getattr(args, "dashboards", False):
+            subprocess.run([sys.executable, "-c",
+                "from pathlib import Path; from app.dashboards.scale_benchmark import measure; "
+                f"measure(Path({str(directory)!r}), {args.profiles})"],
+                cwd=backend, env=env, check=True)
+            report = json.loads((directory / "dashboards.json").read_text())
+            return 0 if report["target_pass"] else 1
         if getattr(args, "overview", False):
             subprocess.run([sys.executable, "-c",
                 "from pathlib import Path; from app.dashboards.benchmark import measure; "
@@ -244,6 +252,8 @@ def run_benchmark(args) -> int:
 
 
 def add_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--dashboards", action="store_true", help="Measure every dashboard in disposable PostgreSQL, no browser.")
+    parser.add_argument("--profiles", type=int, default=500_000, help="Dashboard benchmark population (default 500000).")
     parser.add_argument("--overview", action="store_true", help="Isolated overview scale benchmark.")
     parser.add_argument("--imports", action="store_true", help="Explicitly run isolated import benchmark.")
     parser.add_argument("--rows", type=int, help="Override both row counts.")

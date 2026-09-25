@@ -116,8 +116,13 @@ def test_identity_handler_commits_underfull_groups_and_only_stops_at_empty(monke
 
     monkeypatch.setattr("sqlalchemy.orm.Session", BatchSession)
     monkeypatch.setattr("app.identity.resolver.resolve_batch", resolve)
+    enqueued = []
+    monkeypatch.setattr("app.jobs.queue.enqueue",
+                        lambda db, kind, payload, **kw: enqueued.append((kind, payload, kw)))
     run("identity.resolve_batch", {"limit": 10_000}, job_id=42)
-    assert calls == [2, "commit", 1, "commit", 0, "commit"]
+    assert calls == [2, "commit", 1, "commit", 0, "commit", "commit"]
+    assert enqueued == [("traits.recompute", {"mode": "full"},
+                          {"dedupe_key": "traits:after-identity:42"})]
 
 
 def test_large_connected_component_resumes_in_bounded_groups():

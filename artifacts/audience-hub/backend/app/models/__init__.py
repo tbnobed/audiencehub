@@ -113,3 +113,4 @@ from app.models.milestone2 import (  # noqa: E402,F401
     TraitSnapshot,
     TraitDirtyProfile,
 )
+from app.models.dashboard import DashboardDaily, DashboardKPI, DashboardCache

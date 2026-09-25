@@ -16,6 +16,9 @@ DATA_TABLES = (
     "trait_snapshots", "trait_dirty_profiles", "segment_membership",
     "segment_counts", "segments", "activation_runs", "activations",
     "destinations", "deletion_requests",
+    "dashboard_daily", "dashboard_donor_daily", "dashboard_donor_patterns",
+    "dashboard_giving_daily", "dashboard_event_daily", "dashboard_conversion_daily",
+    "dashboard_kpis", "dashboard_cache",
 )
 RETAINED_TABLES = (
     "users", "sources", "enrichment_attributes", "admin_settings",

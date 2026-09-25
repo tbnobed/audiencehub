@@ -10,6 +10,7 @@ export type ImportJob = {
   rows_total: number;
   rows_ok: number;
   rows_rejected: number;
+  rejected_report_reviewed?: boolean;
   last_committed_record_number?: number;
   warning_count?: number;
   job_error?: string | null;

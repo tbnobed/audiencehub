@@ -1,4 +1,5 @@
 from datetime import timedelta
+from uuid import uuid4
 from sqlalchemy import func, select, update, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
@@ -11,10 +12,12 @@ def enqueue(db: Session, job_type: str, payload: dict | None = None, *,
         existing = db.scalar(select(Job).where(Job.dedupe_key == dedupe_key, Job.status.in_(("queued", "running"))))
         if existing:
             return existing
+    # Match the migration's partial index literally: bound status values cannot
+    # imply its predicate when PostgreSQL selects a generic prepared plan.
     stmt = insert(Job).values(type=job_type, payload=payload or {}, dedupe_key=dedupe_key,
                               priority=priority, max_attempts=max_attempts).on_conflict_do_nothing(
                                   index_elements=[Job.dedupe_key],
-                                  index_where=Job.status.in_(("queued", "running"))).returning(Job.id)
+                                  index_where=text("status IN ('queued', 'running')")).returning(Job.id)
     while True:
         job_id = db.scalar(stmt)
         if job_id is not None:
@@ -25,6 +28,25 @@ def enqueue(db: Session, job_type: str, payload: dict | None = None, *,
             return existing
         # READ COMMITTED: the conflicting job may finish between INSERT and
         # SELECT, leaving no active row. Retry INSERT rather than return None.
+
+
+def startup_selfcheck(bind) -> None:
+    """Exercise index inference without ever publishing runnable work.
+
+    A fresh key guarantees INSERT is exercised, not the fast-path SELECT.
+    Cancel and flush in the same uncommitted transaction, then roll back all
+    probe data. Other sessions (including workers) can never see the noop.
+    Errors deliberately propagate and prevent API startup.
+    """
+    with Session(bind) as db:
+        try:
+            job = enqueue(db, "noop", {"seconds": 0},
+                          dedupe_key=f"startup-selfcheck:{uuid4().hex}")
+            job.status = "cancelled"
+            job.finished_at = now()
+            db.flush()
+        finally:
+            db.rollback()
 
 
 def claim(db: Session) -> Job | None:

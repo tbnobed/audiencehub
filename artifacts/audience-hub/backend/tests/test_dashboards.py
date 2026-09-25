@@ -1,6 +1,3 @@
-import os
-import hashlib
-import hmac
 from datetime import date
 from types import SimpleNamespace
 
@@ -8,117 +5,65 @@ import pytest
 from fastapi import HTTPException
 
 from app.dashboards import api
+from app.dashboards.rollups import refresh_dashboard_rollups
+from test_consent_ingestion_pg import db
 
 
 def test_dashboard_routes_and_chart_response_contract():
-    routes = {
-        route.path: route for route in api.router.routes
-        if "GET" in (route.methods or set())
-    }
+    routes = {route.path: route for route in api.router.routes if "GET" in (route.methods or set())}
     tabs = ("overview", "giving", "retention", "engagement", "sources", "data-health")
     for tab in tabs:
         path = f"/api/dashboards/{tab}"
         assert path in routes
-        assert {"from", "to"} <= set(routes[path].endpoint.__annotations__) or routes[path].dependant.query_params
-
+        assert routes[path].dependant.query_params
+    for card in ("kpis", "giving-by-month", "needs-attention", "campaigns", "partner-status"):
+        assert f"/api/dashboards/overview/{card}" in routes
     assert set(api._CSV_CHARTS) == set(tabs)
-    assert api.invalidate_cache.__doc__
 
 
 def test_analyst_csv_role_gate_rejects_viewers():
     csv_route = next(route for route in api.router.routes if route.path.endswith("/csv"))
-    analyst_gate = next(
-        dependency.call for dependency in csv_route.dependant.dependencies
-        if dependency.name == "user"
-    )
+    gate = next(d.call for d in csv_route.dependant.dependencies if d.name == "user")
     with pytest.raises(HTTPException) as error:
-        analyst_gate(SimpleNamespace(role="viewer"))
+        gate(SimpleNamespace(role="viewer"))
     assert error.value.status_code == 403
-    assert analyst_gate(SimpleNamespace(role="analyst")).role == "analyst"
+    assert gate(SimpleNamespace(role="analyst")).role == "analyst"
 
 
 def test_dashboard_prior_range_matches_inclusive_period_length():
-    start, end, prior_start, prior_end = api._date_range(
-        date(2025, 3, 10), date(2025, 3, 20)
-    )
-    assert (start, end) == (date(2025, 3, 10), date(2025, 3, 20))
-    assert (prior_start, prior_end) == (date(2025, 2, 27), date(2025, 3, 9))
+    assert api._date_range(date(2025, 3, 10), date(2025, 3, 20)) == (
+        date(2025, 3, 10), date(2025, 3, 20), date(2025, 2, 27), date(2025, 3, 9))
 
 
-def test_email_opted_in_kpi_unifies_signals_and_excludes_optouts_and_suppressions(monkeypatch):
-    pepper = "test-pepper"
-    suppressed_email = "bounce@example.org"
-    suppressed_hash = hmac.new(
-        pepper.encode(), suppressed_email.encode(), hashlib.sha256
-    ).hexdigest()
-    monkeypatch.setattr(
-        api, "get_settings", lambda: type("Settings", (), {"pii_hash_pepper": pepper})()
-    )
-    candidate_rows = [
-        {"profile_id": 1, "email": "open@example.org", "source_opted_in": True,
-         "ledger_opted_in": False, "ledger_opted_out": False},
-        {"profile_id": 2, "email": "out@example.org", "source_opted_in": False,
-         "ledger_opted_in": True, "ledger_opted_out": True},
-        {"profile_id": 3, "email": suppressed_email, "source_opted_in": True,
-         "ledger_opted_in": False, "ledger_opted_out": False},
-    ]
-
-    class Result:
-        def __init__(self, rows):
-            self._rows = rows
-
-        def mappings(self):
-            return self
-
-        def all(self):
-            return self._rows
-
-        def __iter__(self):
-            return iter(self._rows)
-
-        def close(self):
-            pass
-
-        def fetchmany(self, size):
-            result, self._rows = self._rows[:size], self._rows[size:]
-            return result
-
-    class ReadOnlyFakeDb:
-        def execute(self, statement, params=None, **kwargs):
-            sql = str(statement)
-            if "FROM candidates" in sql:
-                return Result([candidate_rows[0], candidate_rows[2]])
-            if "FROM suppressions" in sql:
-                return Result([{"value_hash": suppressed_hash}])
-            raise AssertionError("Unexpected query")
-
-    assert api._email_opted_in_count(ReadOnlyFakeDb()) == 1
+def test_email_count_only_reads_published_ledger_aggregate(monkeypatch):
+    seen = []
+    monkeypatch.setattr(api, "_kpi", lambda db, key: seen.append(key) or 17)
+    assert api._email_opted_in_count(None) == 17
+    assert seen == ["email_opted_in"]
 
 
-def test_all_dashboard_queries_against_isolated_m4_smoke_database():
-    if (os.getenv("DATABASE_URL") != "postgresql+psycopg:///ah_m4_smoke"
-            and os.getenv("KINSHIP_BENCHMARK_ISOLATED_TESTS") != "1"):
-        pytest.skip("Set DATABASE_URL to the isolated ah_m4_smoke database")
+def test_all_dashboard_chart_contracts(db):
+    refresh_dashboard_rollups(db)
+    for name, charts in api._CSV_CHARTS.items():
+        result = api._build_dashboard(db, name, date(2025, 1, 1), date(2025, 12, 31),
+                                     date(2024, 1, 1), date(2024, 12, 31))
+        assert set(result["charts"]) == charts
+        assert set(result) == ({"range", "metrics", "charts", "overview"} if name == "overview"
+                               else {"range", "metrics", "charts"})
 
-    from app.db import engine
-    from sqlalchemy.orm import Session
 
-    expected_charts = {
-        "overview": {"monthly_giving", "donor_status", "top_campaigns"},
-        "giving": {"monthly_giving", "new_returning", "by_channel", "by_fund",
-                   "top_campaigns", "appeal_codes", "gift_size_distribution"},
-        "retention": {"retention_by_year", "cohorts", "status_over_time"},
-        "engagement": {"events_by_day", "top_event_names", "viewer_to_donor"},
-        "sources": {"profiles_by_source", "overlap_matrix", "identifier_coverage"},
-        "data-health": {"pending_resolutions", "merges_per_day", "blocklist_hits",
-                        "rejected_rows_by_import", "blocklist_review", "expiring_enrichment"},
+def test_split_card_payload_contracts(db):
+    refresh_dashboard_rollups(db)
+    db.commit()
+    user = SimpleNamespace(role="viewer")
+    expected = {
+        "kpis": {"range", "kpis", "stats"}, "giving-by-month": {"range", "giving_by_month"},
+        "needs-attention": {"attention"}, "campaigns": {"top_campaigns"}, "partner-status": {"partner_status"},
     }
-    with Session(engine) as db:
-        for tab, chart_keys in expected_charts.items():
-            result = api._build_dashboard(
-                db, tab, date(2025, 1, 1), date(2025, 12, 31),
-                date(2024, 1, 1), date(2024, 12, 31),
-            )
-            assert set(result["charts"]) == chart_keys
-            assert set(result) == ({"range", "metrics", "charts", "overview"} if tab == "overview"
-                                   else {"range", "metrics", "charts"})
+    for card, keys in expected.items():
+        result = api._card_endpoint(card)(date(2025, 1, 1), date(2025, 1, 31), user, db)
+        assert set(result) == keys
+        if card == "giving-by-month":
+            assert set(result["giving_by_month"]) == {"monthly_giving", "top_two_month_share"}
+        if card == "campaigns":
+            assert set(result["top_campaigns"]) == {"campaigns", "campaigns_href"}

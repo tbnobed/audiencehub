@@ -245,6 +245,8 @@ def recompute_traits(db: Session, *, as_of: date | None = None,
         """))
     if write_snapshot:
         db.execute(_SNAPSHOT_SQL, {"as_of": pinned_date})
+    from app.dashboards.rollups import refresh_dashboard_rollups
+    refresh_dashboard_rollups(db, as_of=pinned_date)
     return updated
 
 

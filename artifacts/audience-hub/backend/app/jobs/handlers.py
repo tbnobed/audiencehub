@@ -17,6 +17,13 @@ def run(job_type: str, payload: dict, job_id: int | None = None) -> None:
                 # Underfull groups are not EOF; every call has its own commit.
                 if result["records"] == 0:
                     break
+            # Publish fresh rollups only after the import's identity queue has
+            # drained. The identity job id prevents a running earlier refresh
+            # from swallowing this later completion.
+            from app.jobs.queue import enqueue
+            enqueue(db, "traits.recompute", {"mode": "full"},
+                    dedupe_key=f"traits:after-identity:{job_id}")
+            db.commit()
         return
     if job_type == "traits.recompute":
         from sqlalchemy import text

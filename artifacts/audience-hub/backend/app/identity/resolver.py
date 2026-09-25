@@ -267,6 +267,8 @@ def _materialize_source_attributes_batch(db: Session, assignments: list[tuple[di
                   source_id=EXCLUDED.source_id, captured_at=EXCLUDED.captured_at,
                   evidence=EXCLUDED.evidence
                 WHERE (EXCLUDED.status='opted_out' AND consents.status <> 'opted_out')
+                   OR (consents.status <> 'opted_out'
+                       AND consents.captured_at < EXCLUDED.captured_at)
                    OR (EXCLUDED.status=consents.status
                        AND consents.captured_at < EXCLUDED.captured_at)
             """),

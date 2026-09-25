@@ -29,6 +29,21 @@ export type OverviewPayload = {
   attention: { severity: 'error' | 'warning' | 'notice' | 'healthy'; title: string; explanation: string; href: string | null }[];
 };
 export type DashboardSettings = { fiscal_year_start_month: number };
+export type OverviewCards = {
+  kpis: { range: DashboardPayload['range'] } & Pick<OverviewPayload, 'kpis' | 'stats'>;
+  'giving-by-month': { range: DashboardPayload['range']; giving_by_month: Pick<OverviewPayload, 'monthly_giving' | 'top_two_month_share'> };
+  'needs-attention': Pick<OverviewPayload, 'attention'>;
+  campaigns: { top_campaigns: Pick<OverviewPayload, 'campaigns' | 'campaigns_href'> };
+  'partner-status': Pick<OverviewPayload, 'partner_status'>;
+};
+
+export function useOverviewCard<K extends keyof OverviewCards>(card: K, from: string, to: string) {
+  return useQuery({
+    queryKey: ['dashboard', 'overview', card, from, to],
+    queryFn: ({ signal }) => fetchApi(`/api/dashboards/overview/${card}?${new URLSearchParams({ from, to })}`, { signal }) as Promise<OverviewCards[K]>,
+    staleTime: 60_000, retry: false, retryOnMount: false, refetchOnWindowFocus: false,
+  });
+}
 
 async function fetchDashboardSettings(signal: AbortSignal): Promise<DashboardSettings> {
   const settings = await fetchApi('/api/dashboards/settings', { signal }) as DashboardSettings;
@@ -40,7 +55,7 @@ async function fetchDashboardSettings(signal: AbortSignal): Promise<DashboardSet
 
 export function useDashboard(name: DashboardName, from: string, to: string, enabled = true) {
   return useQuery({
-    enabled,
+    enabled: enabled && name !== 'overview',
     queryKey: ['dashboard', name, from, to],
     queryFn: ({ signal }) => fetchApi(`/api/dashboards/${name}?${new URLSearchParams({ from, to })}`, { signal }) as Promise<DashboardPayload>,
     staleTime: 60_000,

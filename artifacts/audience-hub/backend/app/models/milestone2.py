@@ -204,6 +204,7 @@ Index("ix_events_profile_occurred", Event.profile_id, Event.occurred_at.desc())
 
 class Consent(Base):
     __tablename__ = "consents"
+    __table_args__ = (Index("ix_consents_channel_status", "channel", "status"),)
     profile_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("profiles.id"), primary_key=True)
     channel: Mapped[str] = mapped_column(Text, primary_key=True)
     status: Mapped[str] = mapped_column(Text, nullable=False)

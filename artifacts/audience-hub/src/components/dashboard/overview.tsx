@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom';
 import { ArrowRight, BarChart3 } from 'lucide-react';
 import { Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import type { DeltaMetric, KpiMetric, OverviewPayload } from '@/hooks/use-dashboards';
+import { useOverviewCard, type DeltaMetric, type KpiMetric } from '@/hooks/use-dashboards';
 import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
 import { millionsTick } from '@/lib/date-range';
@@ -66,21 +66,35 @@ function monthDelta(m: DeltaMetric) {
   return `${m.change > 0 ? '▲' : '▼'} ${nf.format(Math.abs(m.change))} this month`;
 }
 
-export function OverviewView({ data, canImport, onWiden, periodNoun }: { data: OverviewPayload; canImport: boolean; onWiden: () => void; periodNoun: string }) {
-  const { kpis, stats } = data;
-  const ret = kpis.retention_yoy;
-  const months = data.monthly_giving.map(r => ({ ...r, label: monthShort(r.month), holiday: ['11', '12'].includes(r.month.slice(5, 7)) }));
-  const hasMonthly = months.some(m => m.amount > 0 || m.prior_amount > 0);
-  const maxY = Math.max(...months.map(m => Math.max(m.amount, m.prior_amount)), 0);
-  const top2 = [...months].sort((a, b) => b.amount - a.amount).slice(0, 2).filter(m => m.amount > 0).sort((a, b) => a.month.localeCompare(b.month));
-  const takeaway = data.top_two_month_share != null && top2.length === 2 && months.length > 2
-    ? `${top2[0].label} and ${top2[1].label} brought in ${data.top_two_month_share.toFixed(1)}% of giving in this period.`
-    : null;
-  const statusColor: Record<string, string> = { active: 'var(--signal)', new: 'var(--ok)', reactivated: 'var(--kin-chart-4)', lapsing: 'var(--warn)', lapsed: 'var(--line-strong)' };
-  const sev = { error: { c: 'var(--danger)', t: 'Error' }, warning: { c: 'var(--warn)', t: 'Warning' }, notice: { c: 'var(--signal)', t: 'Notice' }, healthy: { c: 'var(--ok)', t: 'Healthy' } } as const;
-  const maxShare = Math.max(...data.campaigns.map(c => c.share), 0);
-  const gifts = months.reduce((s, m) => s + m.gifts, 0);
+type RangeProps = { from: string; to: string };
+type GivingProps = RangeProps & { canImport: boolean; onWiden: () => void };
 
+export function OverviewView({ from, to, canImport, onWiden, periodNoun }: GivingProps & { periodNoun: string }) {
+  return <div className="space-y-3">
+    <OverviewKpis from={from} to={to} periodNoun={periodNoun} />
+    <div className="grid grid-cols-1 xl:grid-cols-3 gap-3">
+      <MonthlyGiving from={from} to={to} canImport={canImport} onWiden={onWiden} />
+      <Attention from={from} to={to} />
+    </div>
+    <div className="grid grid-cols-1 xl:grid-cols-3 gap-3">
+      <Campaigns from={from} to={to} onWiden={onWiden} />
+      <PartnerStatus from={from} to={to} />
+    </div>
+  </div>;
+}
+
+function CardState({ query, label }: { query: { error: Error | null; isFetching: boolean; refetch: () => unknown }; label: string }) {
+  return <div className="px-4 pb-4" aria-label={label}>
+    {query.error ? <SectionError error={query.error} retry={() => query.refetch()} fetching={query.isFetching} />
+      : <div role="status" aria-label={`Loading ${label}`}><Skeleton className="h-24" /><span className="text-xs text-ink-muted">Loading {label}…</span></div>}
+  </div>;
+}
+
+function OverviewKpis({ from, to, periodNoun }: RangeProps & { periodNoun: string }) {
+  const query = useOverviewCard('kpis', from, to);
+  if (!query.data || query.isError) return <Panel title="Key metrics"><CardState query={query} label="key metrics and audience stats" /></Panel>;
+  const { kpis, stats } = query.data;
+  const ret = kpis.retention_yoy;
   const strip = [
     { label: 'Profiles', value: nf.format(stats.profiles.value), sub: 'Current active profiles', cls: 'text-ink-muted' },
     { label: 'Recurring partners', value: nf.format(stats.recurring_partners.value), sub: monthDelta(stats.recurring_partners), cls: stats.recurring_partners.change > 0 ? 'text-ok' : stats.recurring_partners.change < 0 ? 'text-danger' : 'text-ink-muted' },
@@ -94,19 +108,31 @@ export function OverviewView({ data, canImport, onWiden, periodNoun }: { data: O
       <KpiTile label="Active partners" m={kpis.active_partners} value={nf.format(kpis.active_partners.value)} format={n => nf.format(n)} note="Gave at least once in this period" />
       <KpiTile label="Partner retention" m={ret} value={ret.denominator === 0 ? '—' : `${ret.value.toFixed(1)}%`} format={n => `${n.toFixed(1)}%`}
         note={ret.denominator === 0 ? 'No prior-year partners to measure' : `${nf.format(ret.retained)} of ${nf.format(ret.denominator)} last-year partners gave again`} />
-      <KpiTile label="Average gift" m={kpis.average_gift} value={money(kpis.average_gift.value)} format={money} note={`${nf.format(gifts)} gifts`} />
+      <KpiTile label="Average gift" m={kpis.average_gift} value={money(kpis.average_gift.value)} format={money} note={`${money(kpis.average_gift.prior)} the prior ${periodNoun}`} />
     </div>
 
     <section aria-label="Audience stats" className="rounded-lg border border-line bg-surface grid grid-cols-2 lg:grid-cols-4">
       {strip.map((s, i) => <div key={s.label} className={cn('px-4 py-3 min-w-0', i > 0 && 'lg:border-l border-line', i % 2 === 1 && 'border-l', i >= 2 && 'border-t lg:border-t-0')}>
         <div className="text-xs text-ink-muted">{s.label}</div>
-        <div className="font-mono tabular-nums text-lg text-ink mt-0.5">{s.value}</div>
+        <div className="font-mono tabular-nums text-lg text-ink mt-0.5 break-words">{s.value}</div>
         <div className={cn('text-[11px] font-mono tabular-nums mt-0.5 truncate', s.cls)}>{s.sub}</div>
       </div>)}
     </section>
+  </div>;
+}
 
-    <div className="grid grid-cols-1 xl:grid-cols-3 gap-3">
-      <Panel title="Giving by month" className="xl:col-span-2" meta={hasMonthly && <span className="flex items-center gap-3">
+function MonthlyGiving({ from, to, canImport, onWiden }: GivingProps) {
+  const query = useOverviewCard('giving-by-month', from, to);
+  if (!query.data || query.isError) return <Panel title="Giving by month" className="xl:col-span-2"><CardState query={query} label="giving by month" /></Panel>;
+  const data = query.data.giving_by_month;
+  const months = data.monthly_giving.map(r => ({ ...r, label: monthShort(r.month), holiday: ['11', '12'].includes(r.month.slice(5, 7)) }));
+  const hasMonthly = months.some(m => m.amount > 0 || m.prior_amount > 0);
+  const maxY = Math.max(...months.map(m => Math.max(m.amount, m.prior_amount)), 0);
+  const top2 = [...months].sort((a, b) => b.amount - a.amount).slice(0, 2).filter(m => m.amount > 0).sort((a, b) => a.month.localeCompare(b.month));
+  const takeaway = data.top_two_month_share != null && top2.length === 2 && months.length > 2
+    ? `${top2[0].label} and ${top2[1].label} brought in ${data.top_two_month_share.toFixed(1)}% of giving in this period.`
+    : null;
+  return <Panel title="Giving by month" className="xl:col-span-2" meta={hasMonthly && <span className="flex items-center gap-3">
         <span className="flex items-center gap-1.5"><i className="h-2 w-2 rounded-sm bg-signal" />This period</span>
         <span className="flex items-center gap-1.5"><i className="h-2 w-2 rounded-sm" style={{ background: 'color-mix(in srgb, var(--line-strong) 55%, transparent)' }} />Prior period</span>
       </span>}>
@@ -130,12 +156,19 @@ export function OverviewView({ data, canImport, onWiden, periodNoun }: { data: O
               </ResponsiveContainer>
             </div>
           </div>}
-      </Panel>
+      </Panel>;
+}
 
-      <Panel title="Needs attention" meta={data.attention.length > 0 && `${data.attention.length} ${data.attention.length === 1 ? 'item' : 'items'}`}>
-        {!data.attention.length ? <EmptyLine text="Nothing needs attention right now." />
+function Attention({ from, to }: RangeProps) {
+  const query = useOverviewCard('needs-attention', from, to);
+  if (!query.data || query.isError) return <Panel title="Needs attention"><CardState query={query} label="needs attention" /></Panel>;
+  const ranks = { error: 0, warning: 1, notice: 2, healthy: 3 };
+  const attentionItems = [...query.data.attention].sort((a, b) => ranks[a.severity] - ranks[b.severity]);
+  const sev = { error: { c: 'var(--danger)', t: 'Error' }, warning: { c: 'var(--warn)', t: 'Warning' }, notice: { c: 'var(--signal)', t: 'Notice' }, healthy: { c: 'var(--ok)', t: 'Healthy' } } as const;
+  return <Panel title="Needs attention">
+        {!attentionItems.length ? <EmptyLine text="Nothing needs attention right now." />
           : <ul className="px-2 pb-2">
-            {data.attention.map((a, i) => <li key={i} className="flex gap-3 rounded-md px-2 py-2.5 border-t border-line first:border-t-0">
+            {attentionItems.slice(0, 5).map((a, i) => <li key={i} className="flex gap-3 rounded-md px-2 py-2.5 border-t border-line first:border-t-0">
               <span className="w-[3px] shrink-0 rounded-full" style={{ background: sev[a.severity].c }} aria-hidden />
               <div className="min-w-0 flex-1">
                 <div className="text-[13px] text-ink leading-5"><span className="font-mono text-[10px] tracking-wider mr-2" style={{ color: sev[a.severity].c }}>{sev[a.severity].t.toUpperCase()}</span>{a.title}</div>
@@ -144,11 +177,15 @@ export function OverviewView({ data, canImport, onWiden, periodNoun }: { data: O
               </div>
             </li>)}
           </ul>}
-      </Panel>
-    </div>
+      </Panel>;
+}
 
-    <div className="grid grid-cols-1 xl:grid-cols-3 gap-3">
-      <Panel title="Top campaigns" className="xl:col-span-2" meta={<Link to={data.campaigns_href} className="inline-flex items-center gap-1 text-signal hover:underline">All campaigns <ArrowRight size={12} strokeWidth={1.75} /></Link>}>
+function Campaigns({ from, to, onWiden }: RangeProps & { onWiden: () => void }) {
+  const query = useOverviewCard('campaigns', from, to);
+  if (!query.data || query.isError) return <Panel title="Top campaigns" className="xl:col-span-2"><CardState query={query} label="top campaigns" /></Panel>;
+  const data = query.data.top_campaigns;
+  const maxShare = Math.max(...data.campaigns.map(c => c.share), 0);
+  return <Panel title="Top campaigns" className="xl:col-span-2" meta={<Link to={data.campaigns_href} className="inline-flex items-center gap-1 text-signal hover:underline">All campaigns <ArrowRight size={12} strokeWidth={1.75} /></Link>}>
         {!data.campaigns.length ? <EmptyLine text="No campaign giving in this range." action={<button type="button" onClick={onWiden} className="text-signal hover:underline">Try the last 12 months</button>} />
           : <div className="overflow-x-auto px-4 pb-3">
             <table className="w-full text-[13px]">
@@ -171,9 +208,15 @@ export function OverviewView({ data, canImport, onWiden, periodNoun }: { data: O
               </tr>)}</tbody>
             </table>
           </div>}
-      </Panel>
+      </Panel>;
+}
 
-      <Panel title="Partner status" meta={`${nf.format(data.partner_status.givers)} givers`}>
+function PartnerStatus({ from, to }: RangeProps) {
+  const query = useOverviewCard('partner-status', from, to);
+  if (!query.data || query.isError) return <Panel title="Partner status"><CardState query={query} label="partner status" /></Panel>;
+  const data = query.data;
+  const statusColor: Record<string, string> = { active: 'var(--signal)', new: 'var(--ok)', reactivated: 'var(--kin-chart-4)', lapsing: 'var(--warn)', lapsed: 'var(--line-strong)' };
+  return <Panel title="Partner status" meta={`${nf.format(data.partner_status.givers)} givers`}>
         <div className="px-4 pb-4">
           {data.partner_status.givers === 0 ? <p className="text-xs text-ink-muted py-1">No partners have given through this date.</p> : <>
             <div className="flex h-2.5 rounded-full overflow-hidden gap-[2px]" role="img" aria-label={data.partner_status.statuses.map(s => `${s.status} ${s.share.toFixed(1)}%`).join(', ')}>
@@ -193,8 +236,13 @@ export function OverviewView({ data, canImport, onWiden, periodNoun }: { data: O
             <span className="font-mono tabular-nums text-ink">{nf.format(data.partner_status.prospects)}</span>
           </div>
         </div>
-      </Panel>
-    </div>
+      </Panel>;
+}
+
+function SectionError({ error, retry, fetching }: { error: Error; retry: () => void; fetching: boolean }) {
+  return <div role="alert" className="text-xs font-sans text-danger whitespace-normal">
+    <span>{error.message}</span>{' '}
+    <button type="button" disabled={fetching} onClick={retry} className="text-signal underline disabled:opacity-50">{fetching ? 'Retrying…' : 'Retry'}</button>
   </div>;
 }
 

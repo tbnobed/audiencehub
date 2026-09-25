@@ -358,7 +358,17 @@ def _upsert_source_records(db: Session, source_id: int, import_id: int,
                            profiles: dict[int, int | None] | None = None) -> dict[str, int]:
     if not records:
         return {}
-    records = list({row["external_id"]: row for row in records}.values())
+    by_external_id = {}
+    for row in records:
+        previous = by_external_id.get(row["external_id"])
+        if previous:
+            consent = previous["attributes"].get("_import_consent", {})
+            if consent.get("status") == "opted_out":
+                row = {**row, "attributes": {
+                    **row["attributes"], "_import_consent": consent,
+                }}
+        by_external_id[row["external_id"]] = row
+    records = list(by_external_id.values())
     statement = """
         INSERT INTO source_records
           (source_id, external_id, profile_id, email_norm, phone_e164, first_name, last_name,
@@ -373,7 +383,11 @@ def _upsert_source_records(db: Session, source_id: int, import_id: int,
           first_name=EXCLUDED.first_name, last_name=EXCLUDED.last_name,
           address1=EXCLUDED.address1, address2=EXCLUDED.address2, city=EXCLUDED.city,
           region=EXCLUDED.region, postal_code=EXCLUDED.postal_code, country=EXCLUDED.country,
-          attributes=EXCLUDED.attributes, raw_hash=EXCLUDED.raw_hash,
+          attributes=CASE
+            WHEN source_records.attributes #>> '{_import_consent,status}' = 'opted_out'
+            THEN EXCLUDED.attributes || jsonb_build_object(
+              '_import_consent', source_records.attributes->'_import_consent')
+            ELSE EXCLUDED.attributes END, raw_hash=EXCLUDED.raw_hash,
           last_import_id=EXCLUDED.last_import_id, updated_at=now()
         WHERE source_records.raw_hash IS DISTINCT FROM EXCLUDED.raw_hash
         RETURNING external_id, id, profile_id
@@ -554,9 +568,14 @@ def _upsert_consents(db: Session, source_id: int, records: list[dict[str, Any]])
         }
         key = (item["profile_id"], item["channel"])
         previous = latest.get(key)
-        if not previous or item["captured_at"] > previous["captured_at"] or (
-                item["captured_at"] == previous["captured_at"]
-                and item["status"] == "opted_out" and previous["status"] != "opted_out"):
+        if not previous or (
+                item["status"] == "opted_out" and previous["status"] != "opted_out"
+        ) or (
+                previous["status"] != "opted_out"
+                and item["captured_at"] > previous["captured_at"]
+        ) or (
+                item["status"] == previous["status"]
+                and item["captured_at"] > previous["captured_at"]):
             latest[key] = item
     params = list(latest.values())
     if not params:
@@ -567,9 +586,9 @@ def _upsert_consents(db: Session, source_id: int, records: list[dict[str, Any]])
         FROM {stage} WHERE true
         ON CONFLICT (profile_id, channel) DO UPDATE SET status=EXCLUDED.status,
           source_id=EXCLUDED.source_id, captured_at=EXCLUDED.captured_at, evidence=EXCLUDED.evidence
-        WHERE consents.captured_at < EXCLUDED.captured_at
-           OR (consents.captured_at = EXCLUDED.captured_at
-               AND EXCLUDED.status='opted_out' AND consents.status <> 'opted_out')
+        WHERE (EXCLUDED.status='opted_out' AND consents.status <> 'opted_out')
+           OR (consents.status <> 'opted_out' AND consents.captured_at < EXCLUDED.captured_at)
+           OR (EXCLUDED.status=consents.status AND consents.captured_at < EXCLUDED.captured_at)
     """, params, """
         profile_id bigint, channel text, status text, source_id bigint,
         captured_at timestamptz, evidence jsonb

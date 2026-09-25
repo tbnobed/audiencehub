@@ -20,6 +20,27 @@ Successful imports enqueue `identity.resolve_batch`. The resolver links source r
 
 ## Computed traits (M4)
 
+### Consent decisions
+
+Dashboard email consent counts use only `consents`, never email presence or profile
+attributes. Contact imports recognize `email_consent` (`opted_in`, `opted_out`,
+`unknown`) and optional ISO `consent_captured_at`; the existing
+`attributes.email_consent` mapping is also supported. Blank/missing consent does
+not manufacture permission; invalid nonblank statuses reject the row. ESP consent
+imports use the same status vocabulary with an explicit channel and capture time.
+Imported consent is materialized when identity resolution assigns the source record
+to a profile. Hard bounces and email suppressions produce email `opted_out`.
+An explicit opt-out wins over any opt-in, regardless of timestamp, in imports and
+identity merges. Reimporting a newer opt-in cannot reauthorize an opted-out profile.
+For other status changes the newer observation wins. These ingestion rules are not
+a reconsent authorization mechanism. The channel/status index is migration
+`0021_consent_channel_status`, following `0020_dashboard_rollups`.
+That deployment migration also backfills resolved historical contact consent
+attributes and hard bounces (the previous resolver materialized only
+`_import_consent`). It never infers opt-in from email presence, preserves existing
+consents except to apply an explicit opt-out, and records source-update time as
+the timestamp basis in evidence. Refresh dashboard rollups after migration.
+
 `GET /api/profiles` includes a `traits` object on each profile list item, and accepts `donor_status=prospect|new|active|reactivated|lapsing|lapsed`. `GET /api/profiles/{id}` returns the same computed values under `traits`; `GET /api/traits` returns the trait key, label, type, and description catalog. Trait SQL recomputes with one set-based upsert and a pinned database date. Resolution dirties profiles for an incremental refresh after a ten-minute quiet period; the worker also queues one full refresh nightly. A full refresh records the month's first snapshot and fills up to 24 months of historical `trait_snapshots` from dated gifts. `seed --load` waits for identity resolution, computes traits, and performs the historical snapshot backfill.
 
 For a reproducible acceptance report, run `python scripts/identity_acceptance.py --ground-truth .data/uploads/seed-data/ground_truth.json` from this directory with `DATABASE_URL` pointing to the same **isolated** database used for the seed load (adjust the path if `UPLOAD_DIR` or `--output-dir` differs). It compares ground truth with active resolved profiles and includes import metrics. Use a clean disposable database when measuring accuracy or performance; do not clear a database used by the running application.

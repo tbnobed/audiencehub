@@ -42,7 +42,7 @@ export function Sidebar() {
   if (!user) return null;
   const role = user.role;
   const running = shell?.imports_running ?? 0;
-  const issues = shell?.open_issues ?? 0;
+  const issues = shell?.open_issues;
   const active = shell?.active_import ?? null;
 
   return (
@@ -66,7 +66,9 @@ export function Sidebar() {
                   const isActive = location === item.path || (item.path !== '/' && location.startsWith(`${item.path}/`));
                   const badge = item.badge === 'imports' && shell?.imports_running != null && running > 0
                     ? { text: `${nf.format(running)} running`, short: String(running), cls: 'bg-signal-soft text-signal', label: `${running} running` }
-                    : item.badge === 'issues' && issues > 0
+                    : item.badge === 'issues' && issues == null
+                      ? { text: '—', short: '—', cls: 'bg-surface-raised text-ink-muted', label: 'Open issue count unavailable' }
+                    : item.badge === 'issues' && issues != null && issues > 0
                       ? { text: nf.format(issues), short: issues > 99 ? '99+' : String(issues), cls: 'bg-danger/15 text-danger', label: `${issues} open issues` }
                       : null;
                   const link = (

@@ -1,0 +1,210 @@
+{
+  "counts": {
+    "profiles": 500000,
+    "gifts": 2000000,
+    "source_records": 500000,
+    "consents": 500000
+  },
+  "refresh_seconds": 31.6806019379992,
+  "timings": [
+    {
+      "endpoint": "/api/dashboards/overview",
+      "cold_ms": 263.3,
+      "warm_ms": 17.05
+    },
+    {
+      "endpoint": "/api/dashboards/giving",
+      "cold_ms": 32.08,
+      "warm_ms": 6.37
+    },
+    {
+      "endpoint": "/api/dashboards/retention",
+      "cold_ms": 27.48,
+      "warm_ms": 7.34
+    },
+    {
+      "endpoint": "/api/dashboards/engagement",
+      "cold_ms": 33.69,
+      "warm_ms": 7.02
+    },
+    {
+      "endpoint": "/api/dashboards/sources",
+      "cold_ms": 158.34,
+      "warm_ms": 5.69
+    },
+    {
+      "endpoint": "/api/dashboards/data-health",
+      "cold_ms": 17.6,
+      "warm_ms": 7.14
+    },
+    {
+      "endpoint": "/api/dashboards/overview/kpis",
+      "cold_ms": 48.03,
+      "warm_ms": 6.3
+    },
+    {
+      "endpoint": "/api/dashboards/overview/giving-by-month",
+      "cold_ms": 46.93,
+      "warm_ms": 7.2
+    },
+    {
+      "endpoint": "/api/dashboards/overview/needs-attention",
+      "cold_ms": 7.71,
+      "warm_ms": 7.68
+    },
+    {
+      "endpoint": "/api/dashboards/overview/campaigns",
+      "cold_ms": 53.35,
+      "warm_ms": 10.81
+    },
+    {
+      "endpoint": "/api/dashboards/overview/partner-status",
+      "cold_ms": 55.62,
+      "warm_ms": 7.05
+    },
+    {
+      "endpoint": "/api/dashboards/overview/email",
+      "cold_ms": 6.9,
+      "warm_ms": 5.88
+    },
+    {
+      "endpoint": "/api/dashboards/overview/attention",
+      "cold_ms": 6.75,
+      "warm_ms": 8.11
+    },
+    {
+      "endpoint": "/api/dashboards/overview/primary",
+      "cold_ms": 48.04,
+      "warm_ms": 8.47
+    },
+    {
+      "endpoint": "/api/dashboards/overview/donor_status/csv",
+      "cold_ms": 49.57,
+      "warm_ms": 12.58
+    },
+    {
+      "endpoint": "/api/dashboards/overview/monthly_giving/csv",
+      "cold_ms": 47.59,
+      "warm_ms": 9.97
+    },
+    {
+      "endpoint": "/api/dashboards/overview/top_campaigns/csv",
+      "cold_ms": 46.73,
+      "warm_ms": 10.53
+    },
+    {
+      "endpoint": "/api/dashboards/giving/appeal_codes/csv",
+      "cold_ms": 34.53,
+      "warm_ms": 8.67
+    },
+    {
+      "endpoint": "/api/dashboards/giving/by_channel/csv",
+      "cold_ms": 26.88,
+      "warm_ms": 9.5
+    },
+    {
+      "endpoint": "/api/dashboards/giving/by_fund/csv",
+      "cold_ms": 28.64,
+      "warm_ms": 10.51
+    },
+    {
+      "endpoint": "/api/dashboards/giving/gift_size_distribution/csv",
+      "cold_ms": 28.61,
+      "warm_ms": 9.75
+    },
+    {
+      "endpoint": "/api/dashboards/giving/monthly_giving/csv",
+      "cold_ms": 30.05,
+      "warm_ms": 8.44
+    },
+    {
+      "endpoint": "/api/dashboards/giving/new_returning/csv",
+      "cold_ms": 33.77,
+      "warm_ms": 9.92
+    },
+    {
+      "endpoint": "/api/dashboards/giving/top_campaigns/csv",
+      "cold_ms": 34.22,
+      "warm_ms": 13.75
+    },
+    {
+      "endpoint": "/api/dashboards/retention/cohorts/csv",
+      "cold_ms": 13.87,
+      "warm_ms": 9.47
+    },
+    {
+      "endpoint": "/api/dashboards/retention/retention_by_year/csv",
+      "cold_ms": 17.81,
+      "warm_ms": 10.53
+    },
+    {
+      "endpoint": "/api/dashboards/retention/status_over_time/csv",
+      "cold_ms": 22.01,
+      "warm_ms": 10.41
+    },
+    {
+      "endpoint": "/api/dashboards/engagement/events_by_day/csv",
+      "cold_ms": 13.81,
+      "warm_ms": 9.29
+    },
+    {
+      "endpoint": "/api/dashboards/engagement/top_event_names/csv",
+      "cold_ms": 16.41,
+      "warm_ms": 9.53
+    },
+    {
+      "endpoint": "/api/dashboards/engagement/viewer_to_donor/csv",
+      "cold_ms": 16.32,
+      "warm_ms": 7.89
+    },
+    {
+      "endpoint": "/api/dashboards/sources/identifier_coverage/csv",
+      "cold_ms": 14.39,
+      "warm_ms": 9.98
+    },
+    {
+      "endpoint": "/api/dashboards/sources/overlap_matrix/csv",
+      "cold_ms": 17.25,
+      "warm_ms": 9.23
+    },
+    {
+      "endpoint": "/api/dashboards/sources/profiles_by_source/csv",
+      "cold_ms": 25.66,
+      "warm_ms": 10.39
+    },
+    {
+      "endpoint": "/api/dashboards/data-health/blocklist_hits/csv",
+      "cold_ms": 18.06,
+      "warm_ms": 8.99
+    },
+    {
+      "endpoint": "/api/dashboards/data-health/blocklist_review/csv",
+      "cold_ms": 15.67,
+      "warm_ms": 10.29
+    },
+    {
+      "endpoint": "/api/dashboards/data-health/expiring_enrichment/csv",
+      "cold_ms": 18.71,
+      "warm_ms": 7.55
+    },
+    {
+      "endpoint": "/api/dashboards/data-health/merges_per_day/csv",
+      "cold_ms": 17.65,
+      "warm_ms": 8.21
+    },
+    {
+      "endpoint": "/api/dashboards/data-health/pending_resolutions/csv",
+      "cold_ms": 15.92,
+      "warm_ms": 8.82
+    },
+    {
+      "endpoint": "/api/dashboards/data-health/rejected_rows_by_import/csv",
+      "cold_ms": 22.1,
+      "warm_ms": 11.35
+    }
+  ],
+  "target_ms": 300,
+  "target_pass": true,
+  "checks": "Exact giving, distinct donors, prior-year retention, authoritative consent; raw-table SQL guard",
+  "scope": "Real PostgreSQL; synthetic four-gift/profile fixture. Authenticated ASGI TestClient after real dev login: includes routing, signed session/auth, DB sessions/teardown, JSON/CSV serialization, middleware; excludes real network/browser. Repeated temporal histories compress exactly; this is not a production-history diversity guarantee."
+}

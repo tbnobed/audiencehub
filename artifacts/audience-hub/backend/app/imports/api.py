@@ -25,7 +25,7 @@ from app.imports.service import (
     safe_filename, validate_file,
 )
 from app.jobs.queue import enqueue
-from app.models import User
+from app.models import AuditLog, User
 
 router = APIRouter(prefix="/api/imports", tags=["imports"])
 
@@ -42,7 +42,12 @@ def _http_input_error(error: Exception) -> HTTPException:
 
 def _get_import(db: Session, import_id: int):
     row = db.execute(text("""
-        SELECT i.*, job.id AS job_id, job.status AS job_status, job.progress AS progress,
+        SELECT i.*, EXISTS (SELECT 1 FROM audit_log a
+                 WHERE a.action='data_health.rejected_report.review'
+                   AND a.entity_id=i.id::text
+                   AND a.details->>'rows_rejected'=i.rows_rejected::text)
+                 AS rejected_report_reviewed,
+               job.id AS job_id, job.status AS job_status, job.progress AS progress,
                job.error AS job_error
         FROM imports AS i
         LEFT JOIN LATERAL (
@@ -324,3 +329,18 @@ def download_errors(import_id: int, user: User = Depends(require_role("analyst")
     path = _local_file(row, "error_file_path")
     return FileResponse(path, media_type="text/csv",
                         filename=f"import-{import_id}-errors.csv")
+
+
+@router.post("/{import_id}/review-rejections")
+def review_rejections(import_id: int, user: User = Depends(require_role("analyst")),
+                      db: Session = Depends(session_scope)):
+    row = _get_import(db, import_id)
+    if (row["rows_rejected"] <= 0 or row["status"] not in ("completed", "failed")
+            or row["job_status"] in ("queued", "running")):
+        raise HTTPException(409, detail="Only completed rejected-row reports can be reviewed.")
+    db.add(AuditLog(user_id=user.id, actor_type="user",
+                    action="data_health.rejected_report.review", entity_type="import",
+                    entity_id=str(import_id),
+                    details={"rows_rejected": row["rows_rejected"]}))
+    db.commit()
+    return {"id": import_id, "rejected_report_reviewed": True}

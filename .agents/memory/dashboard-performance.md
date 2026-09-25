@@ -3,6 +3,17 @@ name: Dashboard performance during imports
 description: Why dashboard performance acceptance must include cold calls during changing data
 ---
 
+Precomputed dashboard facts and shared stale-while-revalidate responses are an
+explicit product decision; do not restore live raw-table aggregation for fresher
+numbers.
+
+**Why:** On 2026-09-25 the user explicitly chose nightly/post-import rollups and
+immediate shared-cache delivery after repeated production latency failures.
+This supersedes the earlier live-committed-read approach.
+
+**How to apply:** Missing rollups require an offline backfill, not a request-time
+scan. Preserve this boundary when adding cards, CSV exports or new filters.
+
 Judge dashboard responsiveness by cold computation under concurrent writes, not
 only by cached responses or small correctness fixtures.
 

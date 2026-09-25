@@ -1,258 +1,147 @@
-# Overview API (live aggregates)
+# Dashboard API: published rollups
 
-`GET /api/dashboards/overview?from=YYYY-MM-DD&to=YYYY-MM-DD`
-requires viewer or higher. Dates are inclusive. Default is current month through
-today; reversed ranges and ranges over 3,660 days return 422. Prior is the
-immediately preceding equal-length period. Presets (including the organization's
-fiscal year) are frontend date choices, not server assumptions.
+All dashboard requests require viewer or higher; CSV requires analyst. Requests
+never scan raw `gifts`, `events`, or `source_records`, including cold cache misses,
+card endpoints, other tabs, and CSV downloads. No email HMAC/UNION is performed
+on request. Consent is authoritative only in `consents`; ingestion and identity
+merge hooks materialize it before the offline dashboard refresh.
 
-Existing `range`, `metrics`, and `charts` remain. Other dashboard tabs are
-unchanged. New rendering should use `overview`:
+## Refresh and readiness
 
-- `kpis`: `giving`, `active_partners`, `retention_yoy`, `average_gift`. Each has
-  `value`, `prior`, `change`, `change_pct` (null for zero prior), `delta_label`
-  (`"New"` when only prior is zero, `"—"` when both zero, otherwise null),
-  `sparkline: [{month: "YYYY-MM-01", value: number}]`.
-  Exactly 12 chronological calendar-month points ending at the selected end
-  month; the last point stops at the selected end date. Empty months are zero.
-  Giving is sum of gift amounts; active partners is distinct giving profiles;
-  average gift is sum/count. All three use the selected date range, NOT an
-  implicit rolling year. Retention is the percent of partners giving in the
-  same calendar-date range one year earlier who also gave in this range.
-  Leap days clamp to February 28. Retention includes `denominator`, `retained`,
-  and `prior_denominator`; zero denominator produces zero with denominator=0,
-  so UI can explicitly say “No prior-year partners” rather than imply a measured
-  retention rate. Prior retention uses prior range versus its own year-earlier
-  range. Percentage KPI delta is relative percent, not percentage points.
-- `stats.profiles.value`: current active-profile population.
-  `stats.recurring_partners`: delta object (no sparkline), distinct partners
-  with recurring gifts in the 365 days ending on the selected end date versus
-  the previous month end.
-  `stats.email_opted_in`: `{value, percentage}` of current active profiles,
-  with consent-ledger opt-outs and suppression exclusions.
-  `stats.lapsing`: delta object comparing status on selected end date with the
-  previous month end. “This month” refers to the selected end month.
-- `monthly_giving`: one row per current calendar-month intersection:
-  `{month, from, to, prior_from, prior_to, amount, prior_amount, gifts}`.
-  Prior intervals align by elapsed days from each range start, not by calendar
-  month names; their union exactly covers the prior interval. Partial months
-  stay partial; missing months have zero. Nov–Dec styling uses `month`.
-  `top_two_month_share`: percent of total giving in the two largest current
-  buckets; null when total is zero. No canned takeaway.
-- `campaigns`: top five ordered by total, gift count, name:
-  `{campaign, share, gifts, average_gift, amount}`. Share is percent of ALL
-  selected-period giving, not just the top five. `campaigns_href: "/?tab=giving"`.
-- `partner_status`: `{givers, statuses: [{status, count, share}], prospects}`.
-  Statuses are exclusive and ordered `active,new,reactivated,lapsing,lapsed`;
-  share is percent of givers only. Evaluated from resolved gift history through
-  selected end date. New: first gift within 365 days and last within 365;
-  reactivated: last within 365 with >730 days since the preceding gift;
-  active: other last gift within 365; lapsing: last 366–730 days ago;
-  lapsed: last >730 days ago. New takes precedence over reactivated.
-  Prospects are current active profiles with no gift through the selected end.
-- `attention`: at most five `{severity,title,explanation,href}` rows, sorted
-  error before warning before notice before healthy. No synthetic healthy row.
-  Real unresolved records, unapproved high-cardinality identifiers and lapsing
-  counts are viewer-safe; failed imports are analyst/admin-only; failed jobs
-  are admin-only. Links target existing pages; import query identifies an
-  import but the current imports page may require selecting it in its list.
-  `/segments` is the existing segment workspace (no invented reactivation ID).
+Migration `0020_dashboard_rollups` follows `0008_import_checkpoints`;
+`0021_consent_channel_status` follows it. Upgrade with Alembic before starting
+new workers. A full `traits.recompute` publishes the initial dashboard generation.
+Until then endpoints return **503** with explicit refresh instructions rather
+than fabricated empty data.
 
-All overview giving queries JOIN `active_profiles` to `gifts.profile_id`.
-Unresolved gifts, deleted profiles and merged losers are excluded. Counts are
-distinct profiles, never source-record counts. No profile identifiers, emails,
-raw job errors, filesystem paths or import filenames enter viewer responses.
-Current profile/opt-in population is explicitly current, not a historical
-snapshot. Existing compatibility `metrics.donors` is all-time givers through
-the selected end; `giving_12m`/`active_donors_12m` remain 365-day metrics.
-Compatibility aliases retain legacy keys; user-facing copy should say partners.
-Amounts preserve existing single-ledger currency semantics; no FX conversion.
+`traits.recompute` refreshes the rollups in the same transaction as traits. This
+runs nightly and after import identity processing drains; incremental trait
+recomputation also republishes the aggregates. Failed/rolled-back refreshes leave
+the previously committed generation intact. Readers see committed generations
+through MVCC, without waiting on `TRUNCATE`/DDL.
 
-## Shell
+- `dashboard_daily(day, source_id, fund, campaign, channel, gift_count,
+  gift_amount, donor_count, new_donor_count)` also separates active/inactive
+  populations so Overview excludes deleted/merged/unresolved profiles while
+  Giving retains its all-gift totals.
+- `dashboard_kpis(as_of, key, value)` holds population, authoritative opted-in
+  count, current trait status/recurring/lapsing aggregates, precomputed diagnostic
+  charts, annual retention/cohorts, and the published generation.
+- `dashboard_donor_daily` retains exact profile/day facts. Lossless
+  `dashboard_donor_patterns` groups identical dated histories (including gift
+  multiplicity and recurring flags) with a donor weight. Date-range distinct
+  donors and retention are computed at this membership grain: **daily donor
+  totals are never summed**. Same-day repeat gifts remain separate gifts, not
+  separate donors or false reactivations.
+- Giving distribution/appeal, event/day, and conversion/day tables retain the
+  remaining chart dimensions without request-time raw scans.
 
-`GET /api/shell` requires viewer or higher:
+Pattern compression is lossless, not sampling or approximate distinct counting.
+Its performance depends on temporal-history diversity; the synthetic benchmark
+is not a guarantee for every production distribution.
 
-```
-{
-  imports_running: number | null,
-  active_import: null | {
-    id, name, done, total, percent: number | null,
-    rows_per_second: number | null,
-    speed_basis: "committed_rows_since_import_started",
-    href
-  },
-  open_issues: number,
-  issue_counts: {unresolved: number, review: number}
-}
-```
+## Shared stale-while-revalidate
 
-Viewer gets null for both import fields: hide restricted import UI. For
-analyst/admin, running counts imports with both running import state and a
-running import job; queued work is not “running”. Card selects oldest running
-import. Done is persisted accepted+rejected rows, total is inspected CSV rows;
-speed is that committed count divided by measured elapsed seconds since import
-start (lifetime average, including pauses/retries, not instantaneous speed).
-Unknown/zero elapsed yields null speed, unknown/zero total yields null percent.
-No job payload, diagnostic error, or filesystem path is returned.
-Open issues sums unresolved source records and unapproved high-cardinality
-identifiers (same Data Health categories); it is not a count of attention cards.
+`dashboard_cache(key, payload jsonb, computed_at, generation)` is shared by all
+API workers. Entries expire after 60 seconds or when traits publishes a new
+generation. Existing entries are returned immediately; background work uses a
+PostgreSQL advisory lock to coalesce refreshes and retains stale data if a refresh
+fails. There is no process-local or filesystem payload cache.
 
-## Freshness
+Cold builds read only rollups in a repeatable-read snapshot. Publication checks
+the current generation under a nonblocking shared refresh lock; obsolete builds
+cannot overwrite new-generation data. A running offline refresh never blocks a
+request just to publish its cache entry.
 
-Dashboard aggregates use a bounded host-shared file cache, namespaced by database
-and suppression-hash configuration. Logical keys include dates and dashboard
-name, independent of the PostgreSQL MVCC snapshot stored with each generation.
-A generation already published when a request starts requires an exact snapshot
-match (a durable, conservative changing transaction version). Commits by import,
-identity, traits, or other processes invalidate these preexisting entries without
-process-local invalidation hooks. Uncommitted session writes
-bypass caching. Entries expire after 60 seconds; at most 32 entries of at most
-4 MiB each are retained. Responses are copied; role-specific attention is added
-after fetching shared aggregates. Errors are never cached.
+## Date and response contracts
 
-A per-logical-key cross-process file lock deduplicates cold computations on a
-host. Different dashboards/date ranges do not share a computation lock. A joining
-request waits within its remaining 25-second budget and can adopt a generation
-published during that call despite intervening commits. This is explicitly an
-**as-of-computation** result, not a latest-at-response guarantee or a consistent
-multi-query transaction snapshot. It does not grant TTL-based reuse of arbitrarily
-old generations: subsequent requests still validate their snapshot. Heartbeats
-do not force joined callers to immediately run a second expensive refresh.
-Exhausted budgets return explicit 504, never a fake empty result. Failed owners
-release the OS lock without publishing; a waiter can retry within its budget.
-Publication is atomic, staging cleanup is key-local, and zero-byte lock inodes
-are retained (never pruned, since waiters may hold them); payload bounds apply
-to JSON entries. Multiple hosts remain correct but do not share this lock/cache.
-Constant import commits can invalidate sequential requests: warm-cache latency
-is **not** the acceptance criterion during resolution.
+Dates are inclusive: `?from=YYYY-MM-DD&to=YYYY-MM-DD`. Default is current month
+through today. Reversed ranges and ranges exceeding 3,660 days return 422.
+Prior means the immediately preceding equal-length period.
 
-The overview combines all KPI periods, rolling compatibility metrics, 12 sparkline
-points, and historical classifications in one profile-grain gift aggregation.
-A second date-bounded scan supplies daily paired totals and campaign totals with
-GROUPING SETS. No gift/source/consent fanout or per-month full-history scans remain.
-Consent counts reduce source records to profile flags when no suppressions exist.
-With suppressions, PostgreSQL first accepts eligible profiles whose primary ASCII
-address is unsuppressed, then checks source/identifier alternatives only for the
-remaining profiles. ASCII HMAC-SHA256 uses core `sha256(bytea)` with RFC 2104
-inner/outer pads supplied as bound parameters (including keys over 64 bytes).
-This requires neither pgcrypto nor persisted hashes. After existing SQL candidate
-normalization, ASCII casefold is identity and SQL trimming explicitly includes
-all Python ASCII whitespace. Unicode candidates still use Python strip/casefold:
-SQL lower is **not** treated as a Unicode casefold substitute. Only unresolved
-Unicode candidates are streamed in 2,048-row batches; ordinary ASCII populations
-return one aggregate row. Ledger opt-outs override all source opt-ins; any
-unsuppressed eligible address qualifies the active profile.
+`GET /api/dashboards/overview` retains `{range, metrics, charts, overview}`.
+`overview` retains:
 
-Dashboard and shell work have a 25-second computation budget. Each database
-statement receives the remaining statement timeout; streamed batches also check
-the wall-clock deadline without issuing configuration SQL on an open cursor. A
-cursor close error cannot mask the original timeout. Database
-lock waits are bounded to two seconds (not cache-coalescing waits).
-Timeout/lock cancellation returns explicit 504.
-No migration, production seeding, worker changes, or recompute is required.
+- `kpis`: `giving`, `active_partners`, `retention_yoy`, `average_gift`, each with
+  numeric `value`, `prior`, `change`, nullable `change_pct`, `delta_label`, and
+  exactly twelve `{month,value}` sparkline points. Retention intersects donors
+  in the selected range and the same calendar dates one year earlier (leap-day
+  clamping), and includes `denominator`, `retained`, `prior_denominator`.
+- `stats`: profiles, email opted-in/percentage, recurring partners, lapsing.
+  Historical recurring/status comparisons are derived from published temporal
+  membership facts, not today's status substituted for historical end dates.
+- `monthly_giving`: `{month,from,to,prior_from,prior_to,amount,prior_amount,gifts}`;
+  prior buckets partition the prior range by elapsed days. Missing months are
+  zero. `top_two_month_share` is null if giving is zero.
+- `campaigns`: top five `{campaign,share,gifts,average_gift,amount}`;
+  `campaigns_href`; `partner_status`: `{givers,statuses,prospects}`, with ordered
+  exclusive active/new/reactivated/lapsing/lapsed statuses.
+- `attention`: role-safe actionable issues and lapsing partners.
 
-## Isolated performance evidence
+Progressive card routes preserve these nested field types:
 
-### Targeted email-count optimization
+| Route suffix | Response |
+|---|---|
+| `/overview/kpis` | `{range, kpis, stats}` |
+| `/overview/giving-by-month` | `{range, giving_by_month: {monthly_giving, top_two_month_share}}` |
+| `/overview/needs-attention` | `{attention}` |
+| `/overview/campaigns` | `{top_campaigns: {campaigns, campaigns_href}}` |
+| `/overview/partner-status` | `{partner_status}` |
 
-An opt-in test uses temporary tables in the dedicated `ah_overview_tests` database,
-with 500,000 profiles, 2,900,000 source rows, 500,000 consent rows and one hard-bounce
-suppression. It compares the former distinct/sorted candidate streaming algorithm
-against the new implementation, verifying the exact result of 499,999. One local
-run measured **11.575 s → 4.025 s** (65% reduction); transferred rows fell from
-500,000 to one. Setup and the entire 16-test run took 20.05 s. This is a synthetic,
-email-only benchmark, not a new end-to-end production latency claim. Its primary
-addresses are ASCII and ledger-opted-in; source-only/Unicode-heavy populations
-have less opportunity for early acceptance.
+The legacy `/overview/primary`, `/overview/email`, `/overview/attention`, all six
+dashboard tabs, and `/{dashboard}/{chart}/csv` remain available.
 
-Reproduce without persistent seeding or starting any services:
+## Reproducible scale evidence
+
+Run without a browser or application database:
 
 ```sh
-cd artifacts/audience-hub/backend
-DATABASE_URL=postgresql+psycopg:///ah_overview_tests APP_ENV=test \
-  OVERVIEW_EMAIL_SCALE_TEST=1 python3 -m pytest tests/test_overview.py -q -s
+kinship benchmark --dashboards --profiles 500000
+kinship benchmark --dashboards --test-suite
 ```
 
-The same suite checks Python-vs-SQL HMAC equivalence for short/long keys,
-ASCII control whitespace, Unicode casing/whitespace, suppression alternatives,
-and preservation of an original 504 if cursor cleanup also fails.
+The harness creates/migrates/stops/removes its own private PostgreSQL cluster
+and refuses production. It preserves JSON timing evidence and logs. Benchmark
+requests use real dev login and authenticated ASGI TestClient, including routing,
+middleware, signed session/auth, DB session cleanup and JSON/CSV serialization;
+they exclude network latency. Each endpoint is measured with a cleared shared
+cache and then warm. All chart CSV routes are included. SQL listeners reject
+any request query referencing a forbidden raw table.
 
-### Earlier full Overview measurement
+Measured 500,000 profiles, 2,000,000 gifts, 500,000 source records, and 500,000
+consents. Exact giving (15,000,000), distinct donors (500,000), retained donors
+(500,000), and email opted-in (500,000) assertions passed. Four gifts/profile
+include same-day repeat gifts and a prior-year gift. Repeated temporal histories
+compress exactly; this limitation is explicit in the evidence.
 
-Measured on the final implementation using the disposable PostgreSQL 17 harness
-in `app.benchmark`, not the app/development/production database. Unprofiled Python
-3.12 processes, shared cgroup quota `400000 100000` (4 CPUs), 8 GiB memory limit.
-PostgreSQL retained normal durability; WAL retention was lowered to 128 MiB maximum/
-32 MiB minimum during fixture recovery to reduce scratch usage, not disable fsync.
+Final evidence: backend `.cache/dashboard-http-verified/imports-xioe2yrd/dashboards.json`.
+Refresh: 31.681 seconds (offline, not included in request time).
 
-Committed fixture: **5,360,000 gifts, 2,900,000 source records, 250,000 active
-profiles**. The suppression run also had **250,000 consent rows and one hard-bounce
-suppression**. Gifts cover six years, eight campaigns, recurring and non-recurring
-gifts; each profile has repeated source records. Ten percent of seeded sources
-initially have unresolved timestamps.
+| Endpoint | Cold ms | Warm ms |
+|---|---:|---:|
+| overview | 263.30 | 17.05 |
+| giving | 32.08 | 6.37 |
+| retention | 27.48 | 7.34 |
+| engagement | 33.69 | 7.02 |
+| sources | 158.34 | 5.69 |
+| data-health | 17.60 | 7.14 |
+| overview/kpis | 48.03 | 6.30 |
+| overview/giving-by-month | 46.93 | 7.20 |
+| overview/needs-attention | 7.71 | 7.68 |
+| overview/campaigns | 53.35 | 10.81 |
+| overview/partner-status | 55.62 | 7.05 |
+| overview/email | 6.90 | 5.88 |
+| overview/attention | 6.75 | 8.11 |
+| overview/primary | 48.04 | 8.47 |
 
-| Final measurement | Seconds |
-|---|---:|
-| Cold viewer endpoint, suppression + ledger present | 17.457 |
-| Subsequent shared-cache hit, including live attention | 0.0075 |
-| Cold endpoint during concurrent synthetic resolution writes | 17.029 |
-| Second endpoint call, invalidated again by concurrent writes | 21.734 |
+All measured JSON and CSV endpoints passed the 300 ms target. Full per-CSV
+timings are in the JSON evidence and printed by the command.
 
-These measure the complete viewer endpoint function, including live attention,
-but exclude HTTP transport and authentication middleware.
-The separate writer committed 79 batches of 1,000 source-record timestamp updates
-with half-second pauses between transactions during the two-request experiment. This
-exercises durable invalidation and write contention; it is **not** the real identity
-resolver and does not establish performance under its full CPU/IO load.
-“Cold” means no aggregate cache entry, not cold operating-system page cache.
+Final migrated disposable PostgreSQL suite: **249 passed, 1 skipped**, 91.26
+seconds; evidence `.cache/dashboard-tests-final/imports-l65nytuv/pytest.txt`.
+Consent schema tests, all dashboard regressions, and worker recovery tests ran
+against this database. The skipped test is explicitly opt-in.
 
-Correctness assertions checked committed row counts, exact giving against an
-independent scalar SQL sum (**8,924,250** for 2025), **249,999** eligible profiles
-with the suppression, and identical aggregate payloads on repeated requests
-(live attention can change during resolution). Earlier,
-the no-ledger/no-suppression fixture measured 14.489 seconds and 250,000 eligible
-profiles. That earlier timing is diagnostic, not the final suppression workload.
-
-**Limitation:** the planned 6,000,000-source fixture did not finish within the
-execution tool's five-minute seed limit. The committed disposable fixture was
-recovered instead of repeatedly reseeding. Thus full 6m-source acceptance and a
-production-real-resolver concurrency claim remain unverified. All measured cold
-requests above completed within 25 seconds; failures at higher load remain
-explicit, not cached or silently replaced.
-
-Raw workspace-local evidence:
-`/tmp/overview-performance-evidence/imports-g9gm0xz2/final-viewer-endpoint/overview-results.json`
-and sibling `final-viewer-concurrent/overview-results.json`. The disposable cluster
-was stopped after measurement. To reproduce on a host without the tool's five-minute
-command limit:
-
-```sh
-cd artifacts/audience-hub/backend
-python -m app.cli benchmark --overview --gift-rows 5360000 \
-  --contact-rows 6000000 --output-dir /tmp/overview-evidence
-```
-
-The harness checks the isolated URL before writing and commits fixture inserts in
-100k batches. It runs dashboard regression tests before seeding and removes its
-cluster on normal completion. For a fast isolated regression-only-sized run, use
-`--gift-rows 1000 --contact-rows 1000`. Tests cover default/no-history ranges,
-leap dates, retention, excluded merged/deleted profiles, duplicate source records,
-Unicode suppression, opt-outs, alternate eligible emails, process-visible commit
-invalidation, cache expiry/bounds/copy safety/deduplication, and real SQL cancellation.
-Post-coalescing isolated dashboard regressions: **26 passed**, including all
-dashboard-tab SQL smoke queries (no skipped tests). The concurrency regression
-runs four independent API processes against one logical key while a separate
-process commits real profile updates; all four receive one owner's identical
-payload, with exactly one expensive build. A later committed traits insert
-invalidates the preexisting generation. Separate regressions cover independent
-dashboard/date locks, deadline exhaustion, owner failure/recovery, flushed-write
-bypass, oversized payloads, expiry and bounds. This is a small correctness
-fixture, not a replacement scale benchmark; the 17–22-second evidence above
-remains the cold-computation measurement.
-
-A separate targeted disposable-PostgreSQL regression also passes: the real
-`/api/shell` handler completes with a 750 ms budget while another process holds
-the Overview computation lock. Its `("health-counts",)` cache key is independent
-of `("overview", start, end)`. Overview attention reads health counts only after
-the aggregate cache call returns and releases its lock; no nested computation
-locks are held on that path.
+An intervening benchmark launched concurrently with the full suite exceeded the
+300-second harness execution budget before printing endpoint results. It is not
+counted as passing evidence; the final successful benchmark above ran separately.

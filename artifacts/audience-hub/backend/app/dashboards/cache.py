@@ -1,49 +1,31 @@
-"""Bounded, cross-process dashboard cache; no database DDL or worker hooks.
-
-PostgreSQL's MVCC snapshot is a conservative durable data version: any new
-transaction or completion of an in-flight writer invalidates the entry. Files are
-shared by API processes on the same host; no correctness depends on that sharing.
-
-Coalesced callers may adopt a generation published after their call started,
-even if writes continue during computation. This is an as-of-computation result,
-not a promise of a transactionally consistent multi-query snapshot. Preexisting
-generations always require an exact MVCC match; TTL alone never grants freshness.
-"""
-import copy
-import fcntl
+"""PostgreSQL-shared stale-while-revalidate cache, with nonblocking refresh locks."""
 import hashlib
 import json
 import logging
-import os
-from pathlib import Path
-import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from contextvars import ContextVar
 
 from fastapi import HTTPException
 from sqlalchemy import text
+from sqlalchemy.orm import Session
 from sqlalchemy.exc import DBAPIError
 
-DEADLINE_SECONDS = 25
-TTL_SECONDS = 60
-MAX_ENTRIES = 32
-MAX_BYTES = 4 * 1024 * 1024
-MIN_STATEMENT_BUDGET_MS = 100
 logger = logging.getLogger(__name__)
+TTL_SECONDS = 60
+DEADLINE_SECONDS = 15
+MIN_STATEMENT_BUDGET_MS = 100
 _deadline = ContextVar("dashboard_deadline", default=None)
-# Monotonic timestamps are comparable across processes, but not across boots.
-# This cache already requires a local Unix host (flock); deployed hosts are Linux.
-_boot_id = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+# The executor holds work, not data. Payloads and coordination live in PostgreSQL.
+_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="dashboard-refresh")
 
 
 def check_deadline(db=None):
-    deadline = _deadline.get()
-    if deadline is None:
+    end = _deadline.get()
+    if end is None:
         return
-    remaining = int((deadline-time.monotonic())*1000)
-    # Do not install a tiny timeout that can cancel cursor CLOSE or ROLLBACK.
-    # End a SQL budget slightly early instead of extending it past the deadline.
+    remaining = int((end-time.monotonic())*1000)
     if remaining <= 0 or (db is not None and remaining < MIN_STATEMENT_BUDGET_MS):
         raise HTTPException(504, detail="Dashboard computation exceeded its deadline. Please retry.")
     if db is not None:
@@ -65,113 +47,97 @@ def deadline(db):
         check_deadline(db)
         yield
         check_deadline()
-        # Preserve caller settings and any writes in its transaction. Never
-        # commit/rollback merely to remove dashboard-local settings.
         db.execute(text("SELECT set_config('statement_timeout', :statement, true), "
                         "set_config('lock_timeout', :lock, true)"),
                    {"statement": previous[0], "lock": previous[1]})
     except DBAPIError as exc:
         if getattr(exc.orig, "sqlstate", None) in ("57014", "55P03"):
-            _invalidate_timed_out_session(db)
+            db.invalidate()
             raise HTTPException(504, detail="Dashboard database deadline exceeded. Please retry.") from exc
         raise
     except HTTPException as exc:
         if exc.status_code == 504:
-            _invalidate_timed_out_session(db)
+            db.invalidate()
         raise
     finally:
         _deadline.reset(token)
 
 
-def _invalidate_timed_out_session(db):
-    # No further SQL is safe here: a canceled statement may leave the transaction
-    # aborted, or a named cursor/very short timeout may also cancel ROLLBACK.
+def generation(db):
+    value = db.execute(text(
+        "SELECT value FROM dashboard_kpis WHERE key='generation' ORDER BY as_of DESC LIMIT 1"
+    )).scalar_one_or_none()
+    if value is None:
+        raise HTTPException(503, detail=(
+            "Dashboard rollups have not been initialized. Run traits.recompute "
+            "(enqueue the traits.recompute job and run python -m app.jobs.worker) after upgrading."))
+    return value
+
+
+def _publish(db, key, result, version):
+    # Never let a slow old-generation builder overwrite a newly published
+    # generation. Share the refresh lock only for this tiny publication and
+    # never wait behind a running offline refresh on the request path.
+    if not db.execute(text(
+        "SELECT pg_try_advisory_xact_lock_shared(hashtext('dashboard-rollups'))"
+    )).scalar_one():
+        return False
+    if generation(db) != version:
+        return False
+    db.execute(text("""
+      INSERT INTO dashboard_cache(key,payload,computed_at,generation)
+      VALUES(:key,CAST(:payload AS jsonb),clock_timestamp(),:version)
+      ON CONFLICT(key) DO UPDATE SET payload=excluded.payload,
+        computed_at=excluded.computed_at,generation=excluded.generation
+      WHERE excluded.generation=(SELECT value #>> '{}' FROM dashboard_kpis WHERE key='generation')
+    """), {"key": key, "payload": json.dumps(result, default=str), "version": version})
+    return True
+
+
+def _refresh(key, logical_key, version, engine):
     try:
-        db.invalidate()
+        with Session(engine.execution_options(isolation_level="REPEATABLE READ")) as db:
+            db.execute(text("SET LOCAL statement_timeout='15s'"))
+            locked = db.execute(text(
+                "SELECT pg_try_advisory_xact_lock(hashtextextended(:key,0))"
+            ), {"key": key}).scalar_one()
+            if not locked:
+                return
+            existing = db.execute(text("""
+              SELECT generation=:version AND computed_at>now()-interval '60 seconds'
+              FROM dashboard_cache WHERE key=:key
+            """), {"key": key, "version": version}).scalar_one_or_none()
+            if existing:
+                return
+            # One consistent generation across every query in this background build.
+            from app.dashboards.api import build_cache_key
+            result = build_cache_key(db, logical_key)
+            with Session(engine) as writer:
+                _publish(writer, key, result, version)
+                writer.commit()
     except Exception:
-        logger.exception("Failed to invalidate timed-out dashboard session")
+        logger.exception("Dashboard background refresh failed; stale payload retained")
 
 
 def cached(db, key, build):
-    # Direct callers get the same bounded budget as HTTP endpoint callers.
-    if _deadline.get() is None:
-        with deadline(db):
-            return cached(db, key, build)
-    started = time.monotonic_ns()
-    check_deadline(db)
-    # Never publish uncommitted session-local writes as globally reusable facts.
-    if db.new or db.dirty or db.deleted or db.execute(
-        text("SELECT pg_current_xact_id_if_assigned() IS NOT NULL")
-    ).scalar_one():
-        return build()
-    version = db.execute(text("SELECT pg_current_snapshot()::text")).scalar_one()
-    from app.config import get_settings
-    settings = get_settings()
-    namespace = hashlib.sha256(
-        (settings.database_url + settings.pii_hash_pepper).encode()).hexdigest()[:24]
-    directory = Path(tempfile.gettempdir()) / f"kinship-dashboard-{os.getuid()}-{namespace}"
-    directory.mkdir(mode=0o700, exist_ok=True)
-    digest = hashlib.sha256(json.dumps(["v3", _boot_id, *key], default=str).encode()).hexdigest()
-    path = directory / (digest+".json")
-
-    def read():
-        try:
-            stat = path.stat()
-            if time.time()-stat.st_mtime >= TTL_SECONDS or stat.st_size > MAX_BYTES:
-                return None
-            entry = json.loads(path.read_text())
-            if "result" not in entry:
-                return None
-            if entry["version"] == version or entry["published"] >= started:
-                return entry
-        except (FileNotFoundError, ValueError, KeyError, TypeError):
-            return None
-
-    hit = read()
-    if hit is not None:
-        return copy.deepcopy(hit["result"])
-    # Persistent per-logical-key inodes: never unlink lock files (even an
-    # apparently idle lock can have a waiter holding its inode). Distinct dates
-    # and dashboards never hold each other's expensive-computation lock.
-    with (directory / (digest+".lock")).open("a") as lock:
-        while True:
-            check_deadline()
-            hit = read()
-            if hit is not None:
-                return hit["result"]
-            try:
-                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
-            except BlockingIOError:
-                check_deadline()
-                time.sleep(min(.05, max(0, _deadline.get()-time.monotonic())))
-        hit = read()
-        if hit is not None:
-            return hit["result"]
-        # A killed writer can leave its atomic-write staging file behind.
-        # Only this key's staging files are safe to remove.
-        for abandoned in directory.glob(digest+".*.tmp"):
-            abandoned.unlink(missing_ok=True)
-        check_deadline(db)
-        result = build()  # exceptions are never cached
-        check_deadline()
-        encoded = json.dumps({"version": version, "published": time.monotonic_ns(),
-                              "result": result})
-        if len(encoded.encode()) <= MAX_BYTES:
-            temporary = path.with_suffix(f".{os.getpid()}.tmp")
-            try:
-                temporary.write_text(encoded)
-                os.replace(temporary, path)
-            finally:
-                temporary.unlink(missing_ok=True)
-        # Other keys can publish/prune concurrently. Missing files are normal.
-        files = []
-        for candidate in directory.glob("*.json"):
-            try:
-                files.append((candidate.stat().st_mtime, candidate))
-            except FileNotFoundError:
-                pass
-        for i, (modified, old) in enumerate(sorted(files, reverse=True)):
-            if i >= MAX_ENTRIES or time.time()-modified >= TTL_SECONDS:
-                old.unlink(missing_ok=True)
-        return result
+    version = generation(db)
+    digest = hashlib.sha256(json.dumps(key, default=str).encode()).hexdigest()
+    row = db.execute(text("""
+      SELECT payload,generation,computed_at>now()-interval '60 seconds' AS fresh
+      FROM dashboard_cache WHERE key=:key
+    """), {"key": digest}).mappings().one_or_none()
+    if row:
+        if row["generation"] != version or not row["fresh"]:
+            _executor.submit(_refresh, digest, key, version, db.get_bind())
+        return row["payload"]
+    # Build and publish from one repeatable-read snapshot, independent of the
+    # auth/request session. A concurrent traits commit cannot mix generations.
+    with Session(db.get_bind().execution_options(isolation_level="REPEATABLE READ")) as writer:
+        writer.execute(text("SET LOCAL statement_timeout='15s'"))
+        version = generation(writer)
+        from app.dashboards.api import build_cache_key
+        result = build_cache_key(writer, key)
+    with Session(db.get_bind()) as writer:
+        _publish(writer, digest, result, version)
+        writer.commit()
+    return result

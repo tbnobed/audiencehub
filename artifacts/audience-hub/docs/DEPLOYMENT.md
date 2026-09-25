@@ -86,7 +86,8 @@ services:
     command: >
       postgres -c shared_buffers=8GB -c effective_cache_size=24GB
                -c work_mem=64MB -c maintenance_work_mem=1GB
-               -c max_wal_size=8GB -c random_page_cost=1.1
+               -c checkpoint_timeout=15min -c max_wal_size=16GB
+               -c wal_compression=on -c random_page_cost=1.1
                -c jit=off -c max_locks_per_transaction=1024
     volumes:
       - pgdata:/var/lib/postgresql/data
@@ -249,11 +250,90 @@ Then in Authentik: create an OAuth2/OIDC provider (confidential, redirect URI `h
 
 ## Upgrades
 
+### Server upgrade / dashboard rollups and checkpoint tuning
+
+Run these commands on the server, from the directory containing this Compose
+file and the production `.env`, for example
+`~/audiencehub/artifacts/audience-hub` (not the repository root).
+These are operator instructions, not commands to execute from development.
+Arrange a maintenance window and block new imports/API writes at the reverse
+proxy first. Do not restart PostgreSQL while imports or other jobs are running.
+Never run `reset-demo`, seed loads, or benchmark tests against production.
+
 ```bash
-cd /opt/audience-hub && git pull
-docker compose build
-docker compose up -d        # api runs alembic upgrade head on start
+cd ~/audiencehub/artifacts/audience-hub
+set -e  # Stop this procedure if a backup, build, or migration fails.
+# Read-only checks compatible with the OLD production image (c85dd6d).
+# Repeat both queries while existing work drains; no new CLI is required.
+docker compose exec -T db sh -c 'psql -U "$POSTGRES_USER" -d audience_hub -c "SELECT id,status,rows_total,rows_ok,rows_rejected FROM imports ORDER BY id DESC LIMIT 20;"'
+docker compose exec -T db sh -c 'psql -U "$POSTGRES_USER" -d audience_hub -c "SELECT type,status,count(*) FROM jobs GROUP BY type,status ORDER BY type,status;"'
+# Wait for running imports/jobs to finish; investigate failed or stuck work.
+# Jobs finish as succeeded; imports finish as completed. Queued jobs persist
+# across restart and can resume on the new worker. Do not start the DB restart
+# while work is running. If work will not drain, defer the maintenance window.
+# Stop writers gracefully; worker has a 30-minute stop grace period.
+docker compose stop worker api
+# Confirm graceful shutdown left no running work before backing up/restarting.
+docker compose exec -T db sh -c 'psql -U "$POSTGRES_USER" -d audience_hub -c "SELECT id,type,status FROM jobs WHERE status='\''running'\''; SELECT id,status FROM imports WHERE status='\''running'\'';"'
+# Both result sets must be empty. Otherwise stop here and investigate.
+mkdir -p backups
+docker compose exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" -d audience_hub -Fc' > "backups/pre-upgrade-$(date -u +%Y%m%dT%H%M%SZ).dump"
+# Preserve an image for application rollback; keep .env and named volumes.
+docker image tag audience-hub:latest "audience-hub:pre-upgrade-$(date -u +%Y%m%dT%H%M%SZ)"
+git pull --ff-only
+docker compose config --quiet
+docker compose build api
+# Explicit maintenance-window database recreation activates command settings.
+# This keeps pgdata. NEVER use docker compose down -v.
+docker compose up -d --no-deps --force-recreate db
+until docker compose exec -T db sh -c 'pg_isready -U "$POSTGRES_USER" -d audience_hub'; do sleep 2; done
+docker compose exec -T db sh -c 'psql -U "$POSTGRES_USER" -d audience_hub -c "SHOW checkpoint_timeout; SHOW max_wal_size; SHOW wal_compression; SHOW max_locks_per_transaction;"'
+# Migrate with the new image before starting any new worker.
+docker compose run --rm --no-deps api alembic upgrade head
+docker compose up -d --no-deps api
+docker compose exec -T api curl -fsS http://localhost:8000/readyz
 ```
+
+Expected settings: `15min`, `16GB`, `on` (PostgreSQL may display `pglz`),
+and the preserved `1024` lock budget. `max_wal_size` is a soft checkpoint target,
+not a WAL disk-space cap; monitor free disk and backup/replication retention.
+If readiness fails, investigate before starting the worker or reopening traffic.
+The startup script also runs `alembic upgrade head`; the explicit migration step
+makes failures visible before serving traffic.
+
+Queue a full traits refresh through the **existing job queue**, so its normal
+handler also refreshes dashboard rollups and invalidates shared dashboard cache.
+There is no standalone `traits` CLI command:
+
+```bash
+docker compose exec -T api python - <<'PY'
+from sqlalchemy.orm import Session
+from app.db import engine
+from app.jobs.queue import enqueue
+with Session(engine) as db:
+    job = enqueue(db, "traits.recompute", {"mode": "full"},
+                  dedupe_key="upgrade:traits:full")
+    db.commit()
+    print("Full traits refresh job:", job.id)
+PY
+docker compose up -d --no-deps worker
+docker compose exec api python -m app.cli load-status --wait --timeout 7200
+docker compose exec -T db sh -c 'psql -U "$POSTGRES_USER" -d audience_hub -c "SELECT id,type,status,error FROM jobs WHERE dedupe_key='\''upgrade:traits:full'\'' ORDER BY id DESC LIMIT 1;"'
+docker compose exec -T api curl -fsS http://localhost:8000/readyz
+```
+
+Require the refresh job to be `succeeded`, not merely enqueued, before checking
+Overview cards and issue badges with an authenticated admin session and reopening
+traffic. `load-status` follows imports and identity work, not this manually
+queued traits job: repeat the final jobs query until that job is `succeeded`.
+The job queue uses `succeeded`; the separate imports table uses `completed`.
+A failed refresh needs investigation; do not substitute a request-time
+raw-data rebuild. The local performance command
+`python -m app.cli benchmark --dashboards --profiles 500000` must run only in
+its disposable harness on a suitably sized test host, not against production.
+Keep the backup until the upgrade and rollups are verified. Application rollback
+requires a retained image compatible with the migrated schema; do not blindly
+downgrade the database or restore over live data.
 Migrations must be backward compatible for one release (add columns nullable, backfill in a job, then tighten), so a failed deploy can roll back to the previous image tag.
 
 Tag images per release (`audience-hub:2026.10.1`) as well as `latest`, and keep the last three.

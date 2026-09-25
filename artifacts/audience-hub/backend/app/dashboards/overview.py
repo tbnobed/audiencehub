@@ -22,8 +22,8 @@ def delta(value, prior):
             "delta_label": "—" if value == prior == 0 else "New" if prior == 0 else None}
 
 
-GIFTS = ("SELECT g.gift_date, g.amount, g.campaign FROM gifts g "
-         "JOIN active_profiles p ON p.id=g.profile_id")
+GIFTS = ("SELECT day AS gift_date, gift_amount AS amount, gift_count, campaign "
+         "FROM dashboard_daily WHERE active")
 
 
 def overview_facts(db, windows, cutoffs):
@@ -39,16 +39,16 @@ def overview_facts(db, windows, cutoffs):
         current = f"gift_date BETWEEN :s{i} AND :e{i}"
         previous = f"gift_date BETWEEN :ys{i} AND :ye{i}"
         columns.extend([
-            f"sum(amount) FILTER(WHERE {current}) AS amount{i}",
-            f"count(*) FILTER(WHERE {current}) AS gifts{i}",
+            f"sum(0) FILTER(WHERE {current}) AS amount{i}",
+            f"sum(gift_count) FILTER(WHERE {current}) AS gifts{i}",
             f"bool_or({previous}) AS base{i}",
         ])
         totals.extend([
             f"COALESCE(sum(amount{i}),0) AS amount{i}",
             f"COALESCE(sum(gifts{i}),0) AS gifts{i}",
-            f"count(*) FILTER(WHERE gifts{i}>0) AS partners{i}",
-            f"count(*) FILTER(WHERE base{i}) AS base{i}",
-            f"count(*) FILTER(WHERE base{i} AND gifts{i}>0) AS retained{i}",
+            f"COALESCE(sum(weight) FILTER(WHERE gifts{i}>0),0) AS partners{i}",
+            f"COALESCE(sum(weight) FILTER(WHERE base{i}),0) AS base{i}",
+            f"COALESCE(sum(weight) FILTER(WHERE base{i} AND gifts{i}>0),0) AS retained{i}",
         ])
     for i, end in enumerate(cutoffs):
         params[f"cut{i}"] = end
@@ -58,6 +58,8 @@ def overview_facts(db, windows, cutoffs):
             # reactivation. Dates tied by id have the same classification.
             f"(array_agg(gift_date ORDER BY gift_date DESC) "
             f"FILTER(WHERE gift_date<=:cut{i}))[1:2] AS latest{i}",
+            f"(array_agg(gift_count ORDER BY gift_date DESC) "
+            f"FILTER(WHERE gift_date<=:cut{i}))[1] AS latest_count{i}",
             f"bool_or(is_recurring AND gift_date>CAST(:cut{i} AS date)-365 "
             f"AND gift_date<=:cut{i}) AS recurring{i}",
         ])
@@ -65,37 +67,48 @@ def overview_facts(db, windows, cutoffs):
             WHEN CAST(:cut{i} AS date)-latest{i}[1]<=365
               AND first{i}>=CAST(:cut{i} AS date)-365 THEN 'new'
             WHEN CAST(:cut{i} AS date)-latest{i}[1]<=365
-              AND latest{i}[1]-latest{i}[2]>730 THEN 'reactivated'
+              AND latest_count{i}=1 AND latest{i}[1]-latest{i}[2]>730 THEN 'reactivated'
             WHEN CAST(:cut{i} AS date)-latest{i}[1]<=365 THEN 'active'
             WHEN CAST(:cut{i} AS date)-latest{i}[1]<=730 THEN 'lapsing'
             ELSE 'lapsed' END"""
-        totals.extend(f"count(*) FILTER(WHERE ({status})='{s}') AS {s}{i}"
+        totals.extend(f"COALESCE(sum(weight) FILTER(WHERE ({status})='{s}'),0) AS {s}{i}"
                       for s in ("new", "reactivated", "active", "lapsing", "lapsed"))
-        totals.append(f"count(*) FILTER(WHERE recurring{i}) AS recurring{i}")
+        totals.append(f"COALESCE(sum(weight) FILTER(WHERE recurring{i}),0) AS recurring{i}")
     params["max_date"] = max([e for _, e in windows] + list(cutoffs))
     r = rows(db, f"""
         WITH facts AS (
-          SELECT g.profile_id, {','.join(columns)}
-          FROM gifts g JOIN active_profiles p ON p.id=g.profile_id
+          SELECT g.profile_id,max(donors) AS weight, {','.join(columns)}
+          FROM (SELECT p.id AS profile_id,p.donors,d.gift_date,d.gift_count,d.is_recurring
+                FROM dashboard_donor_patterns p CROSS JOIN LATERAL
+                unnest(p.days,p.gift_counts,p.recurring_flags)
+                AS d(gift_date,gift_count,is_recurring)) g
           WHERE gift_date<=:max_date GROUP BY g.profile_id
         ) SELECT {','.join(totals)} FROM facts
     """, params)[0]
+    money = rows(db, f"""
+      SELECT {','.join(
+          f"COALESCE(sum(gift_amount) FILTER(WHERE day BETWEEN :s{i} AND :e{i}),0) AS amount{i}, "
+          f"COALESCE(sum(gift_count) FILTER(WHERE day BETWEEN :s{i} AND :e{i}),0) AS gifts{i}"
+          for i in range(len(windows)))}
+      FROM dashboard_daily WHERE active
+    """, params)[0]
+    r.update(money)
     periods = {}
     for i, window in enumerate(windows):
         periods[window] = {
             "giving": float(r[f"amount{i}"]),
             "average_gift": float(r[f"amount{i}"]/r[f"gifts{i}"]) if r[f"gifts{i}"] else 0,
-            "active_partners": r[f"partners{i}"],
-            "retention_base": r[f"base{i}"], "retained": r[f"retained{i}"],
-            "retention_yoy": 100*r[f"retained{i}"]/r[f"base{i}"] if r[f"base{i}"] else 0,
+            "active_partners": int(r[f"partners{i}"]),
+            "retention_base": int(r[f"base{i}"]), "retained": int(r[f"retained{i}"]),
+            "retention_yoy": float(100*r[f"retained{i}"]/r[f"base{i}"]) if r[f"base{i}"] else 0,
         }
     return periods, {
-        end: {s: r[f"{s}{i}"] for s in ("new", "reactivated", "active", "lapsing", "lapsed")}
+        end: {s: int(r[f"{s}{i}"]) for s in ("new", "reactivated", "active", "lapsing", "lapsed")}
         for i, end in enumerate(cutoffs)
-    }, {end: r[f"recurring{i}"] for i, end in enumerate(cutoffs)}
+    }, {end: int(r[f"recurring{i}"]) for i, end in enumerate(cutoffs)}
 
 
-def build_overview(db, start, end, prior_start, prior_end):
+def build_overview(db, start, end, prior_start, prior_end, *, include_email=True):
     from app.dashboards.api import _email_opted_in_count
     windows = [(start, end), (prior_start, prior_end)]
     windows += [(m, min(month_shift(m, 1)-timedelta(days=1), end))
@@ -104,7 +117,7 @@ def build_overview(db, start, end, prior_start, prior_end):
     last_month = end.replace(day=1)-timedelta(days=1)
     periods, classifications, recurring_counts = overview_facts(
         db, list(dict.fromkeys(windows)), list(dict.fromkeys((end, last_month, prior_end))))
-    profiles = rows(db, "SELECT count(*) AS n FROM active_profiles")[0]["n"]
+    profiles = int(rows(db, "SELECT value AS n FROM dashboard_kpis WHERE key='profiles'")[0]["n"])
     for classification in classifications.values():
         classification["prospect"] = profiles-sum(classification.values())
     def period(db, s, e):
@@ -117,8 +130,8 @@ def build_overview(db, start, end, prior_start, prior_end):
     chart_rows = rows(db, f"""
         SELECT gift_date, COALESCE(campaign,'(unspecified)') AS campaign,
           grouping(gift_date) AS is_campaign,
-          count(*) AS gifts, sum(amount) AS amount,
-          count(*) FILTER(WHERE gift_date BETWEEN :s AND :e) AS current_gifts,
+          sum(gift_count) AS gifts, sum(amount) AS amount,
+          sum(gift_count) FILTER(WHERE gift_date BETWEEN :s AND :e) AS current_gifts,
           sum(amount) FILTER(WHERE gift_date BETWEEN :s AND :e) AS current_amount
         FROM ({GIFTS}) g WHERE gift_date BETWEEN :ps AND :e
         GROUP BY GROUPING SETS ((gift_date),(COALESCE(campaign,'(unspecified)')))
@@ -150,17 +163,17 @@ def build_overview(db, start, end, prior_start, prior_end):
         paired.append({"month": cursor.replace(day=1).isoformat(), "from": cursor.isoformat(),
                        "to": stop.isoformat(), "prior_from": ps.isoformat(), "prior_to": pe.isoformat(),
                        "amount": float(amounts["amount"]), "prior_amount": float(amounts["prior_amount"]),
-                       "gifts": amounts["gifts"]})
+                       "gifts": int(amounts["gifts"])})
         cursor = stop + timedelta(days=1)
     counts = {r["status"]: r["count"] for r in statuses(db, end)}
     last_month = end.replace(day=1)-timedelta(days=1)
     old_counts = {r["status"]: r["count"] for r in statuses(db, last_month)}
-    opted = _email_opted_in_count(db)
+    opted = _email_opted_in_count(db) if include_email else None
     givers = sum(v for k, v in counts.items() if k != "prospect")
     status = [{"status": k, "count": counts.get(k, 0),
                "share": 100 * counts.get(k, 0)/givers if givers else 0}
               for k in ("active", "new", "reactivated", "lapsing", "lapsed")]
-    campaigns = [{"campaign": r["campaign"], "gifts": r["current_gifts"],
+    campaigns = [{"campaign": r["campaign"], "gifts": int(r["current_gifts"]),
                   "amount": r["current_amount"],
                   "average_gift": r["current_amount"]/r["current_gifts"]}
                  for r in chart_rows if r["is_campaign"] and r["current_gifts"]]
@@ -170,8 +183,9 @@ def build_overview(db, start, end, prior_start, prior_end):
         c["share"] = 100*c["amount"]/current["giving"] if current["giving"] else 0
     stats = {"profiles": {"value": profiles},
              "recurring_partners": delta(recurring(db, end), recurring(db, last_month)),
-             "email_opted_in": {"value": opted, "percentage": 100*opted/profiles if profiles else 0},
              "lapsing": delta(counts.get("lapsing", 0), old_counts.get("lapsing", 0))}
+    if include_email:
+        stats["email_opted_in"] = {"value": opted, "percentage": 100*opted/profiles if profiles else 0}
     rolling = period(db, end-timedelta(days=364), end)
     prior_rolling = period(db, prior_end-timedelta(days=364), prior_end)
     prior_givers = sum(r["count"] for r in statuses(db, prior_end) if r["status"] != "prospect")
@@ -181,8 +195,9 @@ def build_overview(db, start, end, prior_start, prior_end):
     metrics.update(active_profiles=current_only(profiles), donors=delta(givers, prior_givers),
                    active_donors_12m=delta(rolling["active_partners"], prior_rolling["active_partners"]),
                    giving_12m=delta(rolling["giving"], prior_rolling["giving"]),
-                   avg_gift=kpis["average_gift"], recurring_donors=stats["recurring_partners"],
-                   email_opted_in=current_only(opted))
+                   avg_gift=kpis["average_gift"], recurring_donors=stats["recurring_partners"])
+    if include_email:
+        metrics["email_opted_in"] = current_only(opted)
     return {"range": {"from": start.isoformat(), "to": end.isoformat(),
                       "prior_from": prior_start.isoformat(), "prior_to": prior_end.isoformat()},
             "metrics": metrics,
@@ -198,33 +213,11 @@ def build_overview(db, start, end, prior_start, prior_end):
                          "attention": []}}
 
 
-def health_counts(db):
-    from app.dashboards.cache import cached
-    return cached(db, ("health-counts",), lambda: rows(db, """SELECT
-      (SELECT count(*) FROM source_records WHERE resolved_at IS NULL) AS unresolved,
-      (SELECT count(*) FROM identifier_blocklist b WHERE reason='high_cardinality'
-         AND NOT EXISTS (SELECT 1 FROM audit_log a WHERE a.action='data_health.blocklist.approve'
-                         AND a.details->>'blocklist_id'=b.id::text)) AS review""")[0])
+def health_counts(db, role="admin"):
+    from app.dashboards.health import health_counts as count_issues
+    return count_issues(db, role)
 
 
 def attention(db, role, lapsing):
-    health = health_counts(db)
-    items = []
-    def add(severity, title, explanation, href):
-        items.append({"severity": severity, "title": title, "explanation": explanation, "href": href})
-    if role != "viewer":
-        failed = rows(db, "SELECT id FROM imports WHERE status='failed' ORDER BY id DESC LIMIT 1")
-        if failed:
-            add("error", "Import needs review", "A failed import needs investigation.", f"/imports?import_id={failed[0]['id']}")
-    if health["unresolved"]:
-        add("warning", "Unresolved source records", f'{health["unresolved"]:,} records await identity resolution.', "/data-health")
-    if health["review"]:
-        add("warning", "Identifiers need review", f'{health["review"]:,} high-cardinality identifiers await approval.', "/data-health")
-    if lapsing:
-        add("warning", "Partners are lapsing", f"{lapsing:,} partners last gave 366–730 days ago.", "/segments")
-    if role == "admin":
-        failed_jobs = rows(db, "SELECT count(*) AS n FROM jobs WHERE status='failed'")[0]["n"]
-        if failed_jobs:
-            add("error", "Failed background jobs", f"{failed_jobs:,} jobs need investigation.", "/system")
-    ranks = {"error": 0, "warning": 1, "notice": 2, "healthy": 3}
-    return sorted(items, key=lambda x: ranks[x["severity"]])[:5]
+    from app.dashboards.health import attention as issue_attention
+    return issue_attention(db, role, lapsing)
