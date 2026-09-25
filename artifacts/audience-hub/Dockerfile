@@ -1,8 +1,13 @@
-FROM node:20-bookworm-slim AS web
+FROM node:20.20.2-bookworm-slim AS web
 WORKDIR /web
+# Match the standalone installation check; don't inherit npm from a cached image.
+RUN npm install --global npm@10.9.9 --no-audit --no-fund \
+  && node --version && npm --version
 COPY package.json package-lock.json ./
 # The builder needs devDependencies even when npm is configured for production.
-RUN npm ci --include=dev --bin-links=true \
+RUN npm ci --include=dev --bin-links=true --no-audit --no-fund --cache=/tmp/npm-cache \
+  || { cat /tmp/npm-cache/_logs/*-debug-0.log; exit 1; }
+RUN test "$(npm --version)" = "10.9.9" \
   && test -x node_modules/.bin/vite
 COPY index.html vite.config.ts tsconfig.json ./
 COPY src/ ./src/
