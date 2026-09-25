@@ -1,0 +1,101 @@
+docker compose logs --since '2026-09-25T03:05:00Z' --tail=100 api
+api-1  | INFO:     76.219.194.165:0 - "GET /api/admin/jobs HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /api/shell HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET / HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /theme-init.js HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /assets/index-DgaOROt4.js HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /assets/index-BSBwtQ4F.css HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /manifest.webmanifest HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /assets/inter-latin-400-normal-C38fXH4l.woff2 HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /api/me HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /brand/favicon.svg HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /brand/kinship-sidebar-wordmark.svg HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /api/admin/jobs HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /assets/inter-latin-500-normal-Cerq10X2.woff2 HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /assets/jetbrains-mono-latin-400-normal-V6pRDFza.woff2 HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /assets/inter-latin-600-normal-LgqL8muc.woff2 HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /assets/sora-latin-600-normal-Cdg4DaK0.woff2 HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /api/dashboards/settings HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /api/shell HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /assets/jetbrains-mono-latin-500-normal-BWZEU5yA.woff2 HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /api/dashboards/giving?from=2026-06-27&to=2026-09-24 HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /api/admin/jobs HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /api/shell HTTP/1.1" 200 OK
+api-1  | {"at": "2026-09-25T03:07:14.325344+00:00", "level": "INFO", "logger": "alembic.runtime.migration", "message": "Context impl PostgresqlImpl."}
+api-1  | {"at": "2026-09-25T03:07:14.325442+00:00", "level": "INFO", "logger": "alembic.runtime.migration", "message": "Will assume transactional DDL."}
+api-1  | INFO:     127.0.0.1:46676 - "GET /readyz HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /api/admin/jobs HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /api/shell HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /api/admin/jobs HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /api/shell HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /api/admin/jobs HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /api/shell HTTP/1.1" 200 OK
+api-1  | {"at": "2026-09-25T03:07:29.451139+00:00", "level": "INFO", "logger": "alembic.runtime.migration", "message": "Context impl PostgresqlImpl."}
+api-1  | {"at": "2026-09-25T03:07:29.451236+00:00", "level": "INFO", "logger": "alembic.runtime.migration", "message": "Will assume transactional DDL."}
+api-1  | INFO:     127.0.0.1:53314 - "GET /readyz HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /api/admin/jobs HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /api/shell HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /api/imports HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /api/admin/jobs HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /api/imports HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /api/shell HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /api/imports/5 HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /api/imports HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /api/imports/5 HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /api/imports HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /api/admin/jobs HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /api/shell HTTP/1.1" 200 OK
+api-1  | {"at": "2026-09-25T03:07:44.547406+00:00", "level": "INFO", "logger": "alembic.runtime.migration", "message": "Context impl PostgresqlImpl."}
+api-1  | {"at": "2026-09-25T03:07:44.547512+00:00", "level": "INFO", "logger": "alembic.runtime.migration", "message": "Will assume transactional DDL."}
+api-1  | INFO:     127.0.0.1:45416 - "GET /readyz HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /api/admin/jobs HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /api/shell HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /api/admin/jobs HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /api/shell HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /api/admin/jobs HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /brand/kinship-sidebar-wordmark.svg HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /api/shell HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /api/admin/jobs HTTP/1.1" 200 OK
+api-1  | {"at": "2026-09-25T03:07:59.657124+00:00", "level": "INFO", "logger": "alembic.runtime.migration", "message": "Context impl PostgresqlImpl."}
+api-1  | {"at": "2026-09-25T03:07:59.657247+00:00", "level": "INFO", "logger": "alembic.runtime.migration", "message": "Will assume transactional DDL."}
+api-1  | INFO:     127.0.0.1:50226 - "GET /readyz HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /api/admin/jobs HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /api/shell HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /api/admin/jobs HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /api/shell HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /api/data-health HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /api/admin/jobs HTTP/1.1" 200 OK
+api-1  | {"at": "2026-09-25T03:08:14.765836+00:00", "level": "INFO", "logger": "alembic.runtime.migration", "message": "Context impl PostgresqlImpl."}
+api-1  | {"at": "2026-09-25T03:08:14.765966+00:00", "level": "INFO", "logger": "alembic.runtime.migration", "message": "Will assume transactional DDL."}
+api-1  | INFO:     127.0.0.1:35808 - "GET /readyz HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /api/shell HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /api/admin/jobs HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /api/shell HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /api/admin/jobs HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /api/shell HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /api/admin/jobs HTTP/1.1" 200 OK
+api-1  | {"at": "2026-09-25T03:08:29.871241+00:00", "level": "INFO", "logger": "alembic.runtime.migration", "message": "Context impl PostgresqlImpl."}
+api-1  | {"at": "2026-09-25T03:08:29.871337+00:00", "level": "INFO", "logger": "alembic.runtime.migration", "message": "Will assume transactional DDL."}
+api-1  | INFO:     127.0.0.1:56240 - "GET /readyz HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /api/shell HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /api/admin/jobs HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /api/shell HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /api/admin/jobs HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /api/shell HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /api/admin/jobs HTTP/1.1" 200 OK
+api-1  | {"at": "2026-09-25T03:08:44.979611+00:00", "level": "INFO", "logger": "alembic.runtime.migration", "message": "Context impl PostgresqlImpl."}
+api-1  | {"at": "2026-09-25T03:08:44.979734+00:00", "level": "INFO", "logger": "alembic.runtime.migration", "message": "Will assume transactional DDL."}
+api-1  | INFO:     127.0.0.1:43090 - "GET /readyz HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /api/shell HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /api/admin/jobs HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /api/shell HTTP/1.1" 200 OK
+api-1  | INFO:     76.219.194.165:0 - "GET /api/admin/jobs HTTP/1.1" 200 OK
+api-1  | {"at": "2026-09-25T03:09:00.089863+00:00", "level": "INFO", "logger": "alembic.runtime.migration", "message": "Context impl PostgresqlImpl."}
+api-1  | {"at": "2026-09-25T03:09:00.089985+00:00", "level": "INFO", "logger": "alembic.runtime.migration", "message": "Will assume transactional DDL."}
+api-1  | INFO:     127.0.0.1:33912 - "GET /readyz HTTP/1.1" 200 OK
+api-1  | {"at": "2026-09-25T03:09:15.214774+00:00", "level": "INFO", "logger": "alembic.runtime.migration", "message": "Context impl PostgresqlImpl."}
+api-1  | {"at": "2026-09-25T03:09:15.214925+00:00", "level": "INFO", "logger": "alembic.runtime.migration", "message": "Will assume transactional DDL."}
+api-1  | INFO:     127.0.0.1:58502 - "GET /readyz HTTP/1.1" 200 OK
+api-1  | {"at": "2026-09-25T03:09:30.337056+00:00", "level": "INFO", "logger": "alembic.runtime.migration", "message": "Context impl PostgresqlImpl."}
+api-1  | {"at": "2026-09-25T03:09:30.337156+00:00", "level": "INFO", "logger": "alembic.runtime.migration", "message": "Will assume transactional DDL."}
+api-1  | INFO:     127.0.0.1:42764 - "GET /readyz HTTP/1.1" 200 OK

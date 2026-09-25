@@ -1,0 +1,67 @@
+checkpoint starting: time
+db-1      | 2026-09-25 03:06:09.954 UTC [3959] LOG:  could not send data to client: Broken pipe
+db-1      | 2026-09-25 03:06:09.954 UTC [3959] STATEMENT:
+db-1      |             WITH active_profiles AS (
+db-1      |               SELECT id FROM profiles WHERE merged_into_id IS NULL AND NOT is_deleted
+db-1      |             ), profile_emails AS (
+db-1      |               SELECT p.id AS profile_id, lower(btrim(p.email::text)) AS email
+db-1      |               FROM profiles p JOIN active_profiles ap ON ap.id=p.id
+db-1      |               WHERE p.email IS NOT NULL AND btrim(p.email::text) <> ''
+db-1      |               UNION
+db-1      |               SELECT sr.profile_id, lower(btrim(sr.email_norm::text))
+db-1      |               FROM source_records sr JOIN active_profiles ap ON ap.id=sr.profile_id
+db-1      |               WHERE sr.email_norm IS NOT NULL AND btrim(sr.email_norm::text) <> ''
+db-1      |               UNION
+db-1      |               SELECT i.profile_id, lower(btrim(i.value))
+db-1      |               FROM identifiers i JOIN active_profiles ap ON ap.id=i.profile_id
+db-1      |               WHERE i.type='email' AND btrim(i.value) <> ''
+db-1      |             ), consent_flags AS (
+db-1      |               SELECT pe.profile_id, pe.email,
+db-1      |                      COALESCE(bool_or(lower(COALESCE(sr.attributes->>'email_consent', ''))='opted_in'),
+db-1      |                               false) AS source_opted_in,
+db-1      |                      COALESCE(bool_or(c.status IN ('opted_in', 'subscribed', 'granted')), false)
+db-1      |                        AS ledger_opted_in,
+db-1      |                      COALESCE(bool_or(c.status='opted_out'), false) AS ledger_opted_out
+db-1      |               FROM profile_emails pe
+db-1      |               LEFT JOIN source_records sr
+db-1      |                 ON sr.profile_id=pe.profile_id
+db-1      |                AND lower(btrim(sr.email_norm::text))=pe.email
+db-1      |               LEFT JOIN consents c ON c.profile_id=pe.profile_id AND c.channel='email'
+db-1      |               GROUP BY pe.profile_id, pe.email
+db-1      |             )
+db-1      |             SELECT profile_id, email, source_opted_in, ledger_opted_in, ledger_opted_out
+db-1      |             FROM consent_flags WHERE source_opted_in OR ledger_opted_in
+db-1      |
+db-1      | 2026-09-25 03:06:09.954 UTC [3959] FATAL:  connection to client lost
+db-1      | 2026-09-25 03:06:09.954 UTC [3959] STATEMENT:
+db-1      |             WITH active_profiles AS (
+db-1      |               SELECT id FROM profiles WHERE merged_into_id IS NULL AND NOT is_deleted
+db-1      |             ), profile_emails AS (
+db-1      |               SELECT p.id AS profile_id, lower(btrim(p.email::text)) AS email
+db-1      |               FROM profiles p JOIN active_profiles ap ON ap.id=p.id
+db-1      |               WHERE p.email IS NOT NULL AND btrim(p.email::text) <> ''
+db-1      |               UNION
+db-1      |               SELECT sr.profile_id, lower(btrim(sr.email_norm::text))
+db-1      |               FROM source_records sr JOIN active_profiles ap ON ap.id=sr.profile_id
+db-1      |               WHERE sr.email_norm IS NOT NULL AND btrim(sr.email_norm::text) <> ''
+db-1      |               UNION
+db-1      |               SELECT i.profile_id, lower(btrim(i.value))
+db-1      |               FROM identifiers i JOIN active_profiles ap ON ap.id=i.profile_id
+db-1      |               WHERE i.type='email' AND btrim(i.value) <> ''
+db-1      |             ), consent_flags AS (
+db-1      |               SELECT pe.profile_id, pe.email,
+db-1      |                      COALESCE(bool_or(lower(COALESCE(sr.attributes->>'email_consent', ''))='opted_in'),
+db-1      |                               false) AS source_opted_in,
+db-1      |                      COALESCE(bool_or(c.status IN ('opted_in', 'subscribed', 'granted')), false)
+db-1      |                        AS ledger_opted_in,
+db-1      |                      COALESCE(bool_or(c.status='opted_out'), false) AS ledger_opted_out
+db-1      |               FROM profile_emails pe
+db-1      |               LEFT JOIN source_records sr
+db-1      |                 ON sr.profile_id=pe.profile_id
+db-1      |                AND lower(btrim(sr.email_norm::text))=pe.email
+db-1      |               LEFT JOIN consents c ON c.profile_id=pe.profile_id AND c.channel='email'
+db-1      |               GROUP BY pe.profile_id, pe.email
+db-1      |             )
+db-1      |             SELECT profile_id, email, source_opted_in, ledger_opted_in, ledger_opted_out
+db-1      |             FROM consent_flags WHERE source_opted_in OR ledger_opted_in
+db-1      |
