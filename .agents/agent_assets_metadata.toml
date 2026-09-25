@@ -28,3 +28,17 @@ mtime_ms = 1790279803378
 storage_uri = "gcs://replit-rams-assets-janeway/rams/assets/repl:e5cb43bd-1e3c-4895-8728-2f6a0c8a7f98/3b4f9a7d-1f0d-48d9-a0d4-0d786e4af5eb/db42fb93-524c-40b2-93d0-6e285fd3af65"
 storage_version_token = "1790279879060246"
 content_type = "text/html"
+
+[[outputs]]
+id = "yqbrGjYoQT-nOw4IX68yY"
+uri = "file://artifacts/audience-hub/docs/dashboard-benchmark-500k.json"
+type = "unspecified"
+title = "500k-profile dashboard benchmark"
+description = "All 39 measured JSON and CSV routes, cold/warm timings, exact dataset size, and measurement limitations."
+logical_id = "444ccdeb-4471-463d-93d9-a9040d51bea5"
+content_hash = "sha256:8b8cfb39342254e6fe69f857302bcdcad8f91156e97c11d83a41c4191fbca867"
+size = 5372
+mtime_ms = 1790316608549
+storage_uri = "gcs://replit-rams-assets-janeway/rams/assets/repl:e5cb43bd-1e3c-4895-8728-2f6a0c8a7f98/444ccdeb-4471-463d-93d9-a9040d51bea5/04c8789f-4d75-4174-93cd-e76883544a06"
+storage_version_token = "1790316608997063"
+content_type = "application/octet-stream"
