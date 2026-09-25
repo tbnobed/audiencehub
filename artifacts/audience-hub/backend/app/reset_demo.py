@@ -9,7 +9,7 @@ from sqlalchemy.exc import OperationalError
 # Keep this allowlist in sync with migrations. Never use CASCADE: a new FK from a
 # retained table must make the operation fail, not quietly destroy configuration.
 DATA_TABLES = (
-    "audit_log", "scheduled_runs", "jobs", "imports", "import_batch_diagnostics",
+    "audit_log", "client_errors", "scheduled_runs", "jobs", "imports", "import_batch_diagnostics",
     "profiles", "source_records",
     "identifiers", "identifier_blocklist", "profile_merges", "gifts", "events",
     "consents", "suppressions", "enrichment_values", "profile_traits",

@@ -21,6 +21,7 @@ from app.imports.api import router as imports_router
 from app.profiles.api import router as profiles_router
 from app.dashboards.api import router as dashboards_router
 from app.settings.api import router as settings_router
+from app.client_errors import router as client_errors_router
 
 
 @asynccontextmanager
@@ -41,6 +42,7 @@ app.include_router(imports_router)
 app.include_router(profiles_router)
 app.include_router(dashboards_router)
 app.include_router(settings_router)
+app.include_router(client_errors_router)
 
 
 @app.exception_handler(HTTPException)

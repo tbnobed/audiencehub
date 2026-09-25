@@ -25,6 +25,18 @@ class User(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
+class ClientError(Base):
+    __tablename__ = "client_errors"
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    user_id: Mapped[int] = mapped_column(BigInteger)
+    category: Mapped[str] = mapped_column(String(32))
+    message: Mapped[str] = mapped_column(String(64))
+    route: Mapped[str] = mapped_column(String(64))
+    profile_id: Mapped[int | None] = mapped_column(BigInteger)
+    component_stack: Mapped[list] = mapped_column(JSONB)
+
+
 class AuditLog(Base):
     __tablename__ = "audit_log"
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)

@@ -4,3 +4,4 @@
 - [Import performance evidence](import-performance-evidence.md) — distinguish profiled CPU comparisons from unprofiled concurrent throughput acceptance.
 - [Import recovery intent](import-recovery-intent.md) — partial committed imports are intentional; late failures must not discard completed batches.
 - [Dashboard performance](dashboard-performance.md) — require cold-query evidence under writes; warm-cache speed and healthy APIs do not establish dashboard responsiveness.
+- [Profile render validation](profile-validation.md) — compare original and revised pages against real API captures; defensive hardening is not proof of a root-cause fix.

@@ -34,6 +34,16 @@ interface Job {
   progress: { done?: number; total?: number; message?: string };
 }
 
+interface ClientErrorReport {
+  id: number;
+  created_at: string;
+  category: string;
+  message: string;
+  route: string;
+  profile_id: number | null;
+  component_stack: string[];
+}
+
 export default function System() {
   const { user } = useAuth();
   const { toast } = useToast();
@@ -53,6 +63,12 @@ export default function System() {
     enabled: user?.role === 'admin',
   });
   const jobs = jobResponse?.items ?? [];
+  const clientErrors = useQuery<{ items: ClientErrorReport[]; retention_days: number; max_rows: number }>({
+    queryKey: ['system', 'client-errors'],
+    queryFn: () => fetchApi('/api/admin/client-errors'),
+    enabled: user?.role === 'admin',
+    refetchInterval: 10000,
+  });
 
   const noopMutation = useMutation({
     mutationFn: () => fetchApi('/api/admin/jobs/noop', { method: 'POST' }),
@@ -102,6 +118,37 @@ export default function System() {
           </Button>
         </div>
       </div>
+
+      <Card>
+        <CardHeader><CardTitle>Client render errors</CardTitle></CardHeader>
+        <CardContent>
+          <p className="text-sm text-muted-foreground mb-4">
+            Most recent 100 reports. Retained for up to 7 days, capped at 1,000 reports.
+            Messages and component names use a privacy-safe vocabulary; personal data and raw stacks are not collected.
+          </p>
+          {clientErrors.isLoading ? <p role="status">Loading client errors…</p> :
+            clientErrors.isError ? <div role="alert" className="text-destructive">
+              Unable to load client error reports.
+              <Button variant="outline" className="ml-3" onClick={() => clientErrors.refetch()}>Try again</Button>
+            </div> :
+              <div className="overflow-x-auto"><Table>
+                <TableHeader><TableRow>
+                  <TableHead>Time</TableHead><TableHead>Category</TableHead><TableHead>Message</TableHead>
+                  <TableHead>Route</TableHead><TableHead>Profile ID</TableHead><TableHead>Components</TableHead>
+                </TableRow></TableHeader>
+                <TableBody>
+                  {!clientErrors.data?.items.length ? <TableRow><TableCell colSpan={6} className="text-center py-8 text-muted-foreground">No recent client errors.</TableCell></TableRow> :
+                    clientErrors.data.items.map(report => <TableRow key={report.id}>
+                      <TableCell className="whitespace-nowrap">{new Date(report.created_at).toLocaleString()}</TableCell>
+                      <TableCell>{report.category}</TableCell><TableCell>{report.message}</TableCell>
+                      <TableCell className="font-mono text-xs">{report.route}</TableCell>
+                      <TableCell>{report.profile_id ?? '—'}</TableCell>
+                      <TableCell className="text-xs">{report.component_stack.join(' → ') || 'Not available'}</TableCell>
+                    </TableRow>)}
+                </TableBody>
+              </Table></div>}
+        </CardContent>
+      </Card>
 
       <div className="grid gap-4 md:grid-cols-3">
         <Card>

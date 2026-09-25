@@ -12,7 +12,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { format } from 'date-fns';
+import { displayValue, displayDate, displayAmount, displayNumber, displayJoined, records, record } from '@/lib/profile-display';
+import { ProfileSectionBoundary } from '@/components/ProfileSectionBoundary';
 import { Skeleton } from '@/components/ui/skeleton';
 
 export default function ProfileDetail() {
@@ -21,7 +22,7 @@ export default function ProfileDetail() {
   const location = useLocation();
   const back = (location.state as { from?: string } | null)?.from || '/profiles';
   const [copied, setCopied] = useState(false);
-  const { data: profile, isLoading, error, refetch } = useProfile(Number(id));
+  const { data: rawProfile, isLoading, error, refetch } = useProfile(Number(id));
   const { data: catalog } = useQuery({
     queryKey: ['traits-catalog'],
     queryFn: () => fetchApi('/api/traits') as Promise<{ items: { key: string; label: string; description: string }[] }>,
@@ -39,7 +40,7 @@ export default function ProfileDetail() {
     );
   }
 
-  if (error || !profile) {
+  if (error || !rawProfile) {
     return (
       <div className="p-8 flex flex-col items-center justify-center h-full text-center">
         <div className="h-16 w-16 rounded-full bg-destructive/10 flex items-center justify-center mb-4">
@@ -57,11 +58,23 @@ export default function ProfileDetail() {
     );
   }
 
-  const name = [profile.first_name, profile.last_name].filter(Boolean).join(' ') || 'Unnamed Profile';
+  const profile = {
+    ...rawProfile,
+    traits: record(rawProfile.traits),
+    gifts: records(rawProfile.gifts),
+    events: records(rawProfile.events),
+    identifiers: records(rawProfile.identifiers),
+    source_records: records(rawProfile.source_records),
+    merges: records(rawProfile.merges),
+    enrichment: records(rawProfile.enrichment),
+    consents: records(rawProfile.consents),
+  };
+  const name = displayJoined([profile.first_name, profile.last_name], ' ');
+  const boundary = { route: location.pathname, profileId: id || '', onRetry: () => { void refetch(); } };
 
   return (
     <div className="h-full flex flex-col space-y-4 pb-8 animate-in fade-in duration-300 max-w-[1680px] mx-auto">
-      <div className="flex items-center gap-4">
+      <ProfileSectionBoundary {...boundary} section="Profile header">{() => <div className="flex items-center gap-4">
         <Button variant="ghost" size="icon" data-testid="button-back-profiles" onClick={() => navigate(back)}>
           <ArrowLeft className="h-5 w-5" />
         </Button>
@@ -72,30 +85,30 @@ export default function ProfileDetail() {
               profile.donor_status === 'active' ? 'bg-primary/10 text-primary border-primary/20' :
               profile.donor_status === 'lapsed' ? 'bg-amber-500/10 text-amber-500 border-amber-500/20' : ''
             }`}>
-              {profile.donor_status}
+              {displayValue(profile.donor_status)}
             </Badge>
             <button type="button" data-testid="button-copy-profile-id" className="font-mono text-[11px] text-muted-foreground border border-border rounded px-2 py-1 flex items-center gap-1 hover:text-primary" title="Copy profile ID" onClick={async () => { await navigator.clipboard.writeText(String(profile.id)); setCopied(true); setTimeout(() => setCopied(false), 2000); }}>ID: {profile.id} {copied ? <Check size={12} /> : <Copy size={12} />}</button>
           </div>
           <div className="flex items-center gap-4 mt-2 text-sm text-muted-foreground">
-            {profile.email && <span className="flex items-center"><Mail className="h-3 w-3 mr-1" /> {profile.email}</span>}
-            {profile.phone && <span className="flex items-center"><Phone className="h-3 w-3 mr-1" /> {profile.phone}</span>}
+            <span className="flex items-center"><Mail className="h-3 w-3 mr-1" /> {displayValue(profile.email)}</span>
+            <span className="flex items-center"><Phone className="h-3 w-3 mr-1" /> {displayValue(profile.phone)}</span>
             {(profile.city || profile.region || profile.country) && (
               <span className="flex items-center">
                 <MapPin className="h-3 w-3 mr-1" /> 
-                {[profile.city, profile.region, profile.country].filter(Boolean).join(', ')}
+                {displayJoined([profile.city, profile.region, profile.country])}
               </span>
             )}
           </div>
         </div>
-      </div>
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+      </div>}</ProfileSectionBoundary>
+      <ProfileSectionBoundary {...boundary} section="Profile statistics">{() => <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
         {[
-          ['Donor status', profile.donor_status?.replaceAll('_', ' ') || '—'],
-          ['RFM score', profile.traits?.rfm_score ?? '—'],
-          ['Lifetime giving', profile.traits?.ltv_total == null ? '—' : Number(profile.traits.ltv_total).toLocaleString('en-US', { style: 'currency', currency: 'USD' })],
-          ['Last gift', profile.traits?.last_gift_date ? format(new Date(profile.traits.last_gift_date), 'MMM d, yyyy') : '—'],
+          ['Donor status', displayValue(profile.donor_status).replaceAll('_', ' ')],
+          ['RFM score', displayValue(profile.traits.rfm_score)],
+          ['Lifetime giving', displayAmount(profile.traits.ltv_total)],
+          ['Last gift', displayDate(profile.traits.last_gift_date)],
         ].map(([label, value]) => <div key={label} className="border border-line bg-surface rounded px-3 py-3"><div className="text-[10px] uppercase tracking-wider text-ink-muted">{label}</div><div className="font-mono text-lg text-ink mt-1" data-testid={`value-${label.toLowerCase().replaceAll(' ', '-')}`}>{value}</div></div>)}
-      </div>
+      </div>}</ProfileSectionBoundary>
 
       <Tabs defaultValue="overview" className="flex-1 flex flex-col">
         <TabsList className="w-full justify-start border-b rounded-none h-12 bg-transparent p-0">
@@ -121,6 +134,7 @@ export default function ProfileDetail() {
 
         <div className="flex-1 mt-4">
           <TabsContent value="overview" className="m-0 space-y-6">
+            <ProfileSectionBoundary {...boundary} section="Overview">{() => <>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
               <Card>
                 <CardHeader className="pb-2">
@@ -128,9 +142,9 @@ export default function ProfileDetail() {
                 </CardHeader>
                 <CardContent>
                   <div className="text-3xl font-bold font-mono tracking-tight">
-                    ${(profile.traits?.ltv_total || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    {displayAmount(profile.traits.ltv_total)}
                   </div>
-                  <p className="text-xs text-muted-foreground mt-1">Across {profile.traits?.gift_count_total || 0} gifts</p>
+                  <p className="text-xs text-muted-foreground mt-1">Across {displayNumber(profile.traits.gift_count_total)} gifts</p>
                 </CardContent>
               </Card>
               <Card>
@@ -139,12 +153,10 @@ export default function ProfileDetail() {
                 </CardHeader>
                 <CardContent>
                   <div className="text-3xl font-bold font-mono tracking-tight">
-                    {profile.traits?.last_gift_date ? format(new Date(profile.traits.last_gift_date), 'MMM d, yyyy') : '-'}
+                    {displayDate(profile.traits.last_gift_date)}
                   </div>
                   <p className="text-xs text-muted-foreground mt-1">
-                    {profile.traits?.days_since_last_gift !== undefined 
-                      ? `${profile.traits.days_since_last_gift} days ago` 
-                      : 'No gifts recorded'}
+                    {displayNumber(profile.traits.days_since_last_gift)} days ago
                   </p>
                 </CardContent>
               </Card>
@@ -154,16 +166,16 @@ export default function ProfileDetail() {
                 </CardHeader>
                 <CardContent>
                   <div className="text-3xl font-bold font-mono tracking-tight text-primary">
-                    {profile.traits?.rfm_score || '-'}
+                    {displayValue(profile.traits.rfm_score)}
                   </div>
                   <p className="text-xs text-muted-foreground mt-1">
-                    R:{profile.traits?.rfm_recency || '-'} F:{profile.traits?.rfm_frequency || '-'} M:{profile.traits?.rfm_monetary || '-'}
+                    R:{displayValue(profile.traits.rfm_recency)} F:{displayValue(profile.traits.rfm_frequency)} M:{displayValue(profile.traits.rfm_monetary)}
                   </p>
                 </CardContent>
               </Card>
             </div>
             
-            <Card>
+            <ProfileSectionBoundary {...boundary} section="Profile details panel">{() => <Card>
               <CardHeader>
                 <CardTitle>Profile Details</CardTitle>
               </CardHeader>
@@ -171,51 +183,51 @@ export default function ProfileDetail() {
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-6 text-sm">
                   <div>
                     <span className="text-muted-foreground block text-xs mb-1">First Seen</span>
-                    <span className="font-medium">{profile.first_seen_at ? format(new Date(profile.first_seen_at), 'MMM d, yyyy HH:mm') : '-'}</span>
+                    <span className="font-medium">{displayDate(profile.first_seen_at, 'MMM d, yyyy HH:mm')}</span>
                   </div>
                   <div>
                     <span className="text-muted-foreground block text-xs mb-1">Last Seen</span>
-                    <span className="font-medium">{profile.last_seen_at ? format(new Date(profile.last_seen_at), 'MMM d, yyyy HH:mm') : '-'}</span>
+                    <span className="font-medium">{displayDate(profile.last_seen_at, 'MMM d, yyyy HH:mm')}</span>
                   </div>
                   <div>
                     <span className="text-muted-foreground block text-xs mb-1">12m Gift Value</span>
-                    <span className="font-mono font-medium">${(profile.traits?.gift_amount_12m || 0).toLocaleString()}</span>
+                    <span className="font-mono font-medium">{displayAmount(profile.traits.gift_amount_12m)}</span>
                   </div>
                   <div>
                     <span className="text-muted-foreground block text-xs mb-1">12m Gift Count</span>
-                    <span className="font-medium">{profile.traits?.gift_count_12m || 0}</span>
+                    <span className="font-medium">{displayNumber(profile.traits.gift_count_12m)}</span>
                   </div>
                   <div className="col-span-2">
                     <span className="text-muted-foreground block text-xs mb-1">Address</span>
                     <span className="font-medium">
-                      {[profile.address1, profile.city, profile.region, profile.postal_code, profile.country].filter(Boolean).join(', ') || '-'}
+                      {displayJoined([profile.address1, profile.city, profile.region, profile.postal_code, profile.country])}
                     </span>
                   </div>
                   <div className="col-span-2">
                     <span className="text-muted-foreground block text-xs mb-1">Known Sources</span>
                     <div className="flex gap-2 mt-1 flex-wrap">
-                      {profile.traits?.source_keys?.map((sk: string) => (
-                        <Badge key={sk} variant="outline" className="font-mono text-[10px]">{sk}</Badge>
-                      )) || '-'}
+                      {displayValue(profile.traits.source_keys)}
                     </div>
                   </div>
                 </div>
               </CardContent>
-            </Card>
-            <Card>
+            </Card>}</ProfileSectionBoundary>
+            <ProfileSectionBoundary {...boundary} section="Computed traits panel">{() => <Card>
               <CardHeader className="pb-3"><CardTitle className="text-sm">Computed traits</CardTitle><CardDescription>Current values from the trait engine. Hover a label for its definition.</CardDescription></CardHeader>
               <CardContent className="grid grid-cols-2 lg:grid-cols-4 gap-px bg-line p-px">
-                {(catalog?.items || []).map(item => <div key={item.key} className="bg-surface p-3 min-w-0" title={item.description}><div className="text-[10px] uppercase tracking-wide text-ink-muted truncate">{item.label}</div><div className="font-mono text-xs mt-1 break-words">{profile.traits?.[item.key] == null ? '—' : Array.isArray(profile.traits[item.key]) ? profile.traits[item.key].join(', ') : typeof profile.traits[item.key] === 'boolean' ? (profile.traits[item.key] ? 'Yes' : 'No') : String(profile.traits[item.key])}</div></div>)}
+                {records(catalog?.items).map((item, i) => <div key={i} className="bg-surface p-3 min-w-0" title={displayValue(item.description)}><div className="text-[10px] uppercase tracking-wide text-ink-muted truncate">{displayValue(item.label)}</div><div className="font-mono text-xs mt-1 break-words">{displayValue(profile.traits[displayValue(item.key)])}</div></div>)}
                 {!catalog?.items?.length && <div className="bg-surface p-3 text-xs text-ink-muted">Trait definitions unavailable.</div>}
               </CardContent>
-            </Card>
-            <Card>
+            </Card>}</ProfileSectionBoundary>
+            <ProfileSectionBoundary {...boundary} section="Consent summary panel">{() => <Card>
               <CardHeader className="pb-3"><CardTitle className="text-sm">Consent by channel</CardTitle><CardDescription>Recorded communication preferences and provenance.</CardDescription></CardHeader>
-              <CardContent className="p-0"><Table><TableHeader><TableRow><TableHead>Channel</TableHead><TableHead>Status</TableHead><TableHead>Source</TableHead><TableHead className="text-right">Captured</TableHead></TableRow></TableHeader><TableBody>{profile.consents.length ? profile.consents.map((c, i) => <TableRow key={i}><TableCell className="uppercase text-xs">{c.channel}</TableCell><TableCell className="text-xs">{c.status}</TableCell><TableCell className="font-mono text-xs">{c.source_key}</TableCell><TableCell className="text-right text-xs">{c.captured_at ? format(new Date(c.captured_at), 'MMM d, yyyy') : '—'}</TableCell></TableRow>) : <TableRow><TableCell colSpan={4} className="text-center text-xs text-muted-foreground py-6">No consent records yet.</TableCell></TableRow>}</TableBody></Table></CardContent>
-            </Card>
+              <CardContent className="p-0"><Table><TableHeader><TableRow><TableHead>Channel</TableHead><TableHead>Status</TableHead><TableHead>Source</TableHead><TableHead className="text-right">Captured</TableHead></TableRow></TableHeader><TableBody>{profile.consents.length ? profile.consents.map((c, i) => <TableRow key={i}><TableCell className="uppercase text-xs">{displayValue(c.channel)}</TableCell><TableCell className="text-xs">{displayValue(c.status)}</TableCell><TableCell className="font-mono text-xs">{displayValue(c.source_key)}</TableCell><TableCell className="text-right text-xs">{displayDate(c.captured_at)}</TableCell></TableRow>) : <TableRow><TableCell colSpan={4} className="text-center text-xs text-muted-foreground py-6">No consent records yet.</TableCell></TableRow>}</TableBody></Table></CardContent>
+            </Card>}</ProfileSectionBoundary>
+            </>}</ProfileSectionBoundary>
           </TabsContent>
 
           <TabsContent value="gifts" className="m-0 h-full">
+            <ProfileSectionBoundary {...boundary} section="Gifts">{() =>
             <Card className="h-full flex flex-col">
               <div className="overflow-auto flex-1 p-0">
                 <Table>
@@ -240,19 +252,19 @@ export default function ProfileDetail() {
                       profile.gifts.map((gift) => (
                         <TableRow key={gift.id}>
                           <TableCell className="font-medium">
-                            {gift.gift_date ? format(new Date(gift.gift_date), 'MMM d, yyyy') : '-'}
+                            {displayDate(gift.gift_date)}
                           </TableCell>
                           <TableCell className="text-right font-mono font-medium text-emerald-500">
-                            {gift.amount ? `$${gift.amount.toLocaleString(undefined, {minimumFractionDigits: 2})}` : '-'}
-                            {gift.is_recurring && <Badge variant="outline" className="ml-2 text-[9px] uppercase">Recurring</Badge>}
+                            {displayAmount(gift.amount, gift.currency ?? 'USD')}
+                            {gift.is_recurring === true && <Badge variant="outline" className="ml-2 text-[9px] uppercase">Recurring</Badge>}
                           </TableCell>
-                          <TableCell className="text-xs">{gift.fund || '-'}</TableCell>
+                          <TableCell className="text-xs">{displayValue(gift.fund)}</TableCell>
                           <TableCell className="text-xs text-muted-foreground">
-                            {[gift.campaign, gift.appeal_code].filter(Boolean).join(' / ') || '-'}
+                            {displayJoined([gift.campaign, gift.appeal_code], ' / ')}
                           </TableCell>
-                          <TableCell className="text-xs uppercase">{gift.channel || '-'}</TableCell>
+                          <TableCell className="text-xs uppercase">{displayValue(gift.channel)}</TableCell>
                           <TableCell>
-                            <Badge variant="secondary" className="font-mono text-[10px]">{gift.source_key}</Badge>
+                            <Badge variant="secondary" className="font-mono text-[10px]">{displayValue(gift.source_key)}</Badge>
                           </TableCell>
                         </TableRow>
                       ))
@@ -260,10 +272,11 @@ export default function ProfileDetail() {
                   </TableBody>
                 </Table>
               </div>
-            </Card>
+            </Card>}</ProfileSectionBoundary>
           </TabsContent>
 
           <TabsContent value="activity" className="m-0 h-full">
+            <ProfileSectionBoundary {...boundary} section="Activity">{() =>
             <Card className="h-full flex flex-col">
               <div className="overflow-auto flex-1 p-0">
                 <Table>
@@ -286,14 +299,14 @@ export default function ProfileDetail() {
                       profile.events.map((event) => (
                         <TableRow key={event.id}>
                           <TableCell className="text-xs text-muted-foreground">
-                            {event.occurred_at ? format(new Date(event.occurred_at), 'MMM d, yyyy HH:mm:ss') : '-'}
+                            {displayDate(event.occurred_at, 'MMM d, yyyy HH:mm:ss')}
                           </TableCell>
                           <TableCell>
-                            <Badge variant="outline" className="font-mono text-[10px] uppercase">{event.type}</Badge>
+                            <Badge variant="outline" className="font-mono text-[10px] uppercase">{displayValue(event.type)}</Badge>
                           </TableCell>
-                          <TableCell className="font-medium text-sm">{event.name}</TableCell>
+                          <TableCell className="font-medium text-sm">{displayValue(event.name)}</TableCell>
                           <TableCell>
-                            <Badge variant="secondary" className="font-mono text-[10px]">{event.source_key}</Badge>
+                            <Badge variant="secondary" className="font-mono text-[10px]">{displayValue(event.source_key)}</Badge>
                             {event.properties && Object.keys(event.properties).length > 0 && <details className="mt-1 text-[10px]"><summary className="cursor-pointer text-primary">Properties</summary><pre className="mt-1 p-2 bg-ground border border-line rounded max-w-[300px] overflow-auto">{JSON.stringify(event.properties, null, 2)}</pre></details>}
                           </TableCell>
                         </TableRow>
@@ -302,10 +315,11 @@ export default function ProfileDetail() {
                   </TableBody>
                 </Table>
               </div>
-            </Card>
+            </Card>}</ProfileSectionBoundary>
           </TabsContent>
 
           <TabsContent value="identity" className="m-0 space-y-6">
+            <ProfileSectionBoundary {...boundary} section="Identity">{() => <>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <Card>
                 <CardHeader>
@@ -329,10 +343,10 @@ export default function ProfileDetail() {
                       ) : (
                         profile.identifiers.map((ident) => (
                           <TableRow key={ident.id}>
-                            <TableCell className="text-xs font-mono uppercase">{ident.type}</TableCell>
-                            <TableCell className="font-medium text-sm">{ident.value}</TableCell>
+                            <TableCell className="text-xs font-mono uppercase">{displayValue(ident.type)}</TableCell>
+                            <TableCell className="font-medium text-sm">{displayValue(ident.value)}</TableCell>
                             <TableCell className="text-right text-xs text-muted-foreground">
-                              {ident.first_seen_at ? format(new Date(ident.first_seen_at), 'MMM d, yy') : '-'}
+                              {displayDate(ident.first_seen_at, 'MMM d, yy')}
                             </TableCell>
                           </TableRow>
                         ))
@@ -365,12 +379,12 @@ export default function ProfileDetail() {
                         profile.merges.map((merge) => (
                           <TableRow key={merge.id}>
                             <TableCell className="text-xs text-muted-foreground">
-                              {merge.merged_at ? format(new Date(merge.merged_at), 'MMM d, yy HH:mm') : '-'}
+                              {displayDate(merge.merged_at, 'MMM d, yy HH:mm')}
                             </TableCell>
                             <TableCell className="font-mono text-xs">
-                              ID: {merge.loser_id}
+                              ID: {displayValue(merge.loser_id)}
                             </TableCell>
-                            <TableCell className="text-xs capitalize">{merge.reason?.replace('_', ' ')}</TableCell>
+                            <TableCell className="text-xs capitalize">{displayValue(merge.reason).replaceAll('_', ' ')}</TableCell>
                           </TableRow>
                         ))
                       )}
@@ -405,21 +419,21 @@ export default function ProfileDetail() {
                       profile.source_records.map((sr) => (
                         <TableRow key={sr.id}>
                           <TableCell>
-                            <Badge variant="secondary" className="font-mono text-[10px]">{sr.source_key}</Badge>
+                            <Badge variant="secondary" className="font-mono text-[10px]">{displayValue(sr.source_key)}</Badge>
                           </TableCell>
-                          <TableCell className="font-mono text-xs text-muted-foreground">{sr.external_id || '-'}</TableCell>
+                          <TableCell className="font-mono text-xs text-muted-foreground">{displayValue(sr.external_id)}</TableCell>
                           <TableCell className="text-sm">
-                            {[sr.first_name, sr.last_name].filter(Boolean).join(' ') || '-'}
+                            {displayJoined([sr.first_name, sr.last_name], ' ')}
                           </TableCell>
                           <TableCell className="text-xs">
                             <div className="flex flex-col">
-                              {sr.email && <span>{sr.email}</span>}
-                              {sr.phone && <span className="text-muted-foreground">{sr.phone}</span>}
+                              <span>{displayValue(sr.email)}</span>
+                              <span className="text-muted-foreground">{displayValue(sr.phone)}</span>
                               {sr.attributes && Object.keys(sr.attributes).length > 0 && <details className="mt-1 text-[10px]"><summary className="cursor-pointer text-primary">Raw attributes</summary><pre className="mt-1 p-2 bg-ground border border-line rounded max-w-[300px] overflow-auto">{JSON.stringify(sr.attributes, null, 2)}</pre></details>}
                             </div>
                           </TableCell>
                           <TableCell className="text-right text-xs text-muted-foreground">
-                            {sr.updated_at ? format(new Date(sr.updated_at), 'MMM d, yyyy') : '-'}
+                            {displayDate(sr.updated_at)}
                           </TableCell>
                         </TableRow>
                       ))
@@ -428,9 +442,11 @@ export default function ProfileDetail() {
                 </Table>
               </CardContent>
             </Card>
+            </>}</ProfileSectionBoundary>
           </TabsContent>
 
           <TabsContent value="enrichment" className="m-0">
+            <ProfileSectionBoundary {...boundary} section="Enrichment">{() =>
             <Card>
               <CardHeader>
                 <CardTitle>Enrichment Data</CardTitle>
@@ -457,17 +473,17 @@ export default function ProfileDetail() {
                       profile.enrichment.map((enr, i) => (
                         <TableRow key={i}>
                           <TableCell>
-                            <Badge variant="outline" className="font-mono text-[10px]">{enr.source_key}</Badge>
+                            <Badge variant="outline" className="font-mono text-[10px]">{displayValue(enr.source_key)}</Badge>
                           </TableCell>
-                          <TableCell className="font-medium text-sm">{enr.attribute_key}</TableCell>
+                          <TableCell className="font-medium text-sm">{displayValue(enr.attribute_key)}</TableCell>
                           <TableCell className="font-mono text-xs">
-                            {enr.value_text !== null ? enr.value_text :
-                             enr.value_num !== null ? enr.value_num :
-                             enr.value_bool !== null ? (enr.value_bool ? 'TRUE' : 'FALSE') :
-                             enr.value_date !== null ? enr.value_date : '-'}
+                            {enr.value_text != null ? displayValue(enr.value_text) :
+                             enr.value_num != null ? displayNumber(enr.value_num) :
+                             enr.value_bool != null ? displayValue(enr.value_bool) :
+                             displayDate(enr.value_date)}
                           </TableCell>
                           <TableCell className="text-right text-xs text-muted-foreground">
-                            {enr.license_expires_at ? format(new Date(enr.license_expires_at), 'MMM d, yy') : 'No expiry'}
+                            {displayDate(enr.license_expires_at, 'MMM d, yy')}
                           </TableCell>
                         </TableRow>
                       ))
@@ -475,10 +491,11 @@ export default function ProfileDetail() {
                   </TableBody>
                 </Table>
               </CardContent>
-            </Card>
+            </Card>}</ProfileSectionBoundary>
           </TabsContent>
           
           <TabsContent value="consents" className="m-0">
+            <ProfileSectionBoundary {...boundary} section="Consents">{() =>
             <Card>
               <CardHeader>
                 <CardTitle>Consent Records</CardTitle>
@@ -504,20 +521,20 @@ export default function ProfileDetail() {
                     ) : (
                       profile.consents.map((consent, i) => (
                         <TableRow key={i}>
-                          <TableCell className="font-medium uppercase text-xs">{consent.channel}</TableCell>
+                          <TableCell className="font-medium uppercase text-xs">{displayValue(consent.channel)}</TableCell>
                           <TableCell>
                             <Badge variant="outline" className={`font-mono text-[10px] ${
                               consent.status === 'opt_in' ? 'text-emerald-500 border-emerald-500/20 bg-emerald-500/10' :
                               consent.status === 'opt_out' ? 'text-destructive border-destructive/20 bg-destructive/10' : ''
                             }`}>
-                              {consent.status}
+                              {displayValue(consent.status)}
                             </Badge>
                           </TableCell>
                           <TableCell>
-                            <Badge variant="secondary" className="font-mono text-[10px]">{consent.source_key}</Badge>
+                            <Badge variant="secondary" className="font-mono text-[10px]">{displayValue(consent.source_key)}</Badge>
                           </TableCell>
                           <TableCell className="text-right text-xs text-muted-foreground">
-                            {consent.captured_at ? format(new Date(consent.captured_at), 'MMM d, yy HH:mm') : '-'}
+                            {displayDate(consent.captured_at, 'MMM d, yy HH:mm')}
                           </TableCell>
                         </TableRow>
                       ))
@@ -525,7 +542,7 @@ export default function ProfileDetail() {
                   </TableBody>
                 </Table>
               </CardContent>
-            </Card>
+            </Card>}</ProfileSectionBoundary>
           </TabsContent>
         </div>
       </Tabs>

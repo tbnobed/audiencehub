@@ -4,10 +4,12 @@ import {
   type ErrorInfo,
   type ReactNode,
 } from 'react';
+import { reportClientError } from '@/lib/client-errors';
 
 export interface ErrorFallbackProps {
   error: Error;
   resetError: () => void;
+  componentStack?: string;
 }
 
 interface ErrorBoundaryProps {
@@ -19,6 +21,7 @@ interface ErrorBoundaryProps {
 
 interface ErrorBoundaryState {
   error: Error | null;
+  componentStack?: string;
 }
 
 function toError(value: unknown): Error {
@@ -35,7 +38,7 @@ function toError(value: unknown): Error {
   }
 }
 
-function DefaultFallback({ error, resetError }: ErrorFallbackProps) {
+function DefaultFallback({ error, resetError, componentStack }: ErrorFallbackProps) {
   return (
     <div className="min-h-screen w-full flex items-center justify-center bg-background p-6">
       <div className="max-w-lg w-full text-center">
@@ -50,6 +53,7 @@ function DefaultFallback({ error, resetError }: ErrorFallbackProps) {
         {import.meta.env.DEV ? (
           <pre className="mt-4 overflow-x-auto rounded bg-muted p-3 text-left text-xs text-foreground">
             {error.message || String(error)}
+            {componentStack}
           </pre>
         ) : null}
         <button
@@ -75,11 +79,8 @@ export class ErrorBoundary extends Component<
   }
 
   componentDidCatch(error: unknown, info: ErrorInfo): void {
-    console.error(
-      'ErrorBoundary caught an error:',
-      toError(error),
-      info.componentStack,
-    );
+    if (import.meta.env.DEV) this.setState({ componentStack: info.componentStack ?? '' });
+    void reportClientError(error, info, window.location.pathname);
   }
 
   componentDidUpdate(prevProps: ErrorBoundaryProps): void {
@@ -92,7 +93,7 @@ export class ErrorBoundary extends Component<
   }
 
   resetError = (): void => {
-    this.setState({ error: null });
+    this.setState({ error: null, componentStack: undefined });
   };
 
   render(): ReactNode {
@@ -101,6 +102,6 @@ export class ErrorBoundary extends Component<
       return this.props.children;
     }
     const Fallback = this.props.FallbackComponent ?? DefaultFallback;
-    return <Fallback error={error} resetError={this.resetError} />;
+    return <Fallback error={error} resetError={this.resetError} componentStack={this.state.componentStack} />;
   }
 }

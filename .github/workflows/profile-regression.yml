@@ -1,0 +1,32 @@
+name: Medium seed profile regression
+on: [push, pull_request]
+jobs:
+  medium-profiles:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: artifacts/audience-hub/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: npm ci
+        working-directory: artifacts/audience-hub
+      - run: pip install -e 'artifacts/audience-hub/backend[test]'
+      - name: Locate PostgreSQL binaries
+        run: echo "$(pg_config --bindir)" >> "$GITHUB_PATH"
+      - name: Validate committed real API capture
+        run: npm --prefix artifacts/audience-hub run test:profiles
+      - name: Regenerate through full medium import, resolver, traits and API
+        run: python artifacts/audience-hub/scripts/profile-capture.py
+      - name: Render first 50 profiles and edge cases for admin and viewer
+        run: npm --prefix artifacts/audience-hub run test:profiles
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: medium-profile-api-evidence
+          path: artifacts/audience-hub/scripts/fixtures/profiles-medium.json
