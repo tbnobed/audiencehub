@@ -1,0 +1,78 @@
+total=270.077 s; sync files=190, longest=0.008 s, average=0.001 s; distance=633512 kB, estimate=965573 kB; lsn=9/E4DBFCE0, redo lsn=9/C192DE20
+api-1     | INFO:     76.219.194.165:0 - "GET /api/admin/jobs HTTP/1.1" 200 OK
+api-1     | INFO:     76.219.194.165:0 - "GET /api/shell HTTP/1.1" 200 OK
+api-1     | INFO:     76.219.194.165:0 - "GET /api/dashboards/retention?from=2026-06-27&to=2026-09-24 HTTP/1.1" 200 OK
+api-1     | INFO:     76.219.194.165:0 - "GET /api/admin/jobs HTTP/1.1" 200 OK
+api-1     | INFO:     76.219.194.165:0 - "GET /api/shell HTTP/1.1" 200 OK
+api-1     | {"at": "2026-09-25T03:10:30.780909+00:00", "level": "INFO", "logger": "alembic.runtime.migration", "message": "Context impl PostgresqlImpl."}
+api-1     | {"at": "2026-09-25T03:10:30.781040+00:00", "level": "INFO", "logger": "alembic.runtime.migration", "message": "Will assume transactional DDL."}
+api-1     | INFO:     127.0.0.1:56844 - "GET /readyz HTTP/1.1" 200 OK
+api-1     | INFO:     76.219.194.165:0 - "GET /api/admin/jobs HTTP/1.1" 200 OK
+api-1     | INFO:     76.219.194.165:0 - "GET /api/shell HTTP/1.1" 200 OK
+api-1     | INFO:     76.219.194.165:0 - "GET /api/admin/jobs HTTP/1.1" 200 OK
+api-1     | INFO:     76.219.194.165:0 - "GET /api/shell HTTP/1.1" 200 OK
+db-1      | 2026-09-25 03:10:42.323 UTC [62] LOG:  checkpoint starting: time
+api-1     | INFO:     76.219.194.165:0 - "GET /api/admin/jobs HTTP/1.1" 200 OK
+api-1     | INFO:     76.219.194.165:0 - "GET /api/shell HTTP/1.1" 200 OK
+api-1     | {"at": "2026-09-25T03:10:45.906913+00:00", "level": "INFO", "logger": "alembic.runtime.migration", "message": "Context impl PostgresqlImpl."}
+api-1     | {"at": "2026-09-25T03:10:45.907036+00:00", "level": "INFO", "logger": "alembic.runtime.migration", "message": "Will assume transactional DDL."}
+api-1     | INFO:     127.0.0.1:40542 - "GET /readyz HTTP/1.1" 200 OK
+api-1     | INFO:     76.219.194.165:0 - "GET /api/admin/jobs HTTP/1.1" 200 OK
+api-1     | INFO:     76.219.194.165:0 - "GET /api/shell HTTP/1.1" 200 OK
+^C
+obtv-admin@audiencehub:~/audiencehub/artifacts/audience-hub$ docker logs --timestamps \
+  --since '2026-09-25T03:05:30Z' \
+  --until '2026-09-25T03:06:40Z' \
+  "$(docker compose ps -q api)" 2>&1
+2026-09-25T03:06:00.580310070Z INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+2026-09-25T03:06:00.580394496Z INFO:     Started parent process [7]
+2026-09-25T03:06:02.384996330Z INFO:     Started server process [13]
+2026-09-25T03:06:02.385057703Z INFO:     Waiting for application startup.
+2026-09-25T03:06:02.385220062Z INFO:     Application startup complete.
+2026-09-25T03:06:02.403742318Z INFO:     Started server process [10]
+2026-09-25T03:06:02.403810450Z INFO:     Waiting for application startup.
+2026-09-25T03:06:02.404074938Z INFO:     Application startup complete.
+2026-09-25T03:06:02.414402790Z INFO:     Started server process [12]
+2026-09-25T03:06:02.414440340Z INFO:     Waiting for application startup.
+2026-09-25T03:06:02.414789455Z INFO:     Application startup complete.
+2026-09-25T03:06:02.419169795Z INFO:     Started server process [11]
+2026-09-25T03:06:02.419218615Z INFO:     Waiting for application startup.
+2026-09-25T03:06:02.419408471Z INFO:     Application startup complete.
+2026-09-25T03:06:02.449315755Z INFO:     76.219.194.165:0 - "GET / HTTP/1.1" 200 OK
+2026-09-25T03:06:02.535371201Z INFO:     76.219.194.165:0 - "GET /assets/index-DgaOROt4.js HTTP/1.1" 200 OK
+2026-09-25T03:06:02.537589519Z INFO:     76.219.194.165:0 - "GET /assets/index-BSBwtQ4F.css HTTP/1.1" 200 OK
+2026-09-25T03:06:02.956028390Z INFO:     76.219.194.165:0 - "GET /api/me HTTP/1.1" 200 OK
+2026-09-25T03:06:03.028762458Z INFO:     76.219.194.165:0 - "GET /api/admin/jobs HTTP/1.1" 200 OK
+2026-09-25T03:06:03.151590381Z INFO:     76.219.194.165:0 - "GET /api/dashboards/settings HTTP/1.1" 200 OK
+2026-09-25T03:06:03.388446220Z INFO:     76.219.194.165:0 - "GET /api/shell HTTP/1.1" 200 OK
+2026-09-25T03:06:08.090012413Z INFO:     76.219.194.165:0 - "GET /api/admin/jobs HTTP/1.1" 200 OK
+2026-09-25T03:06:08.751878335Z INFO:     76.219.194.165:0 - "GET /api/shell HTTP/1.1" 200 OK
+2026-09-25T03:06:09.058036184Z INFO:     76.219.194.165:0 - "GET /brand/kinship-sidebar-wordmark.svg HTTP/1.1" 200 OK
+2026-09-25T03:06:13.149448173Z INFO:     76.219.194.165:0 - "GET /api/admin/jobs HTTP/1.1" 200 OK
+2026-09-25T03:06:13.855060529Z {"at": "2026-09-25T03:06:13.854639+00:00", "level": "INFO", "logger": "alembic.runtime.migration", "message": "Context impl PostgresqlImpl."}
+2026-09-25T03:06:13.855124332Z {"at": "2026-09-25T03:06:13.854748+00:00", "level": "INFO", "logger": "alembic.runtime.migration", "message": "Will assume transactional DDL."}
+2026-09-25T03:06:13.865334748Z INFO:     127.0.0.1:60934 - "GET /readyz HTTP/1.1" 200 OK
+2026-09-25T03:06:13.986013052Z INFO:     76.219.194.165:0 - "GET /api/shell HTTP/1.1" 200 OK
+2026-09-25T03:06:18.215327366Z INFO:     76.219.194.165:0 - "GET /api/admin/jobs HTTP/1.1" 200 OK
+2026-09-25T03:06:19.247859652Z INFO:     76.219.194.165:0 - "GET /api/shell HTTP/1.1" 200 OK
+2026-09-25T03:06:21.415184029Z INFO:     76.219.194.165:0 - "GET /api/sources HTTP/1.1" 200 OK
+2026-09-25T03:06:21.541877686Z INFO:     76.219.194.165:0 - "GET /api/profiles?page=1&page_size=50 HTTP/1.1" 200 OK
+2026-09-25T03:06:22.241408694Z INFO:     76.219.194.165:0 - "GET /api/traits HTTP/1.1" 200 OK
+2026-09-25T03:06:22.327890235Z INFO:     76.219.194.165:0 - "GET /api/profiles/1 HTTP/1.1" 200 OK
+2026-09-25T03:06:26.532396692Z INFO:     76.219.194.165:0 - "GET /profiles HTTP/1.1" 200 OK
+2026-09-25T03:06:26.592600583Z INFO:     76.219.194.165:0 - "GET /assets/index-BSBwtQ4F.css HTTP/1.1" 304 Not Modified
+2026-09-25T03:06:26.592671083Z INFO:     76.219.194.165:0 - "GET /assets/index-DgaOROt4.js HTTP/1.1" 304 Not Modified
+2026-09-25T03:06:26.649577347Z INFO:     76.219.194.165:0 - "GET /api/me HTTP/1.1" 200 OK
+2026-09-25T03:06:26.696531942Z INFO:     76.219.194.165:0 - "GET /brand/kinship-sidebar-wordmark.svg HTTP/1.1" 200 OK
+2026-09-25T03:06:26.715341037Z INFO:     76.219.194.165:0 - "GET /api/admin/jobs HTTP/1.1" 200 OK
+2026-09-25T03:06:26.771268248Z INFO:     76.219.194.165:0 - "GET /api/sources HTTP/1.1" 200 OK
+2026-09-25T03:06:26.870913772Z INFO:     76.219.194.165:0 - "GET /api/profiles?page=1&page_size=50 HTTP/1.1" 200 OK
+2026-09-25T03:06:26.882748972Z INFO:     76.219.194.165:0 - "GET /api/shell HTTP/1.1" 200 OK
+2026-09-25T03:06:28.301325387Z INFO:     76.219.194.165:0 - "GET /api/dashboards/settings HTTP/1.1" 200 OK
+2026-09-25T03:06:28.971117391Z {"at": "2026-09-25T03:06:28.970717+00:00", "level": "INFO", "logger": "alembic.runtime.migration", "message": "Context impl PostgresqlImpl."}
+2026-09-25T03:06:28.971170682Z {"at": "2026-09-25T03:06:28.970832+00:00", "level": "INFO", "logger": "alembic.runtime.migration", "message": "Will assume transactional DDL."}
+2026-09-25T03:06:28.975199215Z INFO:     127.0.0.1:53672 - "GET /readyz HTTP/1.1" 200 OK
+2026-09-25T03:06:31.779600397Z INFO:     76.219.194.165:0 - "GET /api/admin/jobs HTTP/1.1" 200 OK
+2026-09-25T03:06:32.097728245Z INFO:     76.219.194.165:0 - "GET /api/shell HTTP/1.1" 200 OK
+2026-09-25T03:06:36.845513997Z INFO:     76.219.194.165:0 - "GET /api/admin/jobs HTTP/1.1" 200 OK
+2026-09-25T03:06:37.350520636Z INFO:     76.219.194.165:0 - "GET /api/shell HTTP/1.1" 200 OK
