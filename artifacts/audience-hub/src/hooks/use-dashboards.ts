@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { fetchApi } from '@/lib/api';
+import { validateCustomRange, type DashboardDefaultRange } from '@/lib/date-range';
 
 export type DashboardName = 'overview' | 'giving' | 'retention' | 'engagement' | 'sources' | 'data-health';
 export type ChartRow = Record<string, string | number | null>;
@@ -28,7 +29,14 @@ export type OverviewPayload = {
   partner_status: { givers: number; statuses: { status: string; count: number; share: number }[]; prospects: number };
   attention: { severity: 'error' | 'warning' | 'notice' | 'healthy'; title: string; explanation: string; href: string | null }[];
 };
-export type DashboardSettings = { fiscal_year_start_month: number };
+export type DashboardSettings = { fiscal_year_start_month: number } & DashboardDefaultRange;
+export type DashboardSettingsPatch = { fiscal_year_start_month?: number } & (
+  DashboardDefaultRange | {
+    dashboard_default_preset?: never;
+    dashboard_default_from?: never;
+    dashboard_default_to?: never;
+  }
+);
 export type OverviewCards = {
   kpis: { range: DashboardPayload['range'] } & Pick<OverviewPayload, 'kpis' | 'stats'>;
   'giving-by-month': { range: DashboardPayload['range']; giving_by_month: Pick<OverviewPayload, 'monthly_giving' | 'top_two_month_share'> };
@@ -45,12 +53,20 @@ export function useOverviewCard<K extends keyof OverviewCards>(card: K, from: st
   });
 }
 
-async function fetchDashboardSettings(signal: AbortSignal): Promise<DashboardSettings> {
-  const settings = await fetchApi('/api/dashboards/settings', { signal }) as DashboardSettings;
+function validateSettings(settings: DashboardSettings): DashboardSettings {
   if (!Number.isInteger(settings?.fiscal_year_start_month) || settings.fiscal_year_start_month < 1 || settings.fiscal_year_start_month > 12) {
     throw new Error('The server returned an invalid fiscal year start month.');
   }
+  if (
+    !['90d', 'custom'].includes(settings.dashboard_default_preset)
+    || (settings.dashboard_default_preset === 'custom' && validateCustomRange(settings.dashboard_default_from ?? '', settings.dashboard_default_to ?? '') !== null)
+    || (settings.dashboard_default_preset === '90d' && (settings.dashboard_default_from !== null || settings.dashboard_default_to !== null))
+  ) throw new Error('The server returned an invalid dashboard default date range.');
   return settings;
+}
+
+async function fetchDashboardSettings(signal: AbortSignal): Promise<DashboardSettings> {
+  return validateSettings(await fetchApi('/api/dashboards/settings', { signal }) as DashboardSettings);
 }
 
 export function useDashboard(name: DashboardName, from: string, to: string, enabled = true) {
@@ -79,7 +95,7 @@ export function useDashboardSettings() {
 export function useAdminSettings() {
   return useQuery({
     queryKey: ['admin-settings'],
-    queryFn: () => fetchApi('/api/admin/settings') as Promise<DashboardSettings>,
+    queryFn: async () => validateSettings(await fetchApi('/api/admin/settings') as DashboardSettings),
     staleTime: 300_000,
   });
 }
@@ -87,14 +103,15 @@ export function useAdminSettings() {
 export function useUpdateAdminSettings() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (fiscalYearStartMonth: number) => fetchApi('/api/admin/settings', {
+    mutationFn: (settings: DashboardSettingsPatch) => fetchApi('/api/admin/settings', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ fiscal_year_start_month: fiscalYearStartMonth }),
-    }) as Promise<DashboardSettings>,
+      body: JSON.stringify(settings),
+    }).then(response => validateSettings(response as DashboardSettings)),
     onSuccess: async settings => {
       queryClient.setQueryData(['admin-settings'], settings);
       queryClient.setQueryData(['dashboard-settings'], settings);
+      await queryClient.invalidateQueries({ queryKey: ['admin-settings'] });
       await queryClient.invalidateQueries({ queryKey: ['dashboard-settings'] });
     },
   });

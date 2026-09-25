@@ -34,10 +34,22 @@ test('URL parsing round-trips and keeps tab', () => {
   assert.equal(ytd.get('from'), null);
   assert.equal(ytd.get('tab'), 'giving');
   assert.equal(parseRangeParams(ytd, 1, now).preset, 'ytd');
-  assert.equal(withRangeParams(ytd, '90d').get('range'), null);
+  assert.equal(withRangeParams(ytd, '90d').get('range'), '90d');
   assert.deepEqual(parseRangeParams(new URLSearchParams('range=fy'), null, now), { preset: 'fy', range: null });
   assert.equal(parseRangeParams(new URLSearchParams('range=custom&from=0001-01-01&to=2026-01-01'), 1, now).preset, '90d');
   assert.equal(parseRangeParams(new URLSearchParams('from=2026-01-01&to=2026-02-01'), 1, now).preset, 'custom');
+});
+
+test('server defaults apply only when URL has no valid explicit range', () => {
+  const seeded = { dashboard_default_preset: 'custom' as const, dashboard_default_from: '2020-01-01', dashboard_default_to: '2024-12-31' };
+  const base = new URLSearchParams('tab=giving');
+  assert.deepEqual(parseRangeParams(base, 1, now, null).range, null);
+  assert.deepEqual(parseRangeParams(base, 1, now, seeded), { preset: 'custom', range: ['2020-01-01', '2024-12-31'] });
+  assert.deepEqual(parseRangeParams(new URLSearchParams('range=90d'), 1, now, seeded), { preset: '90d', range: ['2026-06-27', '2026-09-24'] });
+  assert.deepEqual(parseRangeParams(new URLSearchParams('from=2024-01-01&to=2024-02-01'), 1, now, seeded), { preset: 'custom', range: ['2024-01-01', '2024-02-01'] });
+  assert.deepEqual(parseRangeParams(new URLSearchParams('range=fy'), 10, now, seeded), { preset: 'fy', range: ['2024-10-01', '2025-09-30'] });
+  assert.deepEqual(parseRangeParams(new URLSearchParams('range=custom&from=invalid&to=2024-01-01'), 1, now, seeded), { preset: 'custom', range: ['2020-01-01', '2024-12-31'] });
+  assert.equal(withRangeParams(base, '90d').get('range'), '90d');
 });
 
 test('y axis is always millions', () => {

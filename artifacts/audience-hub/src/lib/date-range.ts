@@ -45,19 +45,34 @@ export function presetRange(preset: Exclude<Preset, 'custom'>, fiscalStart = 1, 
 }
 
 export type ParsedRange = { preset: Preset; range: [string, string] | null };
+export type DashboardDefaultRange = {
+  dashboard_default_preset: '90d' | 'custom';
+  dashboard_default_from: string | null;
+  dashboard_default_to: string | null;
+};
 
 /**
  * Reads `range`, `from`, `to` query params. Custom needs a valid from/to;
  * legacy links with only from/to are treated as custom. `range` is null for
  * Last FY until the fiscal start month is known (caller must not query yet).
+ * The fourth argument is the resolved organization default; null means settings
+ * have not loaded, while omission keeps legacy callers on the 90-day default.
  */
-export function parseRangeParams(params: URLSearchParams, fiscalStart: number | null, now = new Date()): ParsedRange {
+export function parseRangeParams(params: URLSearchParams, fiscalStart: number | null, now = new Date(), defaultRange?: DashboardDefaultRange | null): ParsedRange {
   const raw = params.get('range');
   const from = params.get('from') ?? '';
   const to = params.get('to') ?? '';
   const customOk = validateCustomRange(from, to) === null;
-  const preset: Preset = PRESETS.includes(raw as Preset) ? raw as Preset : (!raw && customOk ? 'custom' : DEFAULT_PRESET);
-  if (preset === 'custom') return customOk ? { preset, range: [from, to] } : { preset: DEFAULT_PRESET, range: presetRange(DEFAULT_PRESET, 1, now) };
+  const defaultSelection = (): ParsedRange => {
+    if (defaultRange === null) return { preset: DEFAULT_PRESET, range: null };
+    if (defaultRange?.dashboard_default_preset === 'custom') {
+      return { preset: 'custom', range: [defaultRange.dashboard_default_from!, defaultRange.dashboard_default_to!] };
+    }
+    return { preset: DEFAULT_PRESET, range: presetRange(DEFAULT_PRESET, 1, now) };
+  };
+  const preset: Preset | null = PRESETS.includes(raw as Preset) ? raw as Preset : (!raw && customOk ? 'custom' : null);
+  if (!preset) return defaultSelection();
+  if (preset === 'custom') return customOk ? { preset, range: [from, to] } : defaultSelection();
   if (preset === 'fy') return { preset, range: fiscalStart == null ? null : presetRange('fy', fiscalStart, now) };
   return { preset, range: presetRange(preset, 1, now) };
 }
@@ -66,7 +81,7 @@ export function parseRangeParams(params: URLSearchParams, fiscalStart: number | 
 export function withRangeParams(params: URLSearchParams, preset: Preset, custom?: [string, string]): URLSearchParams {
   const next = new URLSearchParams(params);
   next.delete('from'); next.delete('to');
-  if (preset === DEFAULT_PRESET) next.delete('range'); else next.set('range', preset);
+  next.set('range', preset);
   if (preset === 'custom' && custom) { next.set('from', custom[0]); next.set('to', custom[1]); }
   return next;
 }

@@ -147,10 +147,10 @@ export default function Dashboard() {
   const tab: DashboardName = tabs.some(item => item.id === urlTab) ? urlTab as DashboardName : 'overview';
   const { user } = useAuth();
   const settings = useDashboardSettings();
-  const parsed = parseRangeParams(searchParams, settings.data?.fiscal_year_start_month ?? null);
+  const parsed = parseRangeParams(searchParams, settings.data?.fiscal_year_start_month ?? null, new Date(), settings.data ?? null);
   const preset = parsed.preset;
   const [from, to] = parsed.range ?? ['', ''];
-  const query = useDashboard(tab, from, to, parsed.range !== null);
+  const query = useDashboard(tab, from, to, !!settings.data && parsed.range !== null);
   // Tab changes replace history; range changes push so Back restores the prior selection.
   const setTab = (next: DashboardName) => {
     const params = new URLSearchParams(searchParams);
@@ -179,7 +179,7 @@ export default function Dashboard() {
       <div><h1 className="kin-title text-ink">{activeTab.label}</h1><p className="text-[13px] text-ink-muted mt-1">{tab === 'overview' ? 'Giving, partners and engagement across every source.' : 'Unified audience signals, giving, and data operations.'}</p></div>
       <div className="flex flex-col items-start lg:items-end gap-1.5 text-xs">
         <div role="group" aria-label="Date range" className="inline-flex flex-wrap rounded-md border border-line bg-surface p-0.5">
-          {([['30d', '30 d'], ['90d', '90 d'], ['12m', '12 m'], ['ytd', 'YTD'], ['fy', 'Last FY'], ['custom', 'Custom…']] as const).map(([id, label]) => <button key={id} type="button" data-testid={`preset-${id}`} aria-pressed={activePreset === id} disabled={id === 'fy' && !settings.data} onClick={() => selectPreset(id)} className={`px-2.5 py-1 rounded text-xs transition-colors disabled:opacity-40 disabled:cursor-not-allowed outline-none focus-visible:ring-2 focus-visible:ring-ring ${activePreset === id ? 'bg-signal-soft text-signal font-medium' : 'text-ink-muted hover:text-ink'}`}>{label}</button>)}
+          {([['30d', '30 d'], ['90d', '90 d'], ['12m', '12 m'], ['ytd', 'YTD'], ['fy', 'Last FY'], ['custom', 'Custom…']] as const).map(([id, label]) => <button key={id} type="button" data-testid={`preset-${id}`} aria-pressed={activePreset === id} disabled={!settings.data} onClick={() => selectPreset(id)} className={`px-2.5 py-1 rounded text-xs transition-colors disabled:opacity-40 disabled:cursor-not-allowed outline-none focus-visible:ring-2 focus-visible:ring-ring ${activePreset === id ? 'bg-signal-soft text-signal font-medium' : 'text-ink-muted hover:text-ink'}`}>{label}</button>)}
         </div>
         {customOpen && <form className="flex flex-wrap items-center gap-1.5" onSubmit={e => { e.preventDefault(); applyCustom(); }}>
           <input data-testid="input-range-from" aria-label="From date" type="date" min="1900-01-01" max="2999-12-31" value={draft[0]} onChange={e => setDraft([e.target.value, draft[1]])} aria-invalid={!!draftError && draftDirty} aria-describedby="range-error" className="bg-surface border border-line-strong rounded px-2 py-1 text-ink [color-scheme:light] dark:[color-scheme:dark]" />
@@ -189,16 +189,16 @@ export default function Dashboard() {
           {preset !== 'custom' && <button type="button" onClick={() => setCustomOpen(false)} className="px-2 py-1 text-ink-muted hover:text-ink">Cancel</button>}
           <span id="range-error" role="status" className="basis-full text-danger text-[11px] lg:text-right min-h-0">{draftDirty && draftError ? draftError : ''}</span>
         </form>}
-        <p data-testid="dashboard-period" className="text-ink-muted">{parsed.range ? <>{fmtDay(from)} – {fmtDay(to)} · compared with the prior {periodNoun}</> : settings.isError ? 'Last FY is unavailable until fiscal settings load.' : 'Loading fiscal year…'}</p>
+        <p data-testid="dashboard-period" className="text-ink-muted">{settings.data && parsed.range ? <>{fmtDay(from)} – {fmtDay(to)} · compared with the prior {periodNoun}</> : settings.isError ? 'Dashboard date settings are unavailable.' : 'Loading dashboard date settings…'}</p>
       </div>
     </header>
-    {settings.isError && <div role="alert" className="border border-danger/30 bg-danger/5 rounded-md px-4 py-3 text-xs text-ink"><span>Dashboard settings are unavailable; Last FY cannot be calculated.</span><Button variant="outline" size="sm" className="ml-3 h-7" disabled={settings.isFetching} onClick={() => settings.refetch()}><RefreshCw size={12} className="mr-1.5" /> Retry</Button><span className="ml-2 text-ink-muted">{settings.error instanceof Error ? settings.error.message : 'The request could not be completed.'}</span></div>}
+    {settings.isError && <div role="alert" className="border border-danger/30 bg-danger/5 rounded-md px-4 py-3 text-xs text-ink"><span>Dashboard date settings are unavailable.</span><Button variant="outline" size="sm" className="ml-3 h-7" disabled={settings.isFetching} onClick={() => settings.refetch()}><RefreshCw size={12} className="mr-1.5" /> Retry</Button><span className="ml-2 text-ink-muted">{settings.error instanceof Error ? settings.error.message : 'The request could not be completed.'}</span></div>}
     <nav aria-label="Dashboard sections" className="flex overflow-x-auto gap-0 border-b border-line">
       {tabs.map(item => <button key={item.id} type="button" data-testid={`tab-${item.id}`} aria-current={tab === item.id ? 'page' : undefined} onClick={() => setTab(item.id)} className={`px-4 py-2.5 text-xs whitespace-nowrap border-b-2 transition-colors ${tab === item.id ? 'text-signal border-signal bg-signal-soft' : 'text-ink-muted border-transparent hover:text-ink'}`}>{item.label}</button>)}
     </nav>
     {query.isFetching && query.data && <p role="status" className="text-xs text-ink-muted">Refreshing dashboard data…</p>}
-    {!parsed.range && settings.isError ? <div role="alert" className="border border-danger/30 bg-danger/5 rounded-md p-8 text-center text-sm text-ink">Last FY cannot be displayed without fiscal settings. Retry above or choose another date range.</div>
-      : tab === 'overview' ? (parsed.range ? <OverviewView from={from} to={to} canImport={canImport} onWiden={() => selectPreset('12m')} periodNoun={periodNoun} /> : <OverviewSkeleton />)
+    {!settings.data && settings.isError ? <div role="alert" className="border border-danger/30 bg-danger/5 rounded-md p-8 text-center text-sm text-ink">Dashboard cannot be displayed without date settings. Retry above.</div>
+      : tab === 'overview' ? (settings.data && parsed.range ? <OverviewView from={from} to={to} canImport={canImport} onWiden={() => selectPreset('12m')} periodNoun={periodNoun} /> : <OverviewSkeleton />)
       : query.isPending ? <><div className="grid grid-cols-2 lg:grid-cols-4 gap-2">{Array.from({ length: 4 }, (_, i) => <Skeleton key={i} className="h-24 bg-surface-raised" />)}</div><div className="grid grid-cols-1 xl:grid-cols-2 gap-3">{Array.from({ length: 4 }, (_, i) => <Skeleton key={i} className="h-[295px] bg-surface-raised" />)}</div></>
       : <>
       {query.isError && <div role="alert" className="border border-danger/30 bg-danger/5 rounded-md p-5 text-center"><p className="text-ink font-medium">{query.data ? 'Dashboard could not be refreshed; showing previously loaded data' : 'Dashboard data is unavailable'}</p><p className="text-ink-muted text-xs mt-1">{query.error instanceof Error ? query.error.message : 'The request could not be completed.'}</p><Button variant="outline" size="sm" className="mt-4" disabled={query.isFetching} onClick={() => query.refetch()}><RefreshCw size={13} className="mr-2" /> Retry</Button></div>}

@@ -26,6 +26,7 @@ test('five card queries are independent, range-keyed and never use legacy aggreg
   const hooks = load('src/hooks/use-dashboards.ts', {
     '@tanstack/react-query': { useQuery: options => options },
     '@/lib/api': { fetchApi: async (url, options) => { requests.push({ url, options }); return {}; } },
+    '@/lib/date-range': { validateCustomRange: () => null },
   });
   const controller = new AbortController();
   for (const card of ['kpis', 'giving-by-month', 'needs-attention', 'campaigns', 'partner-status']) {
@@ -39,6 +40,78 @@ test('five card queries are independent, range-keyed and never use legacy aggreg
   }
   assert.equal(hooks.useDashboard('overview', '2026-01-01', '2026-12-31').enabled, false);
   assert.equal(requests.length, 5);
+});
+
+test('settings PATCH sends only fiscal month when dashboard default is unchanged', async () => {
+  const requests = [];
+  const resolved = {
+    fiscal_year_start_month: 11, dashboard_default_preset: 'custom',
+    dashboard_default_from: '2020-01-01', dashboard_default_to: '2024-12-31',
+  };
+  const hooks = load('src/hooks/use-dashboards.ts', {
+    '@tanstack/react-query': { useQuery: options => options, useMutation: options => options, useQueryClient: () => ({}) },
+    '@/lib/api': { fetchApi: async (url, options) => { requests.push({ url, options }); return resolved; } },
+    '@/lib/date-range': load('src/lib/date-range.ts'),
+  });
+  const patch = hooks.useUpdateAdminSettings();
+  assert.deepEqual(JSON.parse(JSON.stringify(await patch.mutationFn({ fiscal_year_start_month: 11 }))), resolved);
+  assert.equal(requests[0].url, '/api/admin/settings');
+  assert.equal(requests[0].options.method, 'PATCH');
+  assert.deepEqual(JSON.parse(requests[0].options.body), { fiscal_year_start_month: 11 });
+  assert.deepEqual(JSON.parse(JSON.stringify(await hooks.useDashboardSettings().queryFn({ signal: new AbortController().signal }))), resolved);
+});
+
+test('admin default range form loads persisted dates, validates changes, and sends fiscal setting together', async () => {
+  const { JSDOM } = require('jsdom');
+  const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'http://localhost/admin' });
+  const old = Object.fromEntries(['window', 'document', 'navigator', 'HTMLElement', 'MutationObserver'].map(key => [key, globalThis[key]]));
+  for (const key of Object.keys(old)) globalThis[key] = dom.window[key];
+  const { render, fireEvent, waitFor, cleanup } = require('@testing-library/react');
+  const dateRange = load('src/lib/date-range.ts');
+  let saved;
+  const settings = {
+    data: { fiscal_year_start_month: 10, dashboard_default_preset: 'custom', dashboard_default_from: '2020-01-01', dashboard_default_to: '2024-12-31' },
+  };
+  const update = { isPending: false, mutate: value => { saved = value; }, reset() {} };
+  const Admin = load('src/pages/admin.tsx', {
+    '@/hooks/use-auth': { useAuth: () => ({ user: { role: 'admin' } }) },
+    '@/hooks/use-dashboards': { useAdminSettings: () => settings, useUpdateAdminSettings: () => update },
+    '@/lib/date-range': dateRange,
+    '@/components/ui/button': { Button: props => React.createElement('button', props) },
+    'lucide-react': { RefreshCw: () => null, Settings2: () => null },
+  }).default;
+  try {
+    const view = render(React.createElement(Admin));
+    await waitFor(() => assert.equal(view.getByTestId('default-range-from').value, '2020-01-01'));
+    assert.equal(view.getByTestId('default-range-to').value, '2024-12-31');
+    fireEvent.change(view.getByTestId('default-range-to'), { target: { value: '2019-01-01' } });
+    assert.equal(view.getByTestId('save-settings').disabled, true);
+    assert.match(view.getByRole('alert').textContent, /on or before/);
+    fireEvent.click(view.getByRole('button', { name: /Use seeded dates/ }));
+    fireEvent.change(view.getByTestId('default-range-from'), { target: { value: '2021-01-01' } });
+    fireEvent.click(view.getByTestId('save-settings'));
+    assert.deepEqual(JSON.parse(JSON.stringify(saved)), {
+      fiscal_year_start_month: 10, dashboard_default_preset: 'custom',
+      dashboard_default_from: '2021-01-01', dashboard_default_to: '2024-12-31',
+    });
+    fireEvent.click(view.getByLabelText('Last 90 days'));
+    fireEvent.click(view.getByTestId('save-settings'));
+    assert.equal(saved.dashboard_default_preset, '90d');
+    assert.equal(saved.dashboard_default_from, null);
+    assert.equal(saved.dashboard_default_to, null);
+    fireEvent.click(view.getByLabelText('Custom date range'));
+    fireEvent.click(view.getByRole('button', { name: /Use seeded dates/ }));
+    fireEvent.change(view.getByTestId('fiscal-year-start-month'), { target: { value: '11' } });
+    fireEvent.click(view.getByTestId('save-settings'));
+    assert.deepEqual(JSON.parse(JSON.stringify(saved)), { fiscal_year_start_month: 11 },
+      'a fiscal-only change must not pin the resolved environment default');
+  } finally {
+    cleanup();
+    dom.window.close();
+    for (const [key, value] of Object.entries(old)) {
+      if (value === undefined) delete globalThis[key]; else globalThis[key] = value;
+    }
+  }
 });
 
 test('cards render successes while other cards are pending or failed; each failure has Retry', () => {

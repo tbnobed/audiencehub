@@ -1,5 +1,6 @@
 """Reset integration tests run exclusively in the benchmark-owned disposable DB."""
 import os
+from datetime import date
 
 import pytest
 
@@ -25,6 +26,13 @@ def test_reset_preserves_config_and_refuses_running_jobs():
     from app.db import engine
 
     with engine.begin() as conn:
+        conn.execute(text("""
+            UPDATE admin_settings SET fiscal_year_start_month=7,
+                dashboard_default_preset='custom',
+                dashboard_default_from='2020-01-01',
+                dashboard_default_to='2024-12-31'
+            WHERE id=1
+        """))
         user = conn.execute(text("""
             INSERT INTO users (subject, email, name, role)
             VALUES ('reset-test', 'reset@example.org', 'Reset', 'admin') RETURNING id
@@ -89,5 +97,8 @@ def test_reset_preserves_config_and_refuses_running_jobs():
             SELECT label FROM enrichment_attributes
             WHERE source_id=:source AND key='reset_test_attribute'
         """), {"source": source}).scalar_one() == "Reset Test"
-        assert conn.execute(text("SELECT fiscal_year_start_month FROM admin_settings WHERE id=1")
-                            ).scalar_one() == 1
+        assert conn.execute(text("""
+            SELECT fiscal_year_start_month, dashboard_default_preset,
+                   dashboard_default_from, dashboard_default_to
+            FROM admin_settings WHERE id=1
+        """)).one() == (7, "custom", date(2020, 1, 1), date(2024, 12, 31))
