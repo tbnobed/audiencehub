@@ -13,6 +13,7 @@ import copy
 import fcntl
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
 import tempfile
@@ -28,6 +29,8 @@ DEADLINE_SECONDS = 25
 TTL_SECONDS = 60
 MAX_ENTRIES = 32
 MAX_BYTES = 4 * 1024 * 1024
+MIN_STATEMENT_BUDGET_MS = 100
+logger = logging.getLogger(__name__)
 _deadline = ContextVar("dashboard_deadline", default=None)
 # Monotonic timestamps are comparable across processes, but not across boots.
 # This cache already requires a local Unix host (flock); deployed hosts are Linux.
@@ -39,7 +42,9 @@ def check_deadline(db=None):
     if deadline is None:
         return
     remaining = int((deadline-time.monotonic())*1000)
-    if remaining <= 0:
+    # Do not install a tiny timeout that can cancel cursor CLOSE or ROLLBACK.
+    # End a SQL budget slightly early instead of extending it past the deadline.
+    if remaining <= 0 or (db is not None and remaining < MIN_STATEMENT_BUDGET_MS):
         raise HTTPException(504, detail="Dashboard computation exceeded its deadline. Please retry.")
     if db is not None:
         db.execute(text("SELECT set_config('statement_timeout', :ms, true), "
@@ -53,15 +58,38 @@ def deadline(db):
         return
     token = _deadline.set(time.monotonic()+DEADLINE_SECONDS)
     try:
+        check_deadline()
+        previous = db.execute(text(
+            "SELECT current_setting('statement_timeout'), current_setting('lock_timeout')"
+        )).one()
         check_deadline(db)
         yield
         check_deadline()
+        # Preserve caller settings and any writes in its transaction. Never
+        # commit/rollback merely to remove dashboard-local settings.
+        db.execute(text("SELECT set_config('statement_timeout', :statement, true), "
+                        "set_config('lock_timeout', :lock, true)"),
+                   {"statement": previous[0], "lock": previous[1]})
     except DBAPIError as exc:
         if getattr(exc.orig, "sqlstate", None) in ("57014", "55P03"):
+            _invalidate_timed_out_session(db)
             raise HTTPException(504, detail="Dashboard database deadline exceeded. Please retry.") from exc
+        raise
+    except HTTPException as exc:
+        if exc.status_code == 504:
+            _invalidate_timed_out_session(db)
         raise
     finally:
         _deadline.reset(token)
+
+
+def _invalidate_timed_out_session(db):
+    # No further SQL is safe here: a canceled statement may leave the transaction
+    # aborted, or a named cursor/very short timeout may also cancel ROLLBACK.
+    try:
+        db.invalidate()
+    except Exception:
+        logger.exception("Failed to invalidate timed-out dashboard session")
 
 
 def cached(db, key, build):

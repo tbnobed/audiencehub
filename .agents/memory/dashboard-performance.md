@@ -16,3 +16,10 @@ Measure the cold endpoint at realistic gift/source cardinalities, explicitly
 distinguish synthetic concurrent updates from the actual resolver workload, and
 keep backend computation deadlines shorter than frontend request deadlines.
 Never apply dashboard read timeouts indiscriminately to large upload writes.
+
+Validate deadline failures through the full HTTP dependency teardown and the next
+pooled request, not only by calling endpoint functions directly.
+
+**Why:** Production deadline errors were replaced by rollback cancellation during
+session cleanup; function-level timing tests did not exercise that lifecycle.
+Also keep bound HMAC key material out of SQL exception parameter logs.

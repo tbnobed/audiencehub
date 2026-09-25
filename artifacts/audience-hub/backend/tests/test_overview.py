@@ -33,6 +33,32 @@ def test_delta_and_leap_dates():
     assert month_shift(date(2024, 2, 29), -12) == date(2023, 2, 28)
 
 
+def test_email_cursor_cleanup_preserves_deadline(monkeypatch):
+    from fastapi import HTTPException
+    from app.dashboards import cache
+    calls, closed = [], []
+
+    def check_deadline(db=None):
+        calls.append(db)
+        if len(calls) == 2:
+            raise HTTPException(504, "original deadline")
+
+    def close():
+        closed.append(True)
+        raise RuntimeError("cursor close failed after cancellation")
+
+    result = SimpleNamespace(mappings=lambda: None, close=close)
+    db = SimpleNamespace(execute=lambda *args, **kwargs: result)
+    monkeypatch.setattr(api, "_rows", lambda *args: [{"value_hash": "suppressed"}])
+    monkeypatch.setattr(cache, "check_deadline", check_deadline)
+    with pytest.raises(HTTPException) as error:
+        api._email_opted_in_count(db)
+    assert error.value.status_code == 504
+    assert error.value.detail == "original deadline"
+    assert calls == [db, None]  # no SQL deadline reset while cursor is open
+    assert closed == [True]
+
+
 def test_default_range_with_no_historical_data(db):
     result = api._dashboard("overview", None, None, db)
     assert result["range"]["to"] == date.today().isoformat()
@@ -116,6 +142,114 @@ for line in sys.stdin:
         if pid is not None:
             db.execute(text("DELETE FROM profiles WHERE id=:id"), {"id": pid})
             db.commit()
+
+
+@pytest.mark.parametrize("pepper", ["short-key", "long-key-" * 20])
+def test_email_sql_hmac_matches_python_and_unicode_fallback(db, monkeypatch, pepper):
+    import hashlib
+    import hmac
+    monkeypatch.setattr(api, "get_settings", lambda: SimpleNamespace(pii_hash_pepper=pepper))
+    source = db.execute(text("""INSERT INTO sources(key,name,kind)
+        VALUES ('hmac-test','Test','crm') RETURNING id""")).scalar_one()
+    emails = [
+        "ASCII@EXAMPLE.ORG", "\ttrim@example.org\r\n", "\x1cstrip@example.org\x1f",
+        "Straße@example.org", "İ@example.org", "Σς@example.org",
+        "\u2003wide@example.org\u00a0", "K@example.org",
+    ]
+    for index, email in enumerate(emails):
+        pid = db.execute(text("INSERT INTO profiles(email) VALUES (:e) RETURNING id"),
+                         {"e": email}).scalar_one()
+        db.execute(text("""INSERT INTO consents(profile_id,channel,status,source_id)
+            VALUES (:p,'email','granted',:s)"""), {"p": pid, "s": source})
+        # Preserve the existing candidate SQL normalization, then Python strip/casefold.
+        normalized = db.execute(text("SELECT lower(btrim(CAST(:e AS text)))"),
+                                {"e": email}).scalar_one()
+        digest = hmac.new(pepper.encode(), normalized.strip().casefold().encode(),
+                          hashlib.sha256).hexdigest()
+        db.execute(text("""INSERT INTO suppressions(type,value_hash,reason)
+            VALUES ('email',:h,'manual_test')"""), {"h": digest})
+    assert api._email_opted_in_count(db) == 0
+    # A non-suppressed ASCII address accepts even a Unicode-suppressed profile.
+    db.execute(text("""INSERT INTO identifiers(type,value,profile_id)
+        VALUES ('email','allowed@example.org',:p)"""), {"p": pid})
+    assert api._email_opted_in_count(db) == 1
+    db.execute(text("DELETE FROM suppressions WHERE reason='manual_test'"))
+    assert api._email_opted_in_count(db) == len(emails)
+
+
+@pytest.mark.skipif(os.getenv("OVERVIEW_EMAIL_SCALE_TEST") != "1",
+                    reason="Explicit opt-in temporary-table 500k profile benchmark")
+def test_email_count_scale(db):
+    """No persistent fixture writes: temporary tables shadow the dedicated test DB."""
+    import ast
+    import hashlib
+    import hmac
+    import inspect
+    import time
+    from app.config import get_settings
+    for ddl in (
+        """CREATE TEMP TABLE active_profiles AS
+           SELECT n::bigint AS id, 'scale'||n||'@example.org' AS email
+           FROM generate_series(1,500000) n""",
+        """CREATE TEMP TABLE source_records AS
+           SELECT (n%500000+1)::bigint AS profile_id,
+             'scale'||(n%500000+1)||'@example.org' AS email_norm,
+             '{"email_consent":"opted_in"}'::jsonb AS attributes
+           FROM generate_series(1,2900000) n""",
+        """CREATE TEMP TABLE consents AS
+           SELECT id AS profile_id, 'email'::text AS channel, 'opted_in'::text AS status
+           FROM active_profiles""",
+        "CREATE TEMP TABLE identifiers(profile_id bigint, type text, value text)",
+        "CREATE TEMP TABLE suppressions(type text, value_hash text, reason text)",
+    ):
+        db.execute(text(ddl))
+    pepper = get_settings().pii_hash_pepper.encode()
+    digest = hmac.new(pepper, b"scale1@example.org", hashlib.sha256).hexdigest()
+    db.execute(text("INSERT INTO suppressions VALUES ('email',:h,'hard_bounce')"), {"h": digest})
+    for table in ("active_profiles", "source_records", "consents", "identifiers", "suppressions"):
+        db.execute(text(f"ANALYZE {table}"))
+    # The previous production algorithm: source address aggregation, global
+    # DISTINCT/sort, then transfer and Python HMAC of every accepted profile.
+    tree = ast.parse(inspect.getsource(api._email_opted_in_count))
+    candidates = next(node.value.value for node in ast.walk(tree)
+                      if isinstance(node, ast.Assign)
+                      and any(isinstance(t, ast.Name) and t.id == "candidates" for t in node.targets))
+    candidates = (candidates.split("        ), primary_emails AS (")[0]
+                  + "        ), source_signals AS ("
+                  + candidates.split("        ), source_signals AS (")[1])
+    candidates = candidates.replace("eligible_all AS", "eligible AS")
+    candidates = candidates.replace(
+        "lower(attributes->>'email_consent')='opted_in' AS opted_in",
+        "bool_or(lower(attributes->>'email_consent')='opted_in') AS opted_in"
+    ).replace(
+        "GROUP BY profile_id, lower(btrim(email_norm::text))", ""
+    ).replace(
+        "WHERE profile_id IS NOT NULL AND btrim(email_norm::text)<>''",
+        """WHERE profile_id IS NOT NULL AND btrim(email_norm::text)<>''
+          GROUP BY profile_id, lower(btrim(email_norm::text))"""
+    )
+    started = time.perf_counter()
+    result = db.execute(text(candidates + """
+        SELECT DISTINCT profile_id,email FROM candidates ORDER BY profile_id,email
+    """), execution_options={"stream_results": True, "yield_per": 2048})
+    count, accepted, transferred = 0, None, 0
+    try:
+        for row in result.mappings():
+            transferred += 1
+            if row["profile_id"] != accepted and hmac.new(
+                    pepper, row["email"].strip().casefold().encode(),
+                    hashlib.sha256).hexdigest() != digest:
+                count += 1
+                accepted = row["profile_id"]
+    finally:
+        result.close()
+    old_seconds = time.perf_counter() - started
+    started = time.perf_counter()
+    assert api._email_opted_in_count(db) == count == 499999
+    new_seconds = time.perf_counter() - started
+    print(f"\n500k profiles / 2.9m source rows: legacy={old_seconds:.3f}s "
+          f"SQL HMAC={new_seconds:.3f}s; legacy transferred={transferred}; "
+          "optimized transferred=1 aggregate row (all ASCII)")
 
 
 def test_resolved_population_giving_and_period_contract(db):

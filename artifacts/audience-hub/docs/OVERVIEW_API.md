@@ -131,17 +131,53 @@ points, and historical classifications in one profile-grain gift aggregation.
 A second date-bounded scan supplies daily paired totals and campaign totals with
 GROUPING SETS. No gift/source/consent fanout or per-month full-history scans remain.
 Consent counts reduce source records to profile flags when no suppressions exist.
-With suppressions, distinct candidate addresses are streamed in 2,048-row batches
-and hashed with the writer's Unicode casefold semantics. Ledger opt-outs override
-all source opt-ins; any unsuppressed eligible address qualifies the active profile.
+With suppressions, PostgreSQL first accepts eligible profiles whose primary ASCII
+address is unsuppressed, then checks source/identifier alternatives only for the
+remaining profiles. ASCII HMAC-SHA256 uses core `sha256(bytea)` with RFC 2104
+inner/outer pads supplied as bound parameters (including keys over 64 bytes).
+This requires neither pgcrypto nor persisted hashes. After existing SQL candidate
+normalization, ASCII casefold is identity and SQL trimming explicitly includes
+all Python ASCII whitespace. Unicode candidates still use Python strip/casefold:
+SQL lower is **not** treated as a Unicode casefold substitute. Only unresolved
+Unicode candidates are streamed in 2,048-row batches; ordinary ASCII populations
+return one aggregate row. Ledger opt-outs override all source opt-ins; any
+unsuppressed eligible address qualifies the active profile.
 
 Dashboard and shell work have a 25-second computation budget. Each database
-statement and streamed fetch receives the remaining statement timeout; database
+statement receives the remaining statement timeout; streamed batches also check
+the wall-clock deadline without issuing configuration SQL on an open cursor. A
+cursor close error cannot mask the original timeout. Database
 lock waits are bounded to two seconds (not cache-coalescing waits).
 Timeout/lock cancellation returns explicit 504.
 No migration, production seeding, worker changes, or recompute is required.
 
 ## Isolated performance evidence
+
+### Targeted email-count optimization
+
+An opt-in test uses temporary tables in the dedicated `ah_overview_tests` database,
+with 500,000 profiles, 2,900,000 source rows, 500,000 consent rows and one hard-bounce
+suppression. It compares the former distinct/sorted candidate streaming algorithm
+against the new implementation, verifying the exact result of 499,999. One local
+run measured **11.575 s → 4.025 s** (65% reduction); transferred rows fell from
+500,000 to one. Setup and the entire 16-test run took 20.05 s. This is a synthetic,
+email-only benchmark, not a new end-to-end production latency claim. Its primary
+addresses are ASCII and ledger-opted-in; source-only/Unicode-heavy populations
+have less opportunity for early acceptance.
+
+Reproduce without persistent seeding or starting any services:
+
+```sh
+cd artifacts/audience-hub/backend
+DATABASE_URL=postgresql+psycopg:///ah_overview_tests APP_ENV=test \
+  OVERVIEW_EMAIL_SCALE_TEST=1 python3 -m pytest tests/test_overview.py -q -s
+```
+
+The same suite checks Python-vs-SQL HMAC equivalence for short/long keys,
+ASCII control whitespace, Unicode casing/whitespace, suppression alternatives,
+and preservation of an original 504 if cursor cleanup also fails.
+
+### Earlier full Overview measurement
 
 Measured on the final implementation using the disposable PostgreSQL 17 harness
 in `app.benchmark`, not the app/development/production database. Unprofiled Python

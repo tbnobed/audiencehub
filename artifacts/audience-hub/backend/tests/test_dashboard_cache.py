@@ -18,8 +18,10 @@ def store(monkeypatch, tmp_path):
         new = dirty = deleted = False
         assigned = False
         version = "10:10:"
+        def invalidate(self):
+            pass
         def execute(self, sql, params=None):
-            return SimpleNamespace(scalar_one=lambda: (
+            return SimpleNamespace(one=lambda: ("0", "0"), scalar_one=lambda: (
                 self.assigned if "if_assigned" in str(sql) else self.version))
     return DB(), tmp_path
 

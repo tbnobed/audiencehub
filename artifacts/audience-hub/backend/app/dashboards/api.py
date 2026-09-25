@@ -62,9 +62,9 @@ def _scalar(db: Session, sql: str, params: dict[str, Any] | None = None) -> Any:
 def _email_opted_in_count(db: Session) -> int:
     """Aggregate the ledger before joining: source rows must never multiply it.
 
-    With no suppressions, only a scalar leaves PostgreSQL. Otherwise stream distinct
-    candidate emails in bounded batches; Python casefold matches the suppression
-    writer (PostgreSQL lower is not equivalent for Unicode).
+    ASCII HMACs are evaluated with PostgreSQL's built-in sha256(bytea); no
+    extension, stored hash, or migration is required. Only profiles that require
+    Unicode casefold leave PostgreSQL. Never substitute SQL lower for casefold.
     """
     candidates = """
         WITH ledger AS MATERIALIZED (
@@ -72,16 +72,29 @@ def _email_opted_in_count(db: Session) -> int:
             bool_or(status IN ('opted_in','subscribed','granted')) AS opted_in,
             bool_or(status='opted_out') AS opted_out
           FROM consents WHERE channel='email' GROUP BY profile_id
-        ), eligible AS MATERIALIZED (
+        ), eligible_all AS MATERIALIZED (
           SELECT p.id, p.email, COALESCE(l.opted_in,false) AS opted_in
           FROM active_profiles p LEFT JOIN ledger l ON l.profile_id=p.id
           WHERE NOT COALESCE(l.opted_out,false)
+        ), primary_emails AS (
+          SELECT id, lower(btrim(email::text)) AS email
+          FROM eligible_all WHERE opted_in AND btrim(email::text)<>''
+        ), preaccepted AS MATERIALIZED (
+          SELECT id FROM primary_emails
+          WHERE CASE WHEN octet_length(email)=char_length(email) THEN
+            NOT (encode(sha256(CAST(:opad AS bytea) ||
+              sha256(CAST(:ipad AS bytea) ||
+                convert_to(btrim(email, :whitespace), 'UTF8'))), 'hex')
+              = ANY(CAST(:suppressed AS text[])))
+            ELSE false END
+        ), eligible AS MATERIALIZED (
+          SELECT p.* FROM eligible_all p
+          WHERE NOT EXISTS (SELECT 1 FROM preaccepted a WHERE a.id=p.id)
         ), source_signals AS (
           SELECT profile_id, lower(btrim(email_norm::text)) AS email,
-            bool_or(lower(attributes->>'email_consent')='opted_in') AS opted_in
+            lower(attributes->>'email_consent')='opted_in' AS opted_in
           FROM source_records
           WHERE profile_id IS NOT NULL AND btrim(email_norm::text)<>''
-          GROUP BY profile_id, lower(btrim(email_norm::text))
         ), candidates AS (
           SELECT p.id AS profile_id, lower(btrim(p.email::text)) AS email
           FROM eligible p WHERE p.opted_in AND btrim(p.email::text) <> ''
@@ -128,19 +141,55 @@ def _email_opted_in_count(db: Session) -> int:
         """))
     from app.dashboards.cache import check_deadline
     check_deadline(db)
-    result = db.execute(text(candidates + """
-        SELECT DISTINCT profile_id, email FROM candidates ORDER BY profile_id, email
-    """), execution_options={"stream_results": True, "yield_per": 2048})
     pepper = get_settings().pii_hash_pepper.encode()
+    # RFC 2104: SHA-256's block size is 64 bytes. Bound parameters keep key
+    # material out of SQL text. PostgreSQL sha256(bytea) is a core function.
+    key = hashlib.sha256(pepper).digest() if len(pepper) > 64 else pepper
+    key = key.ljust(64, b"\0")
+    params = {
+        "ipad": bytes(b ^ 0x36 for b in key),
+        "opad": bytes(b ^ 0x5c for b in key),
+        "suppressed": list(suppressed),
+        # Exactly Python str.strip()'s ASCII whitespace, not just SQL spaces.
+        "whitespace": " \t\n\r\v\f\x1c\x1d\x1e\x1f",
+    }
+    result = db.execute(text(candidates + """
+        , normalized AS MATERIALIZED (
+          SELECT DISTINCT profile_id, email,
+            octet_length(email)=char_length(email) AS ascii
+          FROM candidates
+        ), classified AS MATERIALIZED (
+          SELECT profile_id,
+            bool_or(CASE WHEN ascii THEN
+              NOT (encode(sha256(CAST(:opad AS bytea) ||
+                sha256(CAST(:ipad AS bytea) ||
+                  convert_to(btrim(email, :whitespace), 'UTF8'))), 'hex')
+                = ANY(CAST(:suppressed AS text[])))
+              ELSE false END) AS accepted,
+            array_agg(DISTINCT email) FILTER(WHERE NOT ascii) AS unicode_emails
+          FROM normalized GROUP BY profile_id
+        )
+        SELECT NULL::bigint AS profile_id, NULL::text AS email,
+          count(*) + (SELECT count(*) FROM preaccepted) AS n
+        FROM classified WHERE accepted
+        UNION ALL
+        SELECT profile_id, unnest(unicode_emails), 0::bigint AS n
+        FROM classified WHERE NOT accepted
+    """), params, execution_options={"stream_results": True, "yield_per": 2048})
     count, accepted = 0, None
+    failed = False
     try:
         mapped = result.mappings()
         while True:
-            check_deadline(db)
+            # Do not execute SET/config SQL while a server cursor is open.
+            check_deadline()
             batch = mapped.fetchmany(2048)
             if not batch:
                 break
             for row in batch:
+                if row["profile_id"] is None:
+                    count += row["n"]
+                    continue
                 if row["profile_id"] == accepted:
                     continue
                 digest = hmac.new(pepper, row["email"].strip().casefold().encode(),
@@ -148,8 +197,15 @@ def _email_opted_in_count(db: Session) -> int:
                 if digest not in suppressed:
                     count += 1
                     accepted = row["profile_id"]
+    except BaseException:
+        failed = True
+        raise
     finally:
-        result.close()
+        try:
+            result.close()
+        except Exception:
+            if not failed:
+                raise
     return count
 
 

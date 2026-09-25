@@ -103,10 +103,42 @@ def test_running_import_without_batch_lock_does_not_defer_resolver(record_type, 
             db.commit()
 
 
-def test_two_contact_imports_and_resolver_overlapping_identifiers(tmp_path):
+@pytest.fixture
+def contact_import_sources():
+    # This test commits from multiple connections, so a transaction fixture
+    # cannot isolate it. Delete only its tracked source/profile IDs on teardown.
+    assert os.environ.get("KINSHIP_BENCHMARK_ISOLATED_TESTS") == "1"
+    assert "benchmark@/benchmark?host=/tmp/kinship-bench-" in os.environ["DATABASE_URL"]
+    source_ids = []
+    try:
+        yield source_ids
+    finally:
+        with Session(engine) as db:
+            profile_ids = list(db.scalars(text("""
+                SELECT DISTINCT profile_id FROM source_records
+                WHERE source_id=ANY(:ids) AND profile_id IS NOT NULL
+            """), {"ids": source_ids}))
+            # The fixture's UUID identifiers must not resolve to anyone else's
+            # profile. Fail rather than deleting unrelated fixture data.
+            assert db.scalar(text("""
+                SELECT count(*) FROM source_records
+                WHERE profile_id=ANY(:profiles) AND NOT source_id=ANY(:sources)
+            """), {"profiles": profile_ids, "sources": source_ids}) == 0
+            for table in ("consents", "enrichment_values", "source_records", "imports", "sources"):
+                column = "id" if table == "sources" else "source_id"
+                db.execute(text(f"DELETE FROM {table} WHERE {column}=ANY(:ids)"),
+                           {"ids": source_ids})
+            for table in ("identifiers", "profile_traits"):
+                db.execute(text(f"DELETE FROM {table} WHERE profile_id=ANY(:ids)"),
+                           {"ids": profile_ids})
+            db.execute(text("DELETE FROM profiles WHERE id=ANY(:ids)"), {"ids": profile_ids})
+            db.commit()
+
+
+def test_two_contact_imports_and_resolver_overlapping_identifiers(tmp_path, contact_import_sources):
     prefix = uuid.uuid4().hex
     import_ids = []
-    source_ids = []
+    source_ids = contact_import_sources
     with Session(engine) as db:
         for index in range(2):
             source = Source(key=f"concurrent_{prefix}_{index}", name="Concurrent test",
