@@ -22,6 +22,6 @@ the host's installation error has been reproduced.
 
 Standalone npm lockfiles must use publicly resolvable package URLs, not Replit-internal registry URLs.
 
-**Why:** Even a lockfile generated outside the workspace can retain an internal registry tarball URL. External Docker hosts cannot resolve that hostname, so `npm ci` fails with `ENOTFOUND`.
+**Why:** Even a lockfile generated outside the workspace can retain an internal registry tarball URL. External Docker hosts cannot resolve that hostname, so `npm ci` fails with `ENOTFOUND`. A fresh-cache install inside Replit can still pass because its DNS resolves that host; that is not evidence of external portability.
 
 **How to apply:** After dependency changes, check all resolved URLs in the standalone lockfile for internal hosts. Use the corresponding public npm tarball URLs without changing versions or integrity hashes; verify the public tarball against the recorded integrity. This is a portability check, not a workaround for package security blocks.
