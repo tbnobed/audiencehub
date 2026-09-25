@@ -15,7 +15,8 @@ from app.dashboards.overview import delta, month_shift
 
 @pytest.fixture
 def db():
-    if os.getenv("DATABASE_URL") != "postgresql+psycopg:///ah_overview_tests":
+    if (os.getenv("DATABASE_URL") != "postgresql+psycopg:///ah_overview_tests"
+            and os.getenv("KINSHIP_BENCHMARK_ISOLATED_TESTS") != "1"):
         pytest.skip("Requires dedicated isolated ah_overview_tests schema database")
     from app.db import engine
     with Session(engine) as session:
@@ -30,6 +31,59 @@ def test_delta_and_leap_dates():
     assert delta(2, 0)["delta_label"] == "New"
     assert delta(2, 1)["change_pct"] == 100
     assert month_shift(date(2024, 2, 29), -12) == date(2023, 2, 28)
+
+
+def test_default_range_with_no_historical_data(db):
+    result = api._dashboard("overview", None, None, db)
+    assert result["range"]["to"] == date.today().isoformat()
+    assert result["range"]["from"] == date.today().replace(day=1).isoformat()
+    assert result["overview"]["kpis"]["giving"]["value"] == 0
+    assert result["overview"]["kpis"]["retention_yoy"]["denominator"] == 0
+    assert len(result["overview"]["kpis"]["giving"]["sparkline"]) == 12
+
+
+def test_real_statement_deadline_is_explicit(db, monkeypatch):
+    from fastapi import HTTPException
+    from app.dashboards import cache
+    monkeypatch.setattr(cache, "DEADLINE_SECONDS", .1)
+    with pytest.raises(HTTPException) as error:
+        with cache.deadline(db):
+            api._scalar(db, "SELECT pg_sleep(1)")
+    assert error.value.status_code == 504
+
+
+def test_consent_source_duplication_optout_and_unicode_suppression(db):
+    import hashlib
+    import hmac
+    from app.config import get_settings
+    source = db.execute(text("""INSERT INTO sources(key,name,kind)
+        VALUES ('consent-test','Test','crm') RETURNING id""")).scalar_one()
+    ids = [db.execute(text("INSERT INTO profiles DEFAULT VALUES RETURNING id")).scalar_one()
+           for _ in range(5)]
+    for i, pid in enumerate(ids):
+        email = "Straße@example.org" if i == 0 else f"consent{i}@example.org"
+        db.execute(text("""INSERT INTO source_records
+            (source_id,external_id,profile_id,email_norm,attributes,raw_hash)
+            SELECT :s, :prefix||n, :p, :email, '{"email_consent":"opted_in"}', md5(n::text)
+            FROM generate_series(1,20) n"""),
+            {"s": source, "prefix": str(i)+"-", "p": pid, "email": email})
+    db.execute(text("""INSERT INTO consents(profile_id,channel,status,source_id)
+        VALUES (:p,'email','opted_out',:s)"""), {"p": ids[1], "s": source})
+    db.execute(text("UPDATE profiles SET is_deleted=true WHERE id=:p"), {"p": ids[2]})
+    db.execute(text("UPDATE profiles SET merged_into_id=:winner WHERE id=:p"),
+               {"p": ids[3], "winner": ids[4]})
+    assert api._email_opted_in_count(db) == 2
+    digest = hmac.new(get_settings().pii_hash_pepper.encode(),
+                      "Straße@example.org".casefold().encode(), hashlib.sha256).hexdigest()
+    db.execute(text("""INSERT INTO suppressions(type,value_hash,reason)
+        VALUES ('email',:h,'manual_test')"""), {"h": digest})
+    assert api._email_opted_in_count(db) == 1
+    # An unrelated suppressed email must not block this profile's second email.
+    db.execute(text("""INSERT INTO source_records
+        (source_id,external_id,profile_id,email_norm,attributes,raw_hash)
+        VALUES (:s,'alternate',:p,'alternate@example.org','{"email_consent":"opted_in"}','a')"""),
+        {"s": source, "p": ids[0]})
+    assert api._email_opted_in_count(db) == 2
 
 
 def test_other_api_process_observes_committed_changes_without_ttl(db):

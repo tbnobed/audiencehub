@@ -165,7 +165,7 @@ def _measure(directory: Path, gift_rows: int, contact_rows: int, profile: bool) 
 
 
 def run_benchmark(args) -> int:
-    if not args.imports:
+    if not args.imports and not getattr(args, "overview", False):
         raise ValueError("Specify --imports to explicitly start an isolated synthetic benchmark.")
     if os.environ.get("APP_ENV", "").lower() == "production":
         raise ValueError("Benchmark is forbidden when APP_ENV=production.")
@@ -173,6 +173,8 @@ def run_benchmark(args) -> int:
     contact_rows = args.rows if args.rows is not None else args.contact_rows
     if gift_rows < 0 or contact_rows < 0 or gift_rows + contact_rows == 0:
         raise ValueError("Row counts must be nonnegative and at least one must be positive.")
+    if getattr(args, "overview", False) and gift_rows == 0:
+        raise ValueError("The overview fixture requires at least one gift/profile.")
     for binary in ("initdb", "pg_ctl", "createdb"):
         if not shutil.which(binary):
             raise RuntimeError(f"Local PostgreSQL binary required: {binary}")
@@ -219,6 +221,12 @@ def run_benchmark(args) -> int:
             print(f"Isolated test suite exit={test_result.returncode}: {directory / 'pytest.txt'}",
                   flush=True)
             return test_result.returncode
+        if getattr(args, "overview", False):
+            subprocess.run([sys.executable, "-c",
+                "from pathlib import Path; from app.dashboards.benchmark import measure; "
+                f"measure(Path({str(directory)!r}), {gift_rows}, {contact_rows})"],
+                cwd=backend, env=env, check=True)
+            return 0
         script = (
             "import runpy; from pathlib import Path; "
             f"m=runpy.run_path({str(Path(__file__).resolve())!r}); "
@@ -236,6 +244,7 @@ def run_benchmark(args) -> int:
 
 
 def add_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--overview", action="store_true", help="Isolated overview scale benchmark.")
     parser.add_argument("--imports", action="store_true", help="Explicitly run isolated import benchmark.")
     parser.add_argument("--rows", type=int, help="Override both row counts.")
     parser.add_argument("--gift-rows", type=int, default=1_000_000)

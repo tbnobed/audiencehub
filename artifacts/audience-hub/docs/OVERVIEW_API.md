@@ -99,8 +99,96 @@ identifiers (same Data Health categories); it is not a count of attention cards.
 
 ## Freshness
 
-Dashboard response caching is disabled, including other tabs. Every API process
-reads committed database state per request; recompute/merge/import commits
-cannot leave another process's 300-second cache stale. No migration, worker
-change, import rerun, or recompute is needed. `invalidate_cache()` remains a
-compatible hook. Tradeoff: more aggregate queries rather than stale results.
+Dashboard aggregates use a bounded host-shared file cache, namespaced by database
+and suppression-hash configuration. Keys include dates, dashboard name, and the
+PostgreSQL MVCC snapshot (a durable, conservative changing transaction version).
+Commits by import, identity, traits, or other processes invalidate subsequent
+requests without process-local invalidation hooks. Uncommitted session writes
+bypass caching. Entries expire after 60 seconds; at most 32 entries of at most
+4 MiB each are retained. Responses are copied; role-specific attention is added
+after fetching shared aggregates. Errors are never cached.
+
+A cross-process file lock deduplicates cold computations on a host. A competing
+request waits at most two seconds then receives explicit 503 with Retry-After,
+not a fake zero or an indefinite wait. Multiple hosts remain correct but do not
+share this lock/cache. Constant import commits can invalidate every request:
+warm-cache latency is **not** the acceptance criterion during resolution.
+
+The overview combines all KPI periods, rolling compatibility metrics, 12 sparkline
+points, and historical classifications in one profile-grain gift aggregation.
+A second date-bounded scan supplies daily paired totals and campaign totals with
+GROUPING SETS. No gift/source/consent fanout or per-month full-history scans remain.
+Consent counts reduce source records to profile flags when no suppressions exist.
+With suppressions, distinct candidate addresses are streamed in 2,048-row batches
+and hashed with the writer's Unicode casefold semantics. Ledger opt-outs override
+all source opt-ins; any unsuppressed eligible address qualifies the active profile.
+
+Dashboard and shell work have a 25-second computation budget. Each database
+statement and streamed fetch receives the remaining statement timeout; lock waits
+are bounded to two seconds. Timeout/lock cancellation returns explicit 504.
+No migration, production seeding, worker changes, or recompute is required.
+
+## Isolated performance evidence
+
+Measured on the final implementation using the disposable PostgreSQL 17 harness
+in `app.benchmark`, not the app/development/production database. Unprofiled Python
+3.12 processes, shared cgroup quota `400000 100000` (4 CPUs), 8 GiB memory limit.
+PostgreSQL retained normal durability; WAL retention was lowered to 128 MiB maximum/
+32 MiB minimum during fixture recovery to reduce scratch usage, not disable fsync.
+
+Committed fixture: **5,360,000 gifts, 2,900,000 source records, 250,000 active
+profiles**. The suppression run also had **250,000 consent rows and one hard-bounce
+suppression**. Gifts cover six years, eight campaigns, recurring and non-recurring
+gifts; each profile has repeated source records. Ten percent of seeded sources
+initially have unresolved timestamps.
+
+| Final measurement | Seconds |
+|---|---:|
+| Cold viewer endpoint, suppression + ledger present | 17.457 |
+| Subsequent shared-cache hit, including live attention | 0.0075 |
+| Cold endpoint during concurrent synthetic resolution writes | 17.029 |
+| Second endpoint call, invalidated again by concurrent writes | 21.734 |
+
+These measure the complete viewer endpoint function, including live attention,
+but exclude HTTP transport and authentication middleware.
+The separate writer committed 79 batches of 1,000 source-record timestamp updates
+with half-second pauses between transactions during the two-request experiment. This
+exercises durable invalidation and write contention; it is **not** the real identity
+resolver and does not establish performance under its full CPU/IO load.
+“Cold” means no aggregate cache entry, not cold operating-system page cache.
+
+Correctness assertions checked committed row counts, exact giving against an
+independent scalar SQL sum (**8,924,250** for 2025), **249,999** eligible profiles
+with the suppression, and identical aggregate payloads on repeated requests
+(live attention can change during resolution). Earlier,
+the no-ledger/no-suppression fixture measured 14.489 seconds and 250,000 eligible
+profiles. That earlier timing is diagnostic, not the final suppression workload.
+
+**Limitation:** the planned 6,000,000-source fixture did not finish within the
+execution tool's five-minute seed limit. The committed disposable fixture was
+recovered instead of repeatedly reseeding. Thus full 6m-source acceptance and a
+production-real-resolver concurrency claim remain unverified. All measured cold
+requests above completed within 25 seconds; failures at higher load remain
+explicit, not cached or silently replaced.
+
+Raw workspace-local evidence:
+`/tmp/overview-performance-evidence/imports-g9gm0xz2/final-viewer-endpoint/overview-results.json`
+and sibling `final-viewer-concurrent/overview-results.json`. The disposable cluster
+was stopped after measurement. To reproduce on a host without the tool's five-minute
+command limit:
+
+```sh
+cd artifacts/audience-hub/backend
+python -m app.cli benchmark --overview --gift-rows 5360000 \
+  --contact-rows 6000000 --output-dir /tmp/overview-evidence
+```
+
+The harness checks the isolated URL before writing and commits fixture inserts in
+100k batches. It runs dashboard regression tests before seeding and removes its
+cluster on normal completion. For a fast isolated regression-only-sized run, use
+`--gift-rows 1000 --contact-rows 1000`. Tests cover default/no-history ranges,
+leap dates, retention, excluded merged/deleted profiles, duplicate source records,
+Unicode suppression, opt-outs, alternate eligible emails, process-visible commit
+invalidation, cache expiry/bounds/copy safety/deduplication, and real SQL cancellation.
+Final isolated dashboard regressions: **22 passed**, including all dashboard-tab
+SQL smoke queries (no skipped tests).

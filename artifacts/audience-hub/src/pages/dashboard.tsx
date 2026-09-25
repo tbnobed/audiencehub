@@ -189,23 +189,27 @@ export default function Dashboard() {
           {preset !== 'custom' && <button type="button" onClick={() => setCustomOpen(false)} className="px-2 py-1 text-ink-muted hover:text-ink">Cancel</button>}
           <span id="range-error" role="status" className="basis-full text-danger text-[11px] lg:text-right min-h-0">{draftDirty && draftError ? draftError : ''}</span>
         </form>}
-        <p data-testid="dashboard-period" className="text-ink-muted">{parsed.range ? <>{fmtDay(query.data?.range.from ?? from)} – {fmtDay(query.data?.range.to ?? to)} · compared with the prior {periodNoun}</> : 'Loading fiscal year…'}</p>
+        <p data-testid="dashboard-period" className="text-ink-muted">{parsed.range ? <>{fmtDay(from)} – {fmtDay(to)} · compared with the prior {periodNoun}</> : settings.isError ? 'Last FY is unavailable until fiscal settings load.' : 'Loading fiscal year…'}</p>
       </div>
     </header>
-    {settings.isError && <div role="alert" className="border border-danger/30 bg-danger/5 rounded-md px-4 py-3 text-xs text-ink"><span>Dashboard settings are unavailable; Last FY cannot be calculated.</span><Button variant="outline" size="sm" className="ml-3 h-7" onClick={() => settings.refetch()}><RefreshCw size={12} className="mr-1.5" /> Retry</Button><span className="ml-2 text-ink-muted">{settings.error instanceof Error ? settings.error.message : 'The request could not be completed.'}</span></div>}
+    {settings.isError && <div role="alert" className="border border-danger/30 bg-danger/5 rounded-md px-4 py-3 text-xs text-ink"><span>Dashboard settings are unavailable; Last FY cannot be calculated.</span><Button variant="outline" size="sm" className="ml-3 h-7" disabled={settings.isFetching} onClick={() => settings.refetch()}><RefreshCw size={12} className="mr-1.5" /> Retry</Button><span className="ml-2 text-ink-muted">{settings.error instanceof Error ? settings.error.message : 'The request could not be completed.'}</span></div>}
     <nav aria-label="Dashboard sections" className="flex overflow-x-auto gap-0 border-b border-line">
       {tabs.map(item => <button key={item.id} type="button" data-testid={`tab-${item.id}`} aria-current={tab === item.id ? 'page' : undefined} onClick={() => setTab(item.id)} className={`px-4 py-2.5 text-xs whitespace-nowrap border-b-2 transition-colors ${tab === item.id ? 'text-signal border-signal bg-signal-soft' : 'text-ink-muted border-transparent hover:text-ink'}`}>{item.label}</button>)}
     </nav>
-    {query.isPending && tab === 'overview' ? <OverviewSkeleton />
+    {query.isFetching && query.data && <p role="status" className="text-xs text-ink-muted">Refreshing dashboard data…</p>}
+    {!parsed.range && settings.isError ? <div role="alert" className="border border-danger/30 bg-danger/5 rounded-md p-8 text-center text-sm text-ink">Last FY cannot be displayed without fiscal settings. Retry above or choose another date range.</div>
+      : query.isPending && tab === 'overview' ? <OverviewSkeleton />
       : query.isPending ? <><div className="grid grid-cols-2 lg:grid-cols-4 gap-2">{Array.from({ length: 4 }, (_, i) => <Skeleton key={i} className="h-24 bg-surface-raised" />)}</div><div className="grid grid-cols-1 xl:grid-cols-2 gap-3">{Array.from({ length: 4 }, (_, i) => <Skeleton key={i} className="h-[295px] bg-surface-raised" />)}</div></>
-      : query.isError ? <div role="alert" className="border border-danger/30 bg-danger/5 rounded-md p-8 text-center"><p className="text-ink font-medium">Dashboard data is unavailable</p><p className="text-ink-muted text-xs mt-1">{query.error instanceof Error ? query.error.message : 'The request could not be completed.'}</p><Button variant="outline" size="sm" className="mt-4" onClick={() => query.refetch()}><RefreshCw size={13} className="mr-2" /> Retry</Button></div>
-      : query.data && tab === 'overview' ? (query.data.overview
+      : <>
+      {query.isError && <div role="alert" className="border border-danger/30 bg-danger/5 rounded-md p-5 text-center"><p className="text-ink font-medium">{query.data ? 'Dashboard could not be refreshed; showing previously loaded data' : 'Dashboard data is unavailable'}</p><p className="text-ink-muted text-xs mt-1">{query.error instanceof Error ? query.error.message : 'The request could not be completed.'}</p><Button variant="outline" size="sm" className="mt-4" disabled={query.isFetching} onClick={() => query.refetch()}><RefreshCw size={13} className="mr-2" /> Retry</Button></div>}
+      {query.data && tab === 'overview' ? (query.data.overview
         ? <OverviewView data={query.data.overview} canImport={canImport} onWiden={() => selectPreset('12m')} periodNoun={periodNoun} />
         : <div role="alert" className="border border-line rounded-md px-4 py-3 text-xs text-ink-muted">The overview response did not include live aggregates. <button type="button" className="text-signal hover:underline" onClick={() => query.refetch()}>Retry</button></div>)
       : query.data && <>
         <Kpis data={query.data} dashboard={tab} />
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">{specs[tab].map((spec, index) => <div key={spec.key} className={index === 0 && tab === 'overview' ? 'xl:col-span-2' : ''}><ChartPanel spec={spec} rows={query.data!.charts[spec.key] || []} dashboard={tab} from={from} to={to} canExport={canImport} /></div>)}</div>
         {tab === 'data-health' && <div className="border-t border-line pt-5 mt-5"><div className="text-[10px] uppercase tracking-widest text-signal font-mono mb-2">Operational controls</div><DataHealth /></div>}
+      </>}
       </>}
   </div>;
 }

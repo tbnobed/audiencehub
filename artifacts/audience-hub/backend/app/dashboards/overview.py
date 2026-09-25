@@ -6,6 +6,8 @@ from sqlalchemy import text
 
 
 def rows(db, sql, params=None):
+    from app.dashboards.cache import check_deadline
+    check_deadline(db)
     return [dict(r) for r in db.execute(text(sql), params or {}).mappings()]
 
 
@@ -20,56 +22,108 @@ def delta(value, prior):
             "delta_label": "—" if value == prior == 0 else "New" if prior == 0 else None}
 
 
-GIFTS = "SELECT g.* FROM gifts g JOIN active_profiles p ON p.id=g.profile_id"
+GIFTS = ("SELECT g.gift_date, g.amount, g.campaign FROM gifts g "
+         "JOIN active_profiles p ON p.id=g.profile_id")
 
 
-def period(db, start, end):
+def overview_facts(db, windows, cutoffs):
+    """One gift scan for all KPI windows and historical classifications.
+
+    Aggregate at profile grain before counting partners; never materialize g.* or
+    rerun a full-history retention/status query for each sparkline point.
+    """
+    params, columns, totals = {}, [], []
+    for i, (start, end) in enumerate(windows):
+        params.update({f"s{i}": start, f"e{i}": end,
+                       f"ys{i}": month_shift(start, -12), f"ye{i}": month_shift(end, -12)})
+        current = f"gift_date BETWEEN :s{i} AND :e{i}"
+        previous = f"gift_date BETWEEN :ys{i} AND :ye{i}"
+        columns.extend([
+            f"sum(amount) FILTER(WHERE {current}) AS amount{i}",
+            f"count(*) FILTER(WHERE {current}) AS gifts{i}",
+            f"bool_or({previous}) AS base{i}",
+        ])
+        totals.extend([
+            f"COALESCE(sum(amount{i}),0) AS amount{i}",
+            f"COALESCE(sum(gifts{i}),0) AS gifts{i}",
+            f"count(*) FILTER(WHERE gifts{i}>0) AS partners{i}",
+            f"count(*) FILTER(WHERE base{i}) AS base{i}",
+            f"count(*) FILTER(WHERE base{i} AND gifts{i}>0) AS retained{i}",
+        ])
+    for i, end in enumerate(cutoffs):
+        params[f"cut{i}"] = end
+        columns.extend([
+            f"min(gift_date) FILTER(WHERE gift_date<=:cut{i}) AS first{i}",
+            # Two latest gift dates, including same-date gifts, are needed for
+            # reactivation. Dates tied by id have the same classification.
+            f"(array_agg(gift_date ORDER BY gift_date DESC) "
+            f"FILTER(WHERE gift_date<=:cut{i}))[1:2] AS latest{i}",
+            f"bool_or(is_recurring AND gift_date>CAST(:cut{i} AS date)-365 "
+            f"AND gift_date<=:cut{i}) AS recurring{i}",
+        ])
+        status = f"""CASE WHEN first{i} IS NULL THEN 'prospect'
+            WHEN CAST(:cut{i} AS date)-latest{i}[1]<=365
+              AND first{i}>=CAST(:cut{i} AS date)-365 THEN 'new'
+            WHEN CAST(:cut{i} AS date)-latest{i}[1]<=365
+              AND latest{i}[1]-latest{i}[2]>730 THEN 'reactivated'
+            WHEN CAST(:cut{i} AS date)-latest{i}[1]<=365 THEN 'active'
+            WHEN CAST(:cut{i} AS date)-latest{i}[1]<=730 THEN 'lapsing'
+            ELSE 'lapsed' END"""
+        totals.extend(f"count(*) FILTER(WHERE ({status})='{s}') AS {s}{i}"
+                      for s in ("new", "reactivated", "active", "lapsing", "lapsed"))
+        totals.append(f"count(*) FILTER(WHERE recurring{i}) AS recurring{i}")
+    params["max_date"] = max([e for _, e in windows] + list(cutoffs))
     r = rows(db, f"""
-        WITH resolved AS ({GIFTS}), current_partners AS (
-          SELECT DISTINCT profile_id FROM resolved WHERE gift_date BETWEEN :s AND :e
-        ), year_ago AS (
-          SELECT DISTINCT profile_id FROM resolved WHERE gift_date BETWEEN :ys AND :ye
-        )
-        SELECT COALESCE(sum(amount),0) AS giving, count(DISTINCT profile_id) AS active_partners,
-          COALESCE(avg(amount),0) AS average_gift,
-          (SELECT count(*) FROM year_ago) AS retention_base,
-          (SELECT count(*) FROM year_ago JOIN current_partners USING(profile_id)) AS retained
-        FROM resolved WHERE gift_date BETWEEN :s AND :e
-    """, {"s": start, "e": end, "ys": month_shift(start, -12), "ye": month_shift(end, -12)})[0]
-    return {"giving": float(r["giving"]), "active_partners": r["active_partners"],
-            "average_gift": float(r["average_gift"]),
-            "retention_yoy": 100 * r["retained"] / r["retention_base"] if r["retention_base"] else 0,
-            "retention_base": r["retention_base"], "retained": r["retained"]}
-
-
-def statuses(db, end):
-    return rows(db, f"""
-        WITH resolved AS ({GIFTS}), history AS (
-          SELECT profile_id, gift_date,
-            lag(gift_date) OVER(PARTITION BY profile_id ORDER BY gift_date, id) AS previous,
-            min(gift_date) OVER(PARTITION BY profile_id) AS first,
-            row_number() OVER(PARTITION BY profile_id ORDER BY gift_date DESC, id DESC) AS rn
-          FROM resolved WHERE gift_date <= :e
-        ), classified AS (
-          SELECT p.id, CASE WHEN h.gift_date IS NULL THEN 'prospect'
-            WHEN CAST(:e AS date)-h.gift_date <= 365 AND h.first >= CAST(:e AS date)-365 THEN 'new'
-            WHEN CAST(:e AS date)-h.gift_date <= 365 AND h.gift_date-h.previous > 730 THEN 'reactivated'
-            WHEN CAST(:e AS date)-h.gift_date <= 365 THEN 'active'
-            WHEN CAST(:e AS date)-h.gift_date <= 730 THEN 'lapsing'
-            ELSE 'lapsed' END AS status
-          FROM active_profiles p LEFT JOIN history h ON h.profile_id=p.id AND h.rn=1
-        ) SELECT status, count(*) AS count FROM classified GROUP BY status
-    """, {"e": end})
-
-
-def recurring(db, end):
-    return rows(db, f"""SELECT count(DISTINCT profile_id) AS n FROM ({GIFTS}) g
-        WHERE is_recurring AND gift_date > CAST(:e AS date)-365 AND gift_date <= :e""",
-                {"e": end})[0]["n"]
+        WITH facts AS (
+          SELECT g.profile_id, {','.join(columns)}
+          FROM gifts g JOIN active_profiles p ON p.id=g.profile_id
+          WHERE gift_date<=:max_date GROUP BY g.profile_id
+        ) SELECT {','.join(totals)} FROM facts
+    """, params)[0]
+    periods = {}
+    for i, window in enumerate(windows):
+        periods[window] = {
+            "giving": float(r[f"amount{i}"]),
+            "average_gift": float(r[f"amount{i}"]/r[f"gifts{i}"]) if r[f"gifts{i}"] else 0,
+            "active_partners": r[f"partners{i}"],
+            "retention_base": r[f"base{i}"], "retained": r[f"retained{i}"],
+            "retention_yoy": 100*r[f"retained{i}"]/r[f"base{i}"] if r[f"base{i}"] else 0,
+        }
+    return periods, {
+        end: {s: r[f"{s}{i}"] for s in ("new", "reactivated", "active", "lapsing", "lapsed")}
+        for i, end in enumerate(cutoffs)
+    }, {end: r[f"recurring{i}"] for i, end in enumerate(cutoffs)}
 
 
 def build_overview(db, start, end, prior_start, prior_end):
     from app.dashboards.api import _email_opted_in_count
+    windows = [(start, end), (prior_start, prior_end)]
+    windows += [(m, min(month_shift(m, 1)-timedelta(days=1), end))
+                for m in (month_shift(end.replace(day=1), offset) for offset in range(-11, 1))]
+    windows += [(end-timedelta(days=364), end), (prior_end-timedelta(days=364), prior_end)]
+    last_month = end.replace(day=1)-timedelta(days=1)
+    periods, classifications, recurring_counts = overview_facts(
+        db, list(dict.fromkeys(windows)), list(dict.fromkeys((end, last_month, prior_end))))
+    profiles = rows(db, "SELECT count(*) AS n FROM active_profiles")[0]["n"]
+    for classification in classifications.values():
+        classification["prospect"] = profiles-sum(classification.values())
+    def period(db, s, e):
+        return periods[s, e]
+    def statuses(db, e):
+        return [{"status": k, "count": v} for k, v in classifications[e].items()]
+    def recurring(db, e):
+        return recurring_counts[e]
+    # A second, date-bounded scan serves both chart series and campaign totals.
+    chart_rows = rows(db, f"""
+        SELECT gift_date, COALESCE(campaign,'(unspecified)') AS campaign,
+          grouping(gift_date) AS is_campaign,
+          count(*) AS gifts, sum(amount) AS amount,
+          count(*) FILTER(WHERE gift_date BETWEEN :s AND :e) AS current_gifts,
+          sum(amount) FILTER(WHERE gift_date BETWEEN :s AND :e) AS current_amount
+        FROM ({GIFTS}) g WHERE gift_date BETWEEN :ps AND :e
+        GROUP BY GROUPING SETS ((gift_date),(COALESCE(campaign,'(unspecified)')))
+    """, {"s": start, "e": end, "ps": prior_start})
+    daily = [r for r in chart_rows if not r["is_campaign"]]
     current, prior = period(db, start, end), period(db, prior_start, prior_end)
     keys = ("giving", "active_partners", "retention_yoy", "average_gift")
     kpis = {k: delta(current[k], prior[k]) for k in keys}
@@ -88,12 +142,11 @@ def build_overview(db, start, end, prior_start, prior_end):
         stop = min(month_shift(cursor.replace(day=1), 1)-timedelta(days=1), end)
         ps = prior_start + (cursor-start)
         pe = ps + (stop-cursor)
-        amounts = rows(db, f"""SELECT
-          COALESCE(sum(amount) FILTER(WHERE gift_date BETWEEN :s AND :e),0) AS amount,
-          count(*) FILTER(WHERE gift_date BETWEEN :s AND :e) AS gifts,
-          COALESCE(sum(amount) FILTER(WHERE gift_date BETWEEN :ps AND :pe),0) AS prior_amount
-          FROM ({GIFTS}) g WHERE gift_date BETWEEN :ps AND :e
-        """, {"s": cursor, "e": stop, "ps": ps, "pe": pe})[0]
+        amounts = {
+            "amount": sum(r["amount"] for r in daily if cursor <= r["gift_date"] <= stop),
+            "gifts": sum(r["gifts"] for r in daily if cursor <= r["gift_date"] <= stop),
+            "prior_amount": sum(r["amount"] for r in daily if ps <= r["gift_date"] <= pe),
+        }
         paired.append({"month": cursor.replace(day=1).isoformat(), "from": cursor.isoformat(),
                        "to": stop.isoformat(), "prior_from": ps.isoformat(), "prior_to": pe.isoformat(),
                        "amount": float(amounts["amount"]), "prior_amount": float(amounts["prior_amount"]),
@@ -102,16 +155,16 @@ def build_overview(db, start, end, prior_start, prior_end):
     counts = {r["status"]: r["count"] for r in statuses(db, end)}
     last_month = end.replace(day=1)-timedelta(days=1)
     old_counts = {r["status"]: r["count"] for r in statuses(db, last_month)}
-    profiles = rows(db, "SELECT count(*) AS n FROM active_profiles")[0]["n"]
     opted = _email_opted_in_count(db)
     givers = sum(v for k, v in counts.items() if k != "prospect")
     status = [{"status": k, "count": counts.get(k, 0),
                "share": 100 * counts.get(k, 0)/givers if givers else 0}
               for k in ("active", "new", "reactivated", "lapsing", "lapsed")]
-    campaigns = rows(db, f"""SELECT COALESCE(campaign,'(unspecified)') AS campaign,
-        count(*) AS gifts, avg(amount) AS average_gift, sum(amount) AS amount
-        FROM ({GIFTS}) g WHERE gift_date BETWEEN :s AND :e
-        GROUP BY 1 ORDER BY amount DESC, gifts DESC, campaign LIMIT 5""", {"s": start, "e": end})
+    campaigns = [{"campaign": r["campaign"], "gifts": r["current_gifts"],
+                  "amount": r["current_amount"],
+                  "average_gift": r["current_amount"]/r["current_gifts"]}
+                 for r in chart_rows if r["is_campaign"] and r["current_gifts"]]
+    campaigns = sorted(campaigns, key=lambda r: (-r["amount"], -r["gifts"], r["campaign"]))[:5]
     for c in campaigns:
         c.update(amount=float(c["amount"]), average_gift=float(c["average_gift"]))
         c["share"] = 100*c["amount"]/current["giving"] if current["giving"] else 0
@@ -142,15 +195,16 @@ def build_overview(db, start, end, prior_start, prior_end):
                          "campaigns": campaigns, "campaigns_href": "/?tab=giving",
                          "partner_status": {"givers": givers, "statuses": status,
                                             "prospects": counts.get("prospect", 0)},
-                         "attention": attention(db, "viewer", counts.get("lapsing", 0))}}
+                         "attention": []}}
 
 
 def health_counts(db):
-    return rows(db, """SELECT
+    from app.dashboards.cache import cached
+    return cached(db, ("health-counts",), lambda: rows(db, """SELECT
       (SELECT count(*) FROM source_records WHERE resolved_at IS NULL) AS unresolved,
       (SELECT count(*) FROM identifier_blocklist b WHERE reason='high_cardinality'
          AND NOT EXISTS (SELECT 1 FROM audit_log a WHERE a.action='data_health.blocklist.approve'
-                         AND a.details->>'blocklist_id'=b.id::text)) AS review""")[0]
+                         AND a.details->>'blocklist_id'=b.id::text)) AS review""")[0])
 
 
 def attention(db, role, lapsing):

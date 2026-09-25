@@ -48,71 +48,109 @@ def _date_range(from_date: date | None, to_date: date | None) -> tuple[date, dat
 
 
 def _rows(db: Session, sql: str, params: dict[str, Any] | None = None) -> list[dict]:
+    from app.dashboards.cache import check_deadline
+    check_deadline(db)
     return [dict(row) for row in db.execute(text(sql), params or {}).mappings().all()]
 
 
 def _scalar(db: Session, sql: str, params: dict[str, Any] | None = None) -> Any:
+    from app.dashboards.cache import check_deadline
+    check_deadline(db)
     return db.execute(text(sql), params or {}).scalar_one()
 
 
 def _email_opted_in_count(db: Session) -> int:
-    """Count unified profiles with an eligible email-consent signal, without returning emails."""
-    rows = db.execute(text("""
-        WITH profile_emails AS (
-          SELECT p.id AS profile_id, lower(btrim(p.email::text)) AS email
-          FROM profiles p JOIN active_profiles ap ON ap.id=p.id
-          WHERE p.email IS NOT NULL AND btrim(p.email::text) <> ''
-          UNION
-          SELECT sr.profile_id, lower(btrim(sr.email_norm::text))
-          FROM source_records sr JOIN active_profiles ap ON ap.id=sr.profile_id
-          WHERE sr.email_norm IS NOT NULL AND btrim(sr.email_norm::text) <> ''
-          UNION
-          SELECT i.profile_id, lower(btrim(i.value))
-          FROM identifiers i JOIN active_profiles ap ON ap.id=i.profile_id
-          WHERE i.type='email' AND btrim(i.value) <> ''
-        ), consent_flags AS (
-          SELECT pe.profile_id, pe.email,
-                 COALESCE(bool_or(lower(COALESCE(sr.attributes->>'email_consent', ''))='opted_in'),
-                          false) AS source_opted_in,
-                 COALESCE(bool_or(c.status IN ('opted_in', 'subscribed', 'granted')), false)
-                   AS ledger_opted_in,
-                 COALESCE(bool_or(c.status='opted_out'), false) AS ledger_opted_out
-          FROM profile_emails pe
-          LEFT JOIN source_records sr
-            ON sr.profile_id=pe.profile_id
-           AND lower(btrim(sr.email_norm::text))=pe.email
-          LEFT JOIN consents c ON c.profile_id=pe.profile_id AND c.channel='email'
-          GROUP BY pe.profile_id, pe.email
-        )
-        SELECT profile_id, email, source_opted_in, ledger_opted_in, ledger_opted_out
-        FROM consent_flags WHERE source_opted_in OR ledger_opted_in
-    """)).mappings().all()
-    if not rows:
-        return 0
+    """Aggregate the ledger before joining: source rows must never multiply it.
 
+    With no suppressions, only a scalar leaves PostgreSQL. Otherwise stream distinct
+    candidate emails in bounded batches; Python casefold matches the suppression
+    writer (PostgreSQL lower is not equivalent for Unicode).
+    """
+    candidates = """
+        WITH ledger AS MATERIALIZED (
+          SELECT profile_id,
+            bool_or(status IN ('opted_in','subscribed','granted')) AS opted_in,
+            bool_or(status='opted_out') AS opted_out
+          FROM consents WHERE channel='email' GROUP BY profile_id
+        ), eligible AS MATERIALIZED (
+          SELECT p.id, p.email, COALESCE(l.opted_in,false) AS opted_in
+          FROM active_profiles p LEFT JOIN ledger l ON l.profile_id=p.id
+          WHERE NOT COALESCE(l.opted_out,false)
+        ), source_signals AS (
+          SELECT profile_id, lower(btrim(email_norm::text)) AS email,
+            bool_or(lower(attributes->>'email_consent')='opted_in') AS opted_in
+          FROM source_records
+          WHERE profile_id IS NOT NULL AND btrim(email_norm::text)<>''
+          GROUP BY profile_id, lower(btrim(email_norm::text))
+        ), candidates AS (
+          SELECT p.id AS profile_id, lower(btrim(p.email::text)) AS email
+          FROM eligible p WHERE p.opted_in AND btrim(p.email::text) <> ''
+          UNION ALL
+          SELECT sr.profile_id, sr.email
+          FROM source_signals sr JOIN eligible p ON p.id=sr.profile_id
+          WHERE p.opted_in OR sr.opted_in
+          UNION ALL
+          SELECT i.profile_id, lower(btrim(i.value))
+          FROM identifiers i JOIN eligible p ON p.id=i.profile_id
+          WHERE p.opted_in AND i.type='email' AND btrim(i.value) <> ''
+        )
+    """
+    suppressed = {r["value_hash"] for r in _rows(db, """
+        SELECT value_hash FROM suppressions WHERE type='email'
+          AND (lower(reason) IN ('hard_bounce','spam','manual')
+               OR lower(reason) LIKE 'hard_bounce_%'
+               OR lower(reason) LIKE 'spam_%'
+               OR lower(reason) LIKE 'manual_%')
+    """)}
+    if not suppressed:
+        # No address hashing/deduplication is necessary without suppressions.
+        # Reduce millions of source rows to one narrow row per profile first.
+        return int(_scalar(db, """
+            WITH source_flags AS (
+              SELECT profile_id,
+                bool_or(lower(attributes->>'email_consent')='opted_in') AS opted_in
+              FROM source_records
+              WHERE profile_id IS NOT NULL AND btrim(email_norm::text)<>''
+              GROUP BY profile_id
+            ), identifier_flags AS (
+              SELECT DISTINCT profile_id FROM identifiers
+              WHERE type='email' AND btrim(value)<>''
+            )
+            SELECT count(*) FROM active_profiles p
+            LEFT JOIN source_flags s ON s.profile_id=p.id
+            LEFT JOIN identifier_flags i ON i.profile_id=p.id
+            LEFT JOIN consents c ON c.profile_id=p.id AND c.channel='email'
+            WHERE c.status IS DISTINCT FROM 'opted_out'
+              AND (s.opted_in OR (
+                c.status IN ('opted_in','subscribed','granted')
+                AND (btrim(p.email::text)<>'' OR s.profile_id IS NOT NULL
+                     OR i.profile_id IS NOT NULL)))
+        """))
+    from app.dashboards.cache import check_deadline
+    check_deadline(db)
+    result = db.execute(text(candidates + """
+        SELECT DISTINCT profile_id, email FROM candidates ORDER BY profile_id, email
+    """), execution_options={"stream_results": True, "yield_per": 2048})
     pepper = get_settings().pii_hash_pepper.encode()
-    email_hashes = {
-        hmac.new(pepper, row["email"].strip().casefold().encode(), hashlib.sha256).hexdigest()
-        for row in rows
-    }
-    suppressed = {
-        row["value_hash"] for row in db.execute(text("""
-            SELECT value_hash FROM suppressions
-            WHERE type='email' AND value_hash=ANY(CAST(:hashes AS text[]))
-              AND (lower(reason) IN ('hard_bounce', 'spam', 'manual')
-                   OR lower(reason) LIKE 'hard_bounce_%'
-                   OR lower(reason) LIKE 'spam_%'
-                   OR lower(reason) LIKE 'manual_%')
-        """), {"hashes": list(email_hashes)}).mappings().all()
-    }
-    eligible_profiles = {
-        row["profile_id"] for row in rows
-        if not row["ledger_opted_out"]
-        and hmac.new(
-            pepper, row["email"].strip().casefold().encode(), hashlib.sha256
-        ).hexdigest() not in suppressed
-    }
-    return len(eligible_profiles)
+    count, accepted = 0, None
+    try:
+        mapped = result.mappings()
+        while True:
+            check_deadline(db)
+            batch = mapped.fetchmany(2048)
+            if not batch:
+                break
+            for row in batch:
+                if row["profile_id"] == accepted:
+                    continue
+                digest = hmac.new(pepper, row["email"].strip().casefold().encode(),
+                                  hashlib.sha256).hexdigest()
+                if digest not in suppressed:
+                    count += 1
+                    accepted = row["profile_id"]
+    finally:
+        result.close()
+    return count
 
 
 def _safe_rows(rows: list[dict]) -> list[dict]:
@@ -396,9 +434,10 @@ def _build_dashboard(db: Session, name: str, start: date, end: date,
 
 def _dashboard(name: str, from_date: date | None, to_date: date | None, db: Session) -> dict:
     start, end, prior_start, prior_end = _date_range(from_date, to_date)
-    # Read committed data on every request. No process-local TTL can survive a
-    # traits recompute (or merge/import) committed by a different worker.
-    return _build_dashboard(db, name, start, end, prior_start, prior_end)
+    from app.dashboards.cache import cached, deadline
+    with deadline(db):
+        return cached(db, (name, start, end),
+                      lambda: _build_dashboard(db, name, start, end, prior_start, prior_end))
 
 
 def _date_params(from_date: date | None = Query(default=None, alias="from"),
@@ -413,10 +452,12 @@ def _endpoint(name: str):
         user: User = Depends(require_role("viewer")),
         db: Session = Depends(session_scope),
     ):
-        result = _dashboard(name, from_date, to_date, db)
-        if name == "overview":
-            from app.dashboards.overview import attention
-            result["overview"]["attention"] = attention(db, user.role, result["overview"]["stats"]["lapsing"]["value"])
+        from app.dashboards.cache import deadline
+        with deadline(db):
+            result = _dashboard(name, from_date, to_date, db)
+            if name == "overview":
+                from app.dashboards.overview import attention
+                result["overview"]["attention"] = attention(db, user.role, result["overview"]["stats"]["lapsing"]["value"])
         return result
     endpoint.__name__ = f"get_{name.replace('-', '_')}_dashboard"
     return endpoint
@@ -435,6 +476,12 @@ def shell_summary(
     user: User = Depends(require_role("viewer")),
     db: Session = Depends(session_scope),
 ):
+    from app.dashboards.cache import deadline
+    with deadline(db):
+        return _shell_summary(user, db)
+
+
+def _shell_summary(user, db):
     from app.dashboards.overview import health_counts
     health = health_counts(db)
     result = {"imports_running": None, "active_import": None,

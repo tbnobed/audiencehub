@@ -30,20 +30,34 @@ export type OverviewPayload = {
 };
 export type DashboardSettings = { fiscal_year_start_month: number };
 
+async function fetchDashboardSettings(signal: AbortSignal): Promise<DashboardSettings> {
+  const settings = await fetchApi('/api/dashboards/settings', { signal }) as DashboardSettings;
+  if (!Number.isInteger(settings?.fiscal_year_start_month) || settings.fiscal_year_start_month < 1 || settings.fiscal_year_start_month > 12) {
+    throw new Error('The server returned an invalid fiscal year start month.');
+  }
+  return settings;
+}
+
 export function useDashboard(name: DashboardName, from: string, to: string, enabled = true) {
   return useQuery({
     enabled,
     queryKey: ['dashboard', name, from, to],
-    queryFn: () => fetchApi(`/api/dashboards/${name}?${new URLSearchParams({ from, to })}`) as Promise<DashboardPayload>,
+    queryFn: ({ signal }) => fetchApi(`/api/dashboards/${name}?${new URLSearchParams({ from, to })}`, { signal }) as Promise<DashboardPayload>,
     staleTime: 60_000,
+    retry: false,
+    retryOnMount: false,
+    refetchOnWindowFocus: false,
   });
 }
 
 export function useDashboardSettings() {
   return useQuery({
     queryKey: ['dashboard-settings'],
-    queryFn: () => fetchApi('/api/dashboards/settings') as Promise<DashboardSettings>,
+    queryFn: ({ signal }) => fetchDashboardSettings(signal),
     staleTime: 300_000,
+    retry: false,
+    retryOnMount: false,
+    refetchOnWindowFocus: false,
   });
 }
 

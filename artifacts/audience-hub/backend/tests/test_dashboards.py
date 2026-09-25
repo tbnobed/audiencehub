@@ -73,13 +73,22 @@ def test_email_opted_in_kpi_unifies_signals_and_excludes_optouts_and_suppression
         def all(self):
             return self._rows
 
+        def __iter__(self):
+            return iter(self._rows)
+
+        def close(self):
+            pass
+
+        def fetchmany(self, size):
+            result, self._rows = self._rows[:size], self._rows[size:]
+            return result
+
     class ReadOnlyFakeDb:
-        def execute(self, statement, params=None):
+        def execute(self, statement, params=None, **kwargs):
             sql = str(statement)
-            if "FROM consent_flags" in sql:
-                return Result(candidate_rows)
+            if "FROM candidates" in sql:
+                return Result([candidate_rows[0], candidate_rows[2]])
             if "FROM suppressions" in sql:
-                assert suppressed_hash in params["hashes"]
                 return Result([{"value_hash": suppressed_hash}])
             raise AssertionError("Unexpected query")
 
@@ -87,7 +96,8 @@ def test_email_opted_in_kpi_unifies_signals_and_excludes_optouts_and_suppression
 
 
 def test_all_dashboard_queries_against_isolated_m4_smoke_database():
-    if os.getenv("DATABASE_URL") != "postgresql+psycopg:///ah_m4_smoke":
+    if (os.getenv("DATABASE_URL") != "postgresql+psycopg:///ah_m4_smoke"
+            and os.getenv("KINSHIP_BENCHMARK_ISOLATED_TESTS") != "1"):
         pytest.skip("Set DATABASE_URL to the isolated ah_m4_smoke database")
 
     from app.db import engine
