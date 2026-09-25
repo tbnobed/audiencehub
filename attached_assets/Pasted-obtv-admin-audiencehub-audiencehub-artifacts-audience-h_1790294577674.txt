@@ -1,0 +1,50 @@
+obtv-admin@audiencehub:~/audiencehub/artifacts/audience-hub$ docker compose up --build -d
+[+] Building 9.1s (29/29) FINISHED
+ => [internal] load local bake definitions                                                                     0.0s
+ => => reading from stdin 555B                                                                                 0.0s
+ => [internal] load build definition from Dockerfile                                                           0.0s
+ => => transferring dockerfile: 1.14kB                                                                         0.0s
+ => [internal] load metadata for docker.io/library/python:3.12-slim-bookworm                                   0.4s
+ => [internal] load metadata for docker.io/library/node:20-bookworm-slim                                       0.4s
+ => [internal] load .dockerignore                                                                              0.0s
+ => => transferring context: 229B                                                                              0.0s
+ => [stage-1  1/13] FROM docker.io/library/python:3.12-slim-bookworm@sha256:392307d22300de8b5986851a12d9176df  0.0s
+ => => resolve docker.io/library/python:3.12-slim-bookworm@sha256:392307d22300de8b5986851a12d9176dfc0fc073e65  0.0s
+ => [web 1/8] FROM docker.io/library/node:20-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df  0.0s
+ => => resolve docker.io/library/node:20-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6  0.0s
+ => [internal] load build context                                                                              0.0s
+ => => transferring context: 61.16kB                                                                           0.0s
+ => CACHED [stage-1  2/13] RUN apt-get update && apt-get install -y --no-install-recommends libpq5 tini curl   0.0s
+ => CACHED [stage-1  3/13] RUN useradd --create-home --uid 10001 app                                           0.0s
+ => CACHED [stage-1  4/13] WORKDIR /app                                                                        0.0s
+ => CACHED [stage-1  5/13] COPY backend/pyproject.toml ./backend/                                              0.0s
+ => CACHED [stage-1  6/13] COPY backend/app/__init__.py ./backend/app/                                         0.0s
+ => CACHED [stage-1  7/13] RUN pip install --upgrade pip && pip install ./backend                              0.0s
+ => [stage-1  8/13] COPY backend/ ./backend/                                                                   0.1s
+ => CACHED [web 2/8] WORKDIR /web                                                                              0.0s
+ => CACHED [web 3/8] COPY package.json package-lock.json ./                                                    0.0s
+ => CACHED [web 4/8] RUN npm ci                                                                                0.0s
+ => CACHED [web 5/8] COPY index.html vite.config.ts tsconfig.json ./                                           0.0s
+ => CACHED [web 6/8] COPY src/ ./src/                                                                          0.0s
+ => CACHED [web 7/8] COPY public/ ./public/                                                                    0.0s
+ => CACHED [web 8/8] RUN PORT=5000 BASE_PATH=/ npm run build                                                   0.0s
+ => [stage-1  9/13] RUN pip install --no-deps ./backend                                                        5.9s
+ => [stage-1 10/13] COPY --from=web /web/dist/public ./static                                                  0.1s
+ => [stage-1 11/13] COPY scripts/ ./scripts/                                                                   0.1s
+ => [stage-1 12/13] RUN chmod +x scripts/*.sh && mkdir -p /data/uploads /data/exports   && chown -R app:app /  0.9s
+ => [stage-1 13/13] WORKDIR /app/backend                                                                       0.1s
+ => exporting to image                                                                                         1.1s
+ => => exporting layers                                                                                        0.5s
+ => => exporting manifest sha256:1818125dd3bc6a1a29b1d5078c9e982358ecbae73fc5aaed87bc332fc4f14cb0              0.0s
+ => => exporting config sha256:c783334d69cd17ed94eda54f8d6335786e6822cccef34b5ba197d0593bac9fe5                0.0s
+ => => exporting attestation manifest sha256:0f88c5eaedd68595a387be27468449604c9f011116738540f8d8e0eaa810409f  0.0s
+ => => exporting manifest list sha256:2cf5cd2b22686a6c94569a0a3a82373b5d38f9993d48561b9dd0fbdf37c42541         0.0s
+ => => naming to docker.io/library/audience-hub:latest                                                         0.0s
+ => => unpacking to docker.io/library/audience-hub:latest                                                      0.5s
+ => resolving provenance for metadata file                                                                     0.0s
+[+] up 4/5
+ ✔ Image audience-hub:latest       Built                                                                        9.3s
+ ✔ Container audience-hub-backup-1 Running                                                                      0.0s
+ ✔ Container audience-hub-db-1     Running                                                                      0.0s
+ ✔ Container audience-hub-api-1    Recreated                                                                    0.8s
+ ⠼ Container audience-hub-worker-1 Recreate                                                                   105.4s
