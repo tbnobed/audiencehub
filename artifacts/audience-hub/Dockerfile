@@ -1,7 +1,9 @@
 FROM node:20-bookworm-slim AS web
 WORKDIR /web
 COPY package.json package-lock.json ./
-RUN npm ci
+# The builder needs devDependencies even when npm is configured for production.
+RUN npm ci --include=dev --bin-links=true \
+  && test -x node_modules/.bin/vite
 COPY index.html vite.config.ts tsconfig.json ./
 COPY src/ ./src/
 COPY public/ ./public/
