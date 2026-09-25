@@ -1,0 +1,50 @@
+obtv-admin@audiencehub:~/audiencehub/artifacts/audience-hub$ docker compose exec -T db sh -c 'psql -U "$POSTGRES_USER" -d audience_hub' <<'SQL'
+BEGIN READ ONLY;
+SET LOCAL statement_timeout = '60s';
+
+SELECT id, type, status, heartbeat_at, progress
+FROM jobs
+WHERE type IN ('import.run', 'identity.resolve_batch', 'traits.recompute')
+ORDER BY id DESC LIMIT 15;
+
+SELECT count(*) AS unresolved_records
+FROM source_records
+WHERE resolved_at IS NULL;
+
+SELECT count(*) AS gifts,
+       count(*) FILTER (WHERE profile_id IS NULL) AS unlinked_gifts,
+       min(gift_date) AS earliest_gift,
+       max(gift_date) AS latest_gift
+FROM gifts;
+
+COMMIT;
+SQL
+BEGIN
+SET
+ id |          type          |  status   |         heartbeat_at          |                                          progress
+----+------------------------+-----------+-------------------------------+---------------------------------------------------------------------------------------------
+ 13 | import.run             | queued    |                               | {"done": 0, "total": 500002, "message": "Preparing validation…"}
+ 12 | import.run             | succeeded | 2026-09-25 00:39:09.0262+00   | {"done": 5360523, "phase": "writing", "total": 5360523, "message": "Writing 5.4M / 5.4M"}
+ 11 | traits.recompute       | succeeded | 2026-09-25 00:10:12.518801+00 | {}
+ 10 | traits.recompute       | succeeded | 2026-09-25 00:10:12.427748+00 | {}
+  8 | identity.resolve_batch | running   | 2026-09-25 00:41:39.344323+00 | {}
+  7 | import.run             | failed    |                               | {"done": 0, "phase": "writing", "total": 500002, "message": "Writing 0 / 500k"}
+  6 | import.run             | succeeded | 2026-09-24 23:58:16.600154+00 | {"done": 178605, "phase": "writing", "total": 178605, "message": "Writing 178.6k / 178.6k"}
+  5 | import.run             | succeeded | 2026-09-24 23:57:14.196596+00 | {"done": 251445, "phase": "writing", "total": 251445, "message": "Writing 251.4k / 251.4k"}
+  4 | import.run             | failed    |                               | {"done": 0, "phase": "writing", "total": 5360523, "message": "Writing 0 / 5.4M"}
+  3 | import.run             | succeeded | 2026-09-24 23:42:36.322616+00 | {"done": 504952, "phase": "writing", "total": 504952, "message": "Writing 505k / 505k"}
+  2 | traits.recompute       | succeeded | 2026-09-24 23:23:54.314009+00 | {}
+(11 rows)
+
+ unresolved_records
+--------------------
+            6038624
+(1 row)
+
+  gifts  | unlinked_gifts | earliest_gift | latest_gift
+---------+----------------+---------------+-------------
+ 5360521 |        5360521 | 2020-01-01    | 2024-12-31
+(1 row)
+
+COMMIT
+obtv-admin@audiencehub:~/audiencehub/artifacts/audience-hub$
