@@ -3,6 +3,11 @@
 PostgreSQL's MVCC snapshot is a conservative durable data version: any new
 transaction or completion of an in-flight writer invalidates the entry. Files are
 shared by API processes on the same host; no correctness depends on that sharing.
+
+Coalesced callers may adopt a generation published after their call started,
+even if writes continue during computation. This is an as-of-computation result,
+not a promise of a transactionally consistent multi-query snapshot. Preexisting
+generations always require an exact MVCC match; TTL alone never grants freshness.
 """
 import copy
 import fcntl
@@ -24,6 +29,9 @@ TTL_SECONDS = 60
 MAX_ENTRIES = 32
 MAX_BYTES = 4 * 1024 * 1024
 _deadline = ContextVar("dashboard_deadline", default=None)
+# Monotonic timestamps are comparable across processes, but not across boots.
+# This cache already requires a local Unix host (flock); deployed hosts are Linux.
+_boot_id = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
 
 
 def check_deadline(db=None):
@@ -57,6 +65,11 @@ def deadline(db):
 
 
 def cached(db, key, build):
+    # Direct callers get the same bounded budget as HTTP endpoint callers.
+    if _deadline.get() is None:
+        with deadline(db):
+            return cached(db, key, build)
+    started = time.monotonic_ns()
     check_deadline(db)
     # Never publish uncommitted session-local writes as globally reusable facts.
     if db.new or db.dirty or db.deleted or db.execute(
@@ -70,47 +83,52 @@ def cached(db, key, build):
         (settings.database_url + settings.pii_hash_pepper).encode()).hexdigest()[:24]
     directory = Path(tempfile.gettempdir()) / f"kinship-dashboard-{os.getuid()}-{namespace}"
     directory.mkdir(mode=0o700, exist_ok=True)
-    digest = hashlib.sha256(json.dumps(["v2", version, *key], default=str).encode()).hexdigest()
+    digest = hashlib.sha256(json.dumps(["v3", _boot_id, *key], default=str).encode()).hexdigest()
     path = directory / (digest+".json")
 
     def read():
         try:
-            if time.time()-path.stat().st_mtime >= TTL_SECONDS or path.stat().st_size > MAX_BYTES:
+            stat = path.stat()
+            if time.time()-stat.st_mtime >= TTL_SECONDS or stat.st_size > MAX_BYTES:
                 return None
-            return json.loads(path.read_text())
-        except (FileNotFoundError, ValueError):
+            entry = json.loads(path.read_text())
+            if "result" not in entry:
+                return None
+            if entry["version"] == version or entry["published"] >= started:
+                return entry
+        except (FileNotFoundError, ValueError, KeyError, TypeError):
             return None
 
     hit = read()
     if hit is not None:
-        return copy.deepcopy(hit)
-    # One bounded lock for the cache prevents a cold-page thundering herd, even
-    # when several requests observed slightly different MVCC snapshots.
-    with (directory / "compute.lock").open("a") as lock:
-        wait_until = time.monotonic()+2
+        return copy.deepcopy(hit["result"])
+    # Persistent per-logical-key inodes: never unlink lock files (even an
+    # apparently idle lock can have a waiter holding its inode). Distinct dates
+    # and dashboards never hold each other's expensive-computation lock.
+    with (directory / (digest+".lock")).open("a") as lock:
         while True:
+            check_deadline()
+            hit = read()
+            if hit is not None:
+                return hit["result"]
             try:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 break
             except BlockingIOError:
                 check_deadline()
-                hit = read()
-                if hit is not None:
-                    return hit
-                if time.monotonic() >= wait_until:
-                    raise HTTPException(503, detail="Dashboard refresh is in progress. Please retry.",
-                                        headers={"Retry-After": "3"})
-                time.sleep(.05)
+                time.sleep(min(.05, max(0, _deadline.get()-time.monotonic())))
         hit = read()
         if hit is not None:
-            return hit
+            return hit["result"]
         # A killed writer can leave its atomic-write staging file behind.
-        # Holding the sole writer lock makes these safe to remove.
-        for abandoned in directory.glob("*.tmp"):
+        # Only this key's staging files are safe to remove.
+        for abandoned in directory.glob(digest+".*.tmp"):
             abandoned.unlink(missing_ok=True)
+        check_deadline(db)
         result = build()  # exceptions are never cached
         check_deadline()
-        encoded = json.dumps(result)
+        encoded = json.dumps({"version": version, "published": time.monotonic_ns(),
+                              "result": result})
         if len(encoded.encode()) <= MAX_BYTES:
             temporary = path.with_suffix(f".{os.getpid()}.tmp")
             try:
@@ -118,8 +136,14 @@ def cached(db, key, build):
                 os.replace(temporary, path)
             finally:
                 temporary.unlink(missing_ok=True)
-        files = sorted(directory.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
-        for i, old in enumerate(files):
-            if i >= MAX_ENTRIES or time.time()-old.stat().st_mtime >= TTL_SECONDS:
+        # Other keys can publish/prune concurrently. Missing files are normal.
+        files = []
+        for candidate in directory.glob("*.json"):
+            try:
+                files.append((candidate.stat().st_mtime, candidate))
+            except FileNotFoundError:
+                pass
+        for i, (modified, old) in enumerate(sorted(files, reverse=True)):
+            if i >= MAX_ENTRIES or time.time()-modified >= TTL_SECONDS:
                 old.unlink(missing_ok=True)
         return result

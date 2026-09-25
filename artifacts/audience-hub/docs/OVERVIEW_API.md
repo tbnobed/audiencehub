@@ -100,19 +100,31 @@ identifiers (same Data Health categories); it is not a count of attention cards.
 ## Freshness
 
 Dashboard aggregates use a bounded host-shared file cache, namespaced by database
-and suppression-hash configuration. Keys include dates, dashboard name, and the
-PostgreSQL MVCC snapshot (a durable, conservative changing transaction version).
-Commits by import, identity, traits, or other processes invalidate subsequent
-requests without process-local invalidation hooks. Uncommitted session writes
+and suppression-hash configuration. Logical keys include dates and dashboard
+name, independent of the PostgreSQL MVCC snapshot stored with each generation.
+A generation already published when a request starts requires an exact snapshot
+match (a durable, conservative changing transaction version). Commits by import,
+identity, traits, or other processes invalidate these preexisting entries without
+process-local invalidation hooks. Uncommitted session writes
 bypass caching. Entries expire after 60 seconds; at most 32 entries of at most
 4 MiB each are retained. Responses are copied; role-specific attention is added
 after fetching shared aggregates. Errors are never cached.
 
-A cross-process file lock deduplicates cold computations on a host. A competing
-request waits at most two seconds then receives explicit 503 with Retry-After,
-not a fake zero or an indefinite wait. Multiple hosts remain correct but do not
-share this lock/cache. Constant import commits can invalidate every request:
-warm-cache latency is **not** the acceptance criterion during resolution.
+A per-logical-key cross-process file lock deduplicates cold computations on a
+host. Different dashboards/date ranges do not share a computation lock. A joining
+request waits within its remaining 25-second budget and can adopt a generation
+published during that call despite intervening commits. This is explicitly an
+**as-of-computation** result, not a latest-at-response guarantee or a consistent
+multi-query transaction snapshot. It does not grant TTL-based reuse of arbitrarily
+old generations: subsequent requests still validate their snapshot. Heartbeats
+do not force joined callers to immediately run a second expensive refresh.
+Exhausted budgets return explicit 504, never a fake empty result. Failed owners
+release the OS lock without publishing; a waiter can retry within its budget.
+Publication is atomic, staging cleanup is key-local, and zero-byte lock inodes
+are retained (never pruned, since waiters may hold them); payload bounds apply
+to JSON entries. Multiple hosts remain correct but do not share this lock/cache.
+Constant import commits can invalidate sequential requests: warm-cache latency
+is **not** the acceptance criterion during resolution.
 
 The overview combines all KPI periods, rolling compatibility metrics, 12 sparkline
 points, and historical classifications in one profile-grain gift aggregation.
@@ -124,8 +136,9 @@ and hashed with the writer's Unicode casefold semantics. Ledger opt-outs overrid
 all source opt-ins; any unsuppressed eligible address qualifies the active profile.
 
 Dashboard and shell work have a 25-second computation budget. Each database
-statement and streamed fetch receives the remaining statement timeout; lock waits
-are bounded to two seconds. Timeout/lock cancellation returns explicit 504.
+statement and streamed fetch receives the remaining statement timeout; database
+lock waits are bounded to two seconds (not cache-coalescing waits).
+Timeout/lock cancellation returns explicit 504.
 No migration, production seeding, worker changes, or recompute is required.
 
 ## Isolated performance evidence
@@ -190,5 +203,20 @@ cluster on normal completion. For a fast isolated regression-only-sized run, use
 leap dates, retention, excluded merged/deleted profiles, duplicate source records,
 Unicode suppression, opt-outs, alternate eligible emails, process-visible commit
 invalidation, cache expiry/bounds/copy safety/deduplication, and real SQL cancellation.
-Final isolated dashboard regressions: **22 passed**, including all dashboard-tab
-SQL smoke queries (no skipped tests).
+Post-coalescing isolated dashboard regressions: **26 passed**, including all
+dashboard-tab SQL smoke queries (no skipped tests). The concurrency regression
+runs four independent API processes against one logical key while a separate
+process commits real profile updates; all four receive one owner's identical
+payload, with exactly one expensive build. A later committed traits insert
+invalidates the preexisting generation. Separate regressions cover independent
+dashboard/date locks, deadline exhaustion, owner failure/recovery, flushed-write
+bypass, oversized payloads, expiry and bounds. This is a small correctness
+fixture, not a replacement scale benchmark; the 17–22-second evidence above
+remains the cold-computation measurement.
+
+A separate targeted disposable-PostgreSQL regression also passes: the real
+`/api/shell` handler completes with a 750 ms budget while another process holds
+the Overview computation lock. Its `("health-counts",)` cache key is independent
+of `("overview", start, end)`. Overview attention reads health counts only after
+the aggregate cache call returns and releases its lock; no nested computation
+locks are held on that path.
