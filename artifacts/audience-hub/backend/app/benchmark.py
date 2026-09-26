@@ -165,7 +165,7 @@ def _measure(directory: Path, gift_rows: int, contact_rows: int, profile: bool) 
 
 
 def run_benchmark(args) -> int:
-    if not args.imports and not getattr(args, "overview", False) and not getattr(args, "dashboards", False):
+    if not args.imports and not getattr(args, "overview", False) and not getattr(args, "dashboards", False) and not getattr(args, "traits", False):
         raise ValueError("Specify --imports to explicitly start an isolated synthetic benchmark.")
     if os.environ.get("APP_ENV", "").lower() == "production":
         raise ValueError("Benchmark is forbidden when APP_ENV=production.")
@@ -217,11 +217,25 @@ def run_benchmark(args) -> int:
             env["KINSHIP_BENCHMARK_ISOLATED_TESTS"] = "1"
             with (directory / "pytest.txt").open("w") as output:
                 test_result = subprocess.run(
-                    [sys.executable, "-m", "pytest", "tests", "-q"],
+                    [sys.executable, "-m", "pytest", "tests", "-q",
+                     "-k", getattr(args, "test_filter", "")],
                     cwd=backend, env=env, stdout=output, stderr=subprocess.STDOUT)
             print(f"Isolated test suite exit={test_result.returncode}: {directory / 'pytest.txt'}",
                   flush=True)
             return test_result.returncode
+        if getattr(args, "traits", False):
+            env["KINSHIP_BENCHMARK_ISOLATED_TESTS"] = "1"
+            result = subprocess.run([sys.executable, "-c",
+                "from pathlib import Path; from app.traits.verification import measure; "
+                f"measure(Path({str(directory)!r}), {args.profiles}, seed_dir={getattr(args, 'seed_dir', None)!r})"],
+                cwd=backend, env=env, check=False)
+            if result.returncode:
+                report_path = directory / "traits.json"
+                report = json.loads(report_path.read_text()) if report_path.exists() else {}
+                report.update(status="failed", process_exit_code=result.returncode,
+                              failure="Verification child failed; inspect retained run output and PostgreSQL log.")
+                report_path.write_text(json.dumps(report, indent=2) + "\n")
+            return result.returncode
         if getattr(args, "dashboards", False):
             subprocess.run([sys.executable, "-c",
                 "from pathlib import Path; from app.dashboards.scale_benchmark import measure; "
@@ -252,6 +266,8 @@ def run_benchmark(args) -> int:
 
 
 def add_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--traits", action="store_true", help="Real medium seed, full trait job and independent reference in disposable PostgreSQL.")
+    parser.add_argument("--seed-dir", help="Reuse a completed real medium seed directory (traits benchmark only).")
     parser.add_argument("--dashboards", action="store_true", help="Measure every dashboard in disposable PostgreSQL, no browser.")
     parser.add_argument("--profiles", type=int, default=500_000, help="Dashboard benchmark population (default 500000).")
     parser.add_argument("--overview", action="store_true", help="Isolated overview scale benchmark.")
@@ -262,6 +278,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--profile", action="store_true", help="Write cProfile files and cumulative top 20.")
     parser.add_argument("--test-suite", action="store_true",
                         help="Run backend pytest suite instead of imports, in the disposable database.")
+    parser.add_argument("--test-filter", default="", help="Optional pytest -k expression for isolated tests.")
     parser.add_argument("--output-dir", default=".cache/kinship-benchmarks")
 
 

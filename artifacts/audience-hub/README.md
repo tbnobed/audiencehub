@@ -20,6 +20,8 @@ Successful imports enqueue `identity.resolve_batch`. The resolver links source r
 
 ## Computed traits (M4)
 
+Verification status and reproducible commands are in [M4 verification](docs/M4_VERIFICATION.md). The 1,000-profile independent trait comparison passed; medium-seed full-recompute timing remains unverified because the isolated run was stopped during identity-resolution setup.
+
 ### Consent decisions
 
 Dashboard email consent counts use only `consents`, never email presence or profile

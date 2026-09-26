@@ -1,0 +1,104 @@
+{
+  "scope": "M4 only; synthetic data in disposable PostgreSQL",
+  "correctness": {
+    "status": "passed",
+    "evidence": "/tmp/m4-smoke/imports-ggyaheip/traits.json",
+    "requested_people": 1500,
+    "scale": "medium",
+    "random_seed": 20250308,
+    "as_of": "2024-12-31",
+    "active_profiles": 1472,
+    "source_records": 20292,
+    "gifts": 16000,
+    "events": 542,
+    "unresolved_records": 0,
+    "sample_size": 1000,
+    "registry_traits_compared": 21,
+    "incremental_profiles_globally_ranked": 17,
+    "discrepancies": [],
+    "snapshot_months": 24,
+    "updated_profiles": 1472,
+    "database_bytes": 79274511,
+    "timings_seconds": {
+      "generation": 1.4565608400007477,
+      "serial_real_imports": 6.311771057999067,
+      "identity_resolution": 16.790425060000416,
+      "trait_upsert_sql": 0.1219693789989833,
+      "dashboard_rollups": 0.48891914399973757,
+      "recompute_including_snapshot_and_dashboards": 0.6386768859993026,
+      "historical_snapshot_backfill": 0.6543336089998775,
+      "full_job_including_commit_and_cache_invalidation": 1.4748196939999616,
+      "independent_reference": 0.3480789310015098
+    }
+  },
+  "tests": {
+    "focused_passed": 14,
+    "full_passed": 288,
+    "full_skipped": 1,
+    "full_seconds": 110.04,
+    "full_evidence": "/tmp/m4-tests/imports-ddcyg47q/pytest.txt",
+    "final_full_repeat": {
+      "passed": 287,
+      "skipped": 1,
+      "failed": 1,
+      "seconds": 123.97,
+      "failure": "Existing reset-demo test hit busy-table refusal",
+      "evidence": "/tmp/m4-final-tests/imports-o7tnqsfl/pytest.txt"
+    },
+    "final_traits_and_reset_repeat": {
+      "passed": 16,
+      "seconds": 11.26,
+      "evidence": "/tmp/m4-final-tests/imports-nn82rw10/pytest.txt"
+    }
+  },
+  "environment": {
+    "python": "3.12.12",
+    "postgresql": "17.5",
+    "cpu_quota": "400000 100000",
+    "memory_limit_bytes": 8589934592,
+    "swap": false,
+    "generation_peak_python_rss_kib": 3129436
+  },
+  "medium": {
+    "status": "blocked_setup_runtime_no_recompute_measured",
+    "requested_people": 500000,
+    "scale": "medium",
+    "random_seed": 20250308,
+    "generation_seconds": 369.2111099160011,
+    "real_imports_seconds": 2808.4170591400016,
+    "post_import_source_records": 6789124,
+    "post_import_gifts": 5360521,
+    "post_import_events": 178603,
+    "database_bytes_at_checkpoint": 6690509283,
+    "stopped_at_utc": "2026-09-26T21:21:18Z",
+    "resolved_source_records_at_stop": 31000,
+    "active_profiles_at_stop": 30962,
+    "profile_trait_rows_at_stop": 0,
+    "identity_rate_observation": {
+      "records": 19000,
+      "approximate_seconds": 124,
+      "extrapolated_remaining_hours": 12,
+      "limitation": "Short-window extrapolation is not a completion ETA"
+    },
+    "cleanup": "Benchmark parent joined; private PostgreSQL stopped; database directory removed; no M4 process left running",
+    "generated_rows": {
+      "donor_crm_contacts.csv": 504952,
+      "giving_platform_gifts.csv": 5360523,
+      "esp_contacts.csv": 251445,
+      "five9_calls.csv": 178605,
+      "zeta_enrichment.csv": 500002
+    },
+    "csv_sha256": {
+      "donor_crm_contacts.csv": "3454f1a4b6e9c10c7cecb5bd22d30617e932005bc4e2c29ea105e60bdad58d91",
+      "giving_platform_gifts.csv": "ea69ad12354962df415c62ec908dbbb6c2e4c3baf3323c7dc527d2e59f6678ba",
+      "esp_contacts.csv": "1780c151504c08c293cb89ba2b2c0d776e16f8b150a4e64e09f2eb9978f8e8e8",
+      "five9_calls.csv": "e0371248cec5108786eac43fc1875d00c69c3e0c0d0bc56048b1e65e003c76cf",
+      "zeta_enrichment.csv": "0018a6e0ae7657c7352305b1b18a22ae2368fccff3604aab4a1099ae005b527b"
+    },
+    "first_attempt_failure": "PostgreSQL Disk quota exceeded on /tmp during real gift staging; no medium recompute was measured",
+    "retry_evidence": ".cache/m4-verification/runs/imports-s_plmdfi/traits.json",
+    "preserved_seed": ".cache/m4-verification/medium-seed",
+    "full_recompute_seconds": null,
+    "under_600_seconds": null
+  }
+}
