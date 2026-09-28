@@ -20,7 +20,7 @@ Successful imports enqueue `identity.resolve_batch`. The resolver links source r
 
 ## Computed traits (M4)
 
-Verification status and reproducible commands are in [M4 verification](docs/M4_VERIFICATION.md). The 1,000-profile independent trait comparison passed; medium-seed full-recompute timing remains unverified because the isolated run was stopped during identity-resolution setup.
+Verification status and reproducible commands are in [M4 verification](docs/M4_VERIFICATION.md). Contact-only resolution completed for the 500k-person fixture in 626.745 seconds; the 50k-record incremental run took 120.377 seconds, both above their targets. The approved 250k-profile trait fallback completed in 366.165 seconds with zero discrepancies across 1,000 sampled profiles and all 21 traits. Full-medium five-source trait timing remains unverified.
 
 ### Consent decisions
 

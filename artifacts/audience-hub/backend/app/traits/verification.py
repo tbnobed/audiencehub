@@ -190,7 +190,7 @@ def measure(directory: Path, profiles: int, seed_dir: str | None = None) -> None
         timed("real_seed_imports_serial", lambda: load_generated_files(generated["files"]))
     finally:
         app.load_status.run_load_status = original_wait
-    timed("identity_resolution", lambda: handlers.run("identity.resolve_batch", {"limit": 10000}))
+    timed("identity_resolution", lambda: handlers.run("identity.resolve_batch", {}))
     with Session(engine) as db:
         db.execute(text("UPDATE jobs SET status='cancelled' WHERE status='queued'"))
         db.commit()

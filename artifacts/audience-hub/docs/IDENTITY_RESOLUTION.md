@@ -4,6 +4,43 @@
 
 Every source record and every identified event belongs to exactly one active profile. Two records that share a strong identifier end up on the same profile, transitively. No fuzzy matching in the MVP.
 
+## SQL bulk and incremental execution
+
+Production `identity.resolve_batch` jobs without an explicit `limit` use
+`app.identity.bulk.resolve_bulk` after the import queue drains. Explicit `limit`
+payloads and calls to `resolve_batch` retain the bounded 500-row transaction
+contract. While an import is queued/running, the worker uses that cooperative
+bounded path and commits each group. Import batches and both resolver paths
+share the existing exclusive/shared transaction advisory-lock protocol.
+
+The bulk path copies only unresolved records to indexed transaction-local
+tables. SQL constructs normalized identifier edges, applies the blocklist and
+per-source high-cardinality guard, and joins existing identifier owners as
+additional **profile nodes**. Repeated SQL minimum-label propagation continues
+until no record label changes. Profile nodes ensure that separate keys owned by
+one existing person connect all pending bridges before choosing a winner.
+Incremental imports run this same algorithm over pending records and touched
+owners, not over every already-resolved record. Existing profile membership is
+never split merely because a previously used identifier becomes blocked.
+
+Only after convergence does each component choose its oldest existing
+`first_seen_at`, then lowest profile ID. New IDs are allocated in SQL and profiles
+inserted together. Merges, identifier ownership, source records, gifts, events,
+consents, enrichment and merge evidence are updated set-wise. Opt-out dominates
+timestamps; otherwise the latest consent wins. Source survivorship preserves
+priority, newest-record ordering, nonempty field choices and whole-address
+selection. Losing segment memberships/traits are removed and every affected
+winner is dirtied for trait recomputation. Anonymous event backfill requires an
+identify-derived anonymous edge and never overwrites an existing event owner.
+
+The operation is atomic: it holds the nonblocking-acquired exclusive resolver
+coordination lock until the caller commits or rolls back. Identifier bucket
+locks remain bounded to 1,024, acquired in ascending numeric order. A new import
+arriving during this bulk transaction waits for completion; active imports
+already present select the bounded path instead. Temporary graph state is never
+retained across commits. Throughput and before/after accuracy evidence are
+reported separately; this algorithm description does not assert timing targets.
+
 ## Normalization (`app/identity/normalize.py`)
 
 | Identifier | Rule |

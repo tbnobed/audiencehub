@@ -7,11 +7,21 @@ def run(job_type: str, payload: dict, job_id: int | None = None) -> None:
 
         from app.db import engine
         from app.identity.resolver import resolve_batch
+        from app.identity.bulk import resolve_bulk
+        from sqlalchemy import text
 
         with Session(engine) as db:
             limit = min(max(int(payload.get("limit", 10_000)), 1), 10_000)
             while True:
-                result = resolve_batch(db, limit=limit, job_id=job_id)
+                # Active writers retain short, cooperative 500-row transactions.
+                # Once imports drain, resolve the pending graph in SQL rather
+                # than repeatedly rediscovering it in Python.
+                active_imports = "limit" in payload or db.scalar(text("""
+                    SELECT EXISTS(SELECT 1 FROM jobs WHERE type='import.run'
+                      AND status IN ('queued','running'))
+                """))
+                result = (resolve_batch(db, limit=limit, job_id=job_id) if active_imports
+                          else resolve_bulk(db, job_id=job_id))
                 db.commit()
                 # A complete component may not fit the remaining group space.
                 # Underfull groups are not EOF; every call has its own commit.
