@@ -1,0 +1,12 @@
+Identity resolution is the bottleneck at scale. On the medium fixture (500k people, ~6.8M records) imports finish in ~47 min but resolution did not finish within your session, and on the production server the full load took ~5 hours. Make resolution fast, then finish M4 timing.
+
+1. Profile first. Run the resolver on the 500k contacts alone (donor_crm + esp + zeta, no gifts or events: resolution only needs identifiers) and report where time goes (cProfile top 20 plus pg_stat_statements top 10 by total time).
+2. Make it set-based. Target design:
+   - Build an edges table in SQL from identifiers: (record_id, identifier_key) for normalized email, phone and external IDs, excluding blocklisted identifiers.
+   - Compute connected components in SQL by iterative label propagation (each record takes the minimum label of its neighbors via identifier joins, repeat until no row changes; typically under 10 iterations), all as INSERT/UPDATE ... SELECT on indexed temp tables, no per-record Python.
+   - Map components to profiles in bulk: reuse the oldest existing profile per component, create the rest with one INSERT ... SELECT, record merges in bulk, then re-point source_records, gifts, events, consents and enrichment with one UPDATE ... FROM per table.
+   - Keep survivorship, blocklist and high-cardinality guard behavior and every existing identity test passing; the ground-truth accuracy on the small seed must stay the same (report it before and after).
+3. Incremental mode: for a new import batch, run the same propagation only over components touched by the new identifiers.
+4. Targets on 4 vCPU: full resolution of 500k people in under 10 minutes; incremental resolution of a 50k-record import in under 1 minute. Report actual times.
+5. Then complete M4 verification: full trait recompute time on the resolved medium dataset. If your session cannot hold the full medium run, run the resolver-only 500k benchmark (item 1 setup) plus traits on 250k, state that clearly, and I will run the full measurement on the production server with the commands you provide.
+6. Update docs/IDENTITY_RESOLUTION.md with the new algorithm and docs/M4_VERIFICATION.md with the results.
