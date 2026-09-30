@@ -206,7 +206,7 @@ def resolve_bulk(db: Session, job_id: int | None = None) -> dict[str, int]:
     _materialize(db)
     _sql(db, """
         UPDATE source_records sr SET profile_id=a.profile_id,resolved_at=now()
-        FROM ir_assign a WHERE sr.id=a.id;
+        FROM ir_assign a WHERE sr.id=a.id AND sr.resolved_at IS NULL;
         UPDATE gifts g SET profile_id=a.profile_id FROM ir_assign a JOIN ir_pending p ON p.id=a.id
         JOIN imports i ON i.id=p.last_import_id
         WHERE i.record_type='gift' AND g.source_id=p.source_id AND g.external_id=p.external_id
@@ -227,6 +227,10 @@ def resolve_bulk(db: Session, job_id: int | None = None) -> dict[str, int]:
         INSERT INTO identifiers(type,value,profile_id)
         SELECT DISTINCT e.kind,e.value,a.profile_id FROM ir_edges e
         JOIN ir_assign a ON a.id=e.record_id WHERE e.kind<>'profile'
+          AND NOT EXISTS (
+            SELECT 1 FROM identifiers existing WHERE existing.type=e.kind
+              AND existing.value=e.value AND existing.profile_id=a.profile_id
+          )
         ORDER BY e.kind,e.value
         ON CONFLICT(type,value) DO UPDATE SET profile_id=EXCLUDED.profile_id
         WHERE identifiers.profile_id IS DISTINCT FROM EXCLUDED.profile_id
@@ -249,7 +253,12 @@ def _materialize(db):
         SELECT COALESCE(m.winner,c.profile_id) AS profile_id,c.channel,c.status,c.source_id,
                c.captured_at,c.evidence,COALESCE(m.loser,0)::bigint AS tie
         FROM consents c LEFT JOIN ir_moves m ON m.loser=c.profile_id
-        WHERE m.loser IS NOT NULL OR c.profile_id IN(SELECT profile_id FROM ir_affected)
+        WHERE m.loser IS NOT NULL OR c.profile_id IN(SELECT winner FROM ir_moves)
+          OR c.profile_id IN (
+            SELECT a.profile_id FROM ir_assign a JOIN ir_pending p ON p.id=a.id
+            WHERE NULLIF(p.attributes->'_import_consent'->>'channel','') IS NOT NULL
+              AND NULLIF(p.attributes->'_import_consent'->>'status','') IS NOT NULL
+          )
         UNION ALL
         SELECT a.profile_id,p.attributes->'_import_consent'->>'channel',
                p.attributes->'_import_consent'->>'status',p.source_id,
@@ -264,13 +273,19 @@ def _materialize(db):
                profile_id,channel,status,source_id,captured_at,evidence FROM ir_consents
         ORDER BY profile_id,channel,(status='opted_out') DESC,captured_at DESC,tie
         ON CONFLICT(profile_id,channel) DO UPDATE SET status=EXCLUDED.status,
-          source_id=EXCLUDED.source_id,captured_at=EXCLUDED.captured_at,evidence=EXCLUDED.evidence;
+          source_id=EXCLUDED.source_id,captured_at=EXCLUDED.captured_at,evidence=EXCLUDED.evidence
+        WHERE (consents.status,consents.source_id,consents.captured_at,consents.evidence)
+          IS DISTINCT FROM (EXCLUDED.status,EXCLUDED.source_id,EXCLUDED.captured_at,EXCLUDED.evidence);
         CREATE TEMP TABLE ir_enrich ON COMMIT DROP AS
         SELECT COALESCE(m.winner,e.profile_id) AS profile_id,e.source_id,e.attribute_key,
                e.value_text,e.value_num,e.value_bool,e.value_date,e.imported_at,e.license_expires_at,
                COALESCE(m.loser,0)::bigint AS tie
         FROM enrichment_values e LEFT JOIN ir_moves m ON m.loser=e.profile_id
-        WHERE m.loser IS NOT NULL OR e.profile_id IN(SELECT profile_id FROM ir_affected)
+        WHERE m.loser IS NOT NULL OR e.profile_id IN(SELECT winner FROM ir_moves)
+          OR e.profile_id IN (
+            SELECT a.profile_id FROM ir_assign a JOIN ir_pending p ON p.id=a.id
+            WHERE COALESCE(NULLIF(p.attributes->'_import_enrichments','null'::jsonb),'{}'::jsonb)<>'{}'::jsonb
+          )
         UNION ALL
         SELECT a.profile_id,p.source_id,k.key,
                CASE WHEN k.value->>'data_type' IN('text','enum') THEN k.value->>'value' END,
@@ -292,6 +307,11 @@ def _materialize(db):
           value_text=EXCLUDED.value_text,value_num=EXCLUDED.value_num,
           value_bool=EXCLUDED.value_bool,value_date=EXCLUDED.value_date,
           imported_at=EXCLUDED.imported_at,license_expires_at=EXCLUDED.license_expires_at
+        WHERE (enrichment_values.value_text,enrichment_values.value_num,
+          enrichment_values.value_bool,enrichment_values.value_date,
+          enrichment_values.imported_at,enrichment_values.license_expires_at)
+          IS DISTINCT FROM (EXCLUDED.value_text,EXCLUDED.value_num,
+            EXCLUDED.value_bool,EXCLUDED.value_date,EXCLUDED.imported_at,EXCLUDED.license_expires_at)
     """)
 
 
@@ -328,4 +348,10 @@ def _survivorship(db):
         FROM ir_affected a LEFT JOIN emails e USING(profile_id) LEFT JOIN phones ph USING(profile_id)
           LEFT JOIN names n USING(profile_id) LEFT JOIN addresses ad USING(profile_id)
         WHERE p.id=a.profile_id
+          AND (p.email::text,p.phone,p.first_name,p.last_name,p.address1,p.city,
+            p.region,p.postal_code,p.country,p.search_text)
+          IS DISTINCT FROM (e.email_norm::text,ph.phone_e164,n.first_name,n.last_name,
+            ad.address1,ad.city,ad.region,ad.postal_code,ad.country,
+            trim(concat_ws(' ',e.email_norm,ph.phone_e164,n.first_name,n.last_name,
+              ad.address1,ad.city,ad.region,ad.postal_code,ad.country)))
     """)

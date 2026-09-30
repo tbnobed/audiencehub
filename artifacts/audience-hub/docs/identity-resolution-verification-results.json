@@ -1,5 +1,54 @@
 {
   "format_version": 1,
+  "incremental_write_optimization_followup": {
+    "current_engine_sha256": "d0ebf8cdbb0fe95f0767e8c7504acacf414b090bc78b79c09f3809319260f59a",
+    "current_code_measured": false,
+    "status": "blocked_private_cluster_recovery",
+    "incremental_target_pass": null,
+    "full_target_pass": null,
+    "intermediate_engine_sha256": "42eb5ae82399730da3d72aef1918b6c99b80248da6d506b113c06a312384f1c9",
+    "intermediate_incremental": {
+      "profiled": false,
+      "seconds": 93.93049728699998,
+      "records": 50000,
+      "profiles_created": 0,
+      "merges": 0,
+      "complete": true,
+      "target_pass": false,
+      "setup_import_seconds_excluded": 57.133788078999714
+    },
+    "intermediate_full": {
+      "profiled": false,
+      "seconds": 684.439570215,
+      "records": 1250000,
+      "profiles_created": 492822,
+      "merges": 0,
+      "complete": true,
+      "target_pass": false
+    },
+    "fresh_before_diagnostic": {
+      "profiled": true,
+      "seconds": 164.88714380600004,
+      "records": 50000,
+      "sql_assignment_ms": 56148.358327,
+      "sql_survivor_update_ms": 29066.789105,
+      "sql_enrichment_upsert_ms": 16701.280252
+    },
+    "pending_index_plan": {
+      "original_scan_records": 1300000,
+      "predicate_scan_records": 50000,
+      "index": "ix_source_records_pending",
+      "original_execution_ms": 20429.340,
+      "predicate_execution_ms": 4541.721,
+      "performance_comparison_valid": false,
+      "reason": "Sequential rolled-back experiments with warmed cache and different foreign-key lookup costs; plan evidence only"
+    },
+    "tests": {"passed": 45, "skipped": 1, "deselected": 259},
+    "failure": "Final import setup exhausted workspace quota; subsequent private PostgreSQL WAL recovery failed with checksum diagnostic and File exists. Server stopped. No final resolver time.",
+    "raw_evidence_root": ".cache/m4-verification",
+    "previous_sections_are_historical": true,
+    "full_medium_traits_measured": false
+  },
   "environment": {
     "postgresql": "17.5",
     "cpu_quota": "400000 100000",

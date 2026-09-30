@@ -20,7 +20,7 @@ Successful imports enqueue `identity.resolve_batch`. The resolver links source r
 
 ## Computed traits (M4)
 
-Verification status and reproducible commands are in [M4 verification](docs/M4_VERIFICATION.md). Contact-only resolution completed for the 500k-person fixture in 626.745 seconds; the 50k-record incremental run took 120.377 seconds, both above their targets. The approved 250k-profile trait fallback completed in 366.165 seconds with zero discrepancies across 1,000 sampled profiles and all 21 traits. Full-medium five-source trait timing remains unverified.
+Verification status and reproducible commands are in [M4 verification](docs/M4_VERIFICATION.md). Incremental write minimization measured 93.930 seconds for 50k records, versus 120.377 seconds previously, but its full-resolution recheck took 684.440 seconds versus 626.745 previously. Both targets remain unmet. The final pending-index change passes identity tests but has no completed timing: the disposable benchmark database hit a storage quota and failed recovery. The approved 250k-profile trait fallback previously completed in 366.165 seconds with zero discrepancies across 1,000 sampled profiles and all 21 traits. Full-medium five-source trait timing remains unverified.
 
 ### Consent decisions
 

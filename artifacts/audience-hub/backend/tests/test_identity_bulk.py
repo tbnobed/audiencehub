@@ -18,6 +18,47 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+def test_incremental_mixed_existing_new_and_noop_survivor():
+    """Existing identities are not rewritten, while new people still resolve."""
+    with Session(engine) as db:
+        source = db.scalar(text("""
+            INSERT INTO sources(key,name,kind,priority)
+            VALUES(:key,'Incremental regression','csv',10) RETURNING id
+        """), {"key": "inc-" + uuid.uuid4().hex})
+        db.execute(text("""
+            INSERT INTO source_records(source_id,external_id,email_norm,raw_hash,attributes)
+            VALUES(:s,'old','unchanged@example.org','old','{}')
+        """), {"s": source})
+        assert resolve_bulk(db)["profiles_created"] == 1
+        profile = db.scalar(text("SELECT profile_id FROM source_records WHERE source_id=:s"),
+                            {"s": source})
+        # ctid detects even updates within this single test transaction.
+        before = db.scalar(text("SELECT ctid::text FROM profiles WHERE id=:p"), {"p": profile})
+        db.execute(text("""
+            INSERT INTO consents(profile_id,channel,status,source_id)
+            VALUES(:p,'email','opted_out',:s)
+        """), {"p": profile, "s": source})
+        db.execute(text("""
+            INSERT INTO enrichment_values(profile_id,source_id,attribute_key,value_text,imported_at)
+            VALUES(:p,:s,'retained','unchanged','2024-01-01')
+        """), {"p": profile, "s": source})
+        consent_before = db.scalar(text("SELECT ctid::text FROM consents WHERE profile_id=:p"), {"p": profile})
+        enrich_before = db.scalar(text("SELECT ctid::text FROM enrichment_values WHERE profile_id=:p"), {"p": profile})
+        db.execute(text("""
+            INSERT INTO source_records(source_id,external_id,email_norm,raw_hash,attributes)
+            VALUES(:s,'same','unchanged@example.org','same','{}'),
+                  (:s,'new','new-person@example.org','new','{}')
+        """), {"s": source})
+        assert resolve_bulk(db) == {"records": 2, "profiles_created": 1, "merges": 0}
+        assert db.scalar(text("SELECT ctid::text FROM profiles WHERE id=:p"), {"p": profile}) == before
+        assert db.scalar(text("SELECT ctid::text FROM consents WHERE profile_id=:p"), {"p": profile}) == consent_before
+        assert db.scalar(text("SELECT ctid::text FROM enrichment_values WHERE profile_id=:p"), {"p": profile}) == enrich_before
+        assert db.scalar(text("SELECT count(DISTINCT profile_id) FROM source_records WHERE source_id=:s"),
+                         {"s": source}) == 2
+        assert resolve_bulk(db)["records"] == 0
+        db.rollback()
+
+
 @pytest.mark.parametrize("case", [
     "test_resolver_merges_profiles_moves_related_rows_and_preserves_opt_out",
     "test_resolver_batch_is_idempotent_for_resolved_records",

@@ -6,6 +6,20 @@ Every source record and every identified event belongs to exactly one active pro
 
 ## SQL bulk and incremental execution
 
+Incremental write minimization preserves the same graph and survivor choices.
+The final source-record assignment explicitly requires `resolved_at IS NULL`,
+matching the locked pending snapshot and allowing PostgreSQL to use its existing
+partial pending index rather than scan all historical source records.
+Existing identifier ownership is excluded before conflict handling (the conflict
+guard remains). Profile scalar/search fields, consent rows, and enrichment rows
+are updated only when their complete persisted values differ, including nulls.
+Email comparisons use text rather than case-insensitive citext to preserve casing
+chosen by survivorship. Consent/enrichment candidates include all merge losers
+and winners, plus profiles receiving that metadata in the pending import; an
+unrelated contact update no longer reads and rewrites all existing enrichment.
+Trait invalidation, dirty marking, mandatory new-record assignment, foreign keys,
+durability, and resolver/import locking remain unchanged.
+
 Production `identity.resolve_batch` jobs without an explicit `limit` use
 `app.identity.bulk.resolve_bulk` after the import queue drains. Explicit `limit`
 payloads and calls to `resolve_batch` retain the bounded 500-row transaction

@@ -1,6 +1,129 @@
 # M4 verification
 
-**Current resolver result: full 500k-person contacts-only resolution completed;
+## Incremental write optimization follow-up (latest)
+
+**Current code is tested, but its final latency is not measured.** Final engine
+SHA-256: `d0ebf8cdbb0fe95f0767e8c7504acacf414b090bc78b79c09f3809319260f59a`.
+The final benchmark failed during import setup because of workspace disk quota;
+the private retained PostgreSQL cluster subsequently failed recovery. No timing
+target is claimed as passed, and no production/application database was touched.
+
+| Measurement | Actual | Interpretation |
+|---|---:|---|
+| Previous unprofiled 50k incremental baseline | 120.377 s | Historical baseline |
+| Fresh before-change incremental cProfile run | 164.887 s | Diagnostic, not comparable acceptance timing |
+| Write-minimization version, 50k unprofiled | 93.930 s | Complete; still above 60 s |
+| Write-minimization version, full 500k-person contacts | 684.440 s | Complete; above 600 s |
+| Final version including pending-index predicate | Not measured | Import setup/recovery blocker |
+
+The intermediate version hash is
+`42eb5ae82399730da3d72aef1918b6c99b80248da6d506b113c06a312384f1c9`.
+It completed 50,000 incremental records, reusing all existing identities with
+zero new profiles/merges; separate import time was 57.134 seconds. The full
+recheck resolved 1,250,000 records into 492,822 profiles with zero merges.
+The intermediate incremental result is 22.0% below the previous measured
+120.377 seconds, but variability between runs means this is not a guaranteed
+speedup. Its full-run timing is worse than the previous 626.745 seconds.
+Final code must be measured again; neither intermediate timing is relabeled
+as a result for the final pending-index change.
+
+### Evidence and changes
+
+The fresh incremental profile used the same real 50k existing-identity import
+and an untouched clone of `final_resolved_template`, with 4 CPU quota, 8 GiB
+memory, PostgreSQL 17.5, and the previous benchmark settings. All imports
+accepted 50,000 records with zero rejects. Setup/cloning/report writing are
+outside the resolver timer.
+
+Top SQL execution costs before changes (milliseconds):
+
+| Statement | Total ms |
+|---|---:|
+| source_records assignment | 56,148.358 |
+| Profile survivor update | 29,066.789 |
+| Enrichment upsert | 16,701.280 |
+| Email cardinality guard | 14,035.962 |
+| Identifier insert/conflict handling | 11,853.895 |
+| Survivor candidate materialization | 9,198.957 |
+| Existing-owner edge construction | 3,919.984 |
+| Enrichment candidate materialization | 3,386.655 |
+| Component winner selection | 2,779.003 |
+| Dirty-profile upsert | 2,511.968 |
+
+cProfile top 20 by cumulative seconds (overlapping values, do not sum):
+
+| Function | Calls | Cumulative s |
+|---|---:|---:|
+| psycopg connection.wait | 67 | 164.825 |
+| bulk.resolve_bulk | 2 | 164.300 |
+| Session._execute_internal | 57 | 164.289 |
+| bulk._sql | 55 | 164.289 |
+| Session.execute | 55 | 164.283 |
+| elements._execute_on_connection | 57 | 164.274 |
+| Connection._execute_clauseelement | 57 | 164.274 |
+| Connection.execute | 55 | 164.272 |
+| Connection._execute_context | 57 | 164.261 |
+| Connection._exec_single_context | 57 | 164.253 |
+| cursor.execute | 59 | 164.247 |
+| default.do_execute | 57 | 164.245 |
+| bulk._survivorship | 1 | 39.502 |
+| bulk._materialize | 1 | 22.589 |
+| state_changes._go | 63/59 | 0.590 |
+| Session.commit | 2 | 0.586 |
+| commit wrapper | 2 | 0.586 |
+| SessionTransaction.commit | 2 | 0.585 |
+| Transaction.commit | 2 | 0.582 |
+| Transaction._do_commit | 2 | 0.581 |
+
+The optimization avoids unchanged profile, consent, and enrichment writes;
+excludes already-owned identifiers before conflict handling; and only gathers
+metadata for merge participants or profiles receiving that metadata. It keeps
+mandatory assignment, dirty marking, indexes, foreign keys, durability, graph
+closure, and concurrency locking. `IDENTITY_RESOLUTION.md` describes details.
+
+The final predicate was motivated by actual `EXPLAIN (ANALYZE, BUFFERS)` on the
+private fixture inside rolled-back transactions. The original assignment
+sequentially scanned 1.3M records and read 141,494 shared blocks. Explicit
+`sr.resolved_at IS NULL` used `ix_source_records_pending` over 50k rows with
+4,058 shared hits. This predicate matches the locked pending snapshot.
+Execution times were 20.429 versus 4.542 seconds, but **this is not a speedup
+claim**: the second query had a warmed cache, including profile foreign-key
+checks (13.002 versus 0.279 seconds). It demonstrates the plan change only.
+
+Focused tests on final code: **45 passed, 1 skipped**, 259 deselected. The skipped
+case is opt-in scale concurrency, previously executed in the preceding work.
+Existing cross-profile/transitive merges, consent/enrichment precedence,
+new-profile creation, and idempotency tests remain unchanged. The new mixed
+new/existing-person regression checks unchanged profile/consent/enrichment
+physical tuple IDs as well as no-op repeat behavior.
+
+Raw local evidence: `.cache/m4-verification/inc-profile2/` (profile/top SQL),
+`inc-final2/` (intermediate incremental), `full-recheck2/` (intermediate full),
+`update-plans.txt` (rolled-back plans), and
+`inc-tests-final/imports-iyienjmu/pytest.txt` (tests).
+The final attempt is `inc-final3/`; it contains no completed resolver timing.
+
+### Recovery blocker
+
+Creating another private clone exhausted a workspace quota despite `df` showing
+over 200 GiB free. PostgreSQL failed extending the clone during import, then
+failed checkpoint/recovery. The authorized retry after space reclamation reached
+WAL replay but stopped with a checksum diagnostic and
+`could not create file "base/37620/37652": File exists`.
+The private server is stopped; no recovery files were manually removed and no
+further recovery retries were attempted. SQL cleanup of the four new disposable
+clones could not run because the server did not become ready. Original template
+files were not intentionally modified, but **the retained cluster is not
+currently usable or certified recoverable**. Do not run the reuse commands below
+against it until a safe recovery/restore has been completed. Raw reports and the
+canonical generated CSV seed remain outside the cluster.
+
+Full-medium five-source trait verification still remains pending. The earlier
+250k trait fallback is unchanged and was not rerun for this resolver-only work.
+
+## Previous resolver optimization round
+
+**Previous resolver result: full 500k-person contacts-only resolution completed;
 the under-ten-minute target was narrowly missed.** Final unprofiled resolution
 took **626.745 seconds** for 1,250,000 source records, producing 492,822 profiles.
 The old bounded baseline resolved only 32,000 records in 121.223 seconds. These

@@ -15,6 +15,12 @@ Keep large disposable database files on the workspace volume, not `/tmp`; keep o
 
 **How to apply:** Preserve generated CSVs separately from disposable database cleanup and reuse them after environment failures. Budget for real identity resolution as well as imports; preparing a medium dataset can take hours even when the operation being measured is short. Never substitute partially resolved profiles or dashboard-only timings for a full trait-job measurement.
 
+Bound the number of retained full-dataset database clones and keep baseline backups outside the benchmark cluster.
+
+**Why:** Workspace clones also exhausted quota despite ample `df` free space. After a failed write/checkpoint, PostgreSQL recovery failed; a retained template in the same cluster was not a usable recovery plan.
+
+**How to apply:** Budget clone and WAL growth before a run, discard obsolete disposable clones through PostgreSQL while it is healthy, and preserve results outside the cluster. Do not certify template integrity after a quota/recovery failure or manually delete PostgreSQL relation files to reclaim space.
+
 Long benchmark infrastructure must outlive the shell tool's process tree, and resumed PostgreSQL clusters must use the same server major version.
 
 **Why:** During resolver verification, shell-launched background processes were killed at the tool timeout. A detached launch inherited a different PostgreSQL version through PATH than the cluster creator.
