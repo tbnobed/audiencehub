@@ -129,7 +129,11 @@ def measure(directory: Path, profiles: int, seed_dir: str | None = None) -> None
 
     if os.environ.get("KINSHIP_BENCHMARK_ISOLATED_TESTS") != "1":
         raise RuntimeError("Use app.benchmark --traits; isolated runner required")
-    if engine.url.host or not str(engine.url.query.get("host", "")).startswith("/tmp/kinship-bench-"):
+    if os.environ.get("KINSHIP_BENCHMARK_SCHEMA"):
+        from app.schema_benchmark import assert_private
+        with engine.connect() as connection:
+            assert_private(connection, os.environ["KINSHIP_BENCHMARK_SCHEMA"])
+    elif engine.url.host or not str(engine.url.query.get("host", "")).startswith("/tmp/kinship-bench-"):
         raise RuntimeError("Refusing non-private benchmark socket")
     pinned = date(2024, 12, 31)
     report = dict(requested_people=profiles, scale="medium", random_seed=20250308,

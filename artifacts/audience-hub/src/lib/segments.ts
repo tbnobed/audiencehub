@@ -1,0 +1,11 @@
+export type SegmentRule = { type: string; field?: string; operator?: string; value?: unknown; [key: string]: unknown };
+export type SegmentGroup = { op: 'and' | 'or'; rules: SegmentNode[]; negate?: boolean };
+export type SegmentNode = SegmentRule | SegmentGroup;
+export type SegmentDefinition = { version: 1; root: SegmentGroup };
+export type SegmentField = { key: string; label: string; group: string; type: string; data_type: string; operators: string[]; enum_values: string[]; field?: string; source?: string; aggregate?: string; channel?: string };
+export type Segment = { id: number; name: string; description: string | null; definition: SegmentDefinition; status: 'draft' | 'active' | 'archived'; refresh_schedule: string | null; last_count: number | null; last_materialized_at: string | null; created_by: number | null; owner: string | null; updated_at: string; activation_count: number; change: number | null };
+export type SegmentWrite = { name: string; description?: string | null; definition: SegmentDefinition; status: 'draft' | 'active'; refresh_schedule?: string | null };
+export type PartnerSample = { id: number; first_name: string | null; last_name: string | null; email: string | null; phone: string | null; donor_status: string | null; source_keys: string[] | null };
+export type SegmentHistory = { counted_at: string; count: number; added: number; removed: number };
+export type SegmentPreview = { count: number; took_ms: number };
+export type SegmentSample = { items: PartnerSample[]; breakdowns: { status: { key: string; count: number }[]; source: { key: string; count: number }[] } };

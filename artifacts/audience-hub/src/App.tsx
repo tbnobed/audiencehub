@@ -35,6 +35,9 @@ function Router() {
           <Route path="/profiles/:id" element={<ProfileDetail />} />
           <Route path="/data-health" element={<DataHealth />} />
           <Route path="/segments" element={<Segments />} />
+          <Route path="/segments/new" element={<Segments />} />
+          <Route path="/segments/:id" element={<Segments />} />
+          <Route path="/segments/:id/edit" element={<Segments />} />
           <Route path="/activations" element={user.role === 'viewer' ? <Navigate to="/" /> : <Activations />} />
           <Route path="/imports" element={user.role === 'viewer' ? <Navigate to="/" /> : <Imports />} />
           <Route path="/sources" element={user.role === 'viewer' ? <Navigate to="/" /> : <Sources />} />

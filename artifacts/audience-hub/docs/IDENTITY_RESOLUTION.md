@@ -6,6 +6,16 @@ Every source record and every identified event belongs to exactly one active pro
 
 ## SQL bulk and incremental execution
 
+The 250k three-run comparison found a 1.41% full-load median regression from
+write minimization. It is therefore **incremental-only**. `resolve_bulk` defaults
+to `mode="auto"`: pending components that touch existing identifier/profile
+owners use minimization; a fresh full load uses the original materialization and
+survivorship statements. Internal callers may explicitly select `full` or
+`incremental`. Mode selection does not change component membership or winner
+selection. Full mode omits the pending assignment predicate as well as the
+owner prefilter, unchanged-value guards and narrowed metadata candidates.
+See `M4_VERIFICATION.md` and `identity-250k-comparison.json` for all six timings.
+
 Incremental write minimization preserves the same graph and survivor choices.
 The final source-record assignment explicitly requires `resolved_at IS NULL`,
 matching the locked pending snapshot and allowing PostgreSQL to use its existing

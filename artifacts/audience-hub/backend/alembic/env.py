@@ -1,4 +1,5 @@
 from logging.config import fileConfig
+import os
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 from app.db import database_url
@@ -18,7 +19,15 @@ def run_migrations_offline():
 def run_migrations_online():
     connectable = engine_from_config(config.get_section(config.config_ini_section), prefix="sqlalchemy.", poolclass=pool.NullPool)
     with connectable.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata)
+        benchmark_schema = os.environ.get("KINSHIP_BENCHMARK_SCHEMA")
+        if benchmark_schema:
+            from app.schema_benchmark import assert_private
+            assert_private(connection, benchmark_schema)
+            # End the validation-only implicit transaction before Alembic owns
+            # its migration transaction.
+            connection.rollback()
+        context.configure(connection=connection, target_metadata=target_metadata,
+                          version_table_schema=benchmark_schema)
         with context.begin_transaction():
             context.run_migrations()
 

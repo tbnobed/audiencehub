@@ -315,6 +315,7 @@ Index("ix_trait_dirty_profiles_dirtied_at", TraitDirtyProfile.dirtied_at)
 
 class Segment(Base):
     __tablename__ = "segments"
+    template_key: Mapped[str | None] = mapped_column(Text, unique=True)
     id: Mapped[int] = identity_pk()
     name: Mapped[str] = mapped_column(Text, nullable=False)
     description: Mapped[str | None] = mapped_column(Text)

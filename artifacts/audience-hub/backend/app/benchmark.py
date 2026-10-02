@@ -165,6 +165,9 @@ def _measure(directory: Path, gift_rows: int, contact_rows: int, profile: bool) 
 
 
 def run_benchmark(args) -> int:
+    if os.environ.get("KINSHIP_BENCHMARK_BACKEND") == "schema":
+        from app.schema_benchmark import run_schema_benchmark
+        return run_schema_benchmark(args)
     if not args.imports and not getattr(args, "overview", False) and not getattr(args, "dashboards", False) and not getattr(args, "traits", False):
         raise ValueError("Specify --imports to explicitly start an isolated synthetic benchmark.")
     if os.environ.get("APP_ENV", "").lower() == "production":
@@ -266,7 +269,7 @@ def run_benchmark(args) -> int:
 
 
 def add_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--traits", action="store_true", help="Real medium seed, full trait job and independent reference in disposable PostgreSQL.")
+    parser.add_argument("--traits", action="store_true", help="Real medium seed, full trait job and independent reference in isolated PostgreSQL.")
     parser.add_argument("--seed-dir", help="Reuse a completed real medium seed directory (traits benchmark only).")
     parser.add_argument("--dashboards", action="store_true", help="Measure every dashboard in disposable PostgreSQL, no browser.")
     parser.add_argument("--profiles", type=int, default=500_000, help="Dashboard benchmark population (default 500000).")

@@ -1,10 +1,51 @@
 """Reset integration tests run exclusively in the benchmark-owned disposable DB."""
 import os
+from pathlib import Path
+import subprocess
+import sys
+import uuid
 from datetime import date
 
 import pytest
 
 from app.reset_demo import DATA_TABLES, RETAINED_TABLES, reset_demo
+
+
+@pytest.fixture
+def reset_engine():
+    """A fresh database avoids autovacuum triggered by preceding scale tests.
+
+    NOWAIT correctly refuses autovacuum's ShareUpdateExclusiveLock, not just
+    application writers. Do not disable that safety check or retry the reset.
+    """
+    if os.environ.get("KINSHIP_BENCHMARK_ISOLATED_TESTS") != "1":
+        pytest.skip("reset tests require benchmark-owned disposable PostgreSQL")
+    from sqlalchemy import create_engine, text
+    from sqlalchemy.engine import make_url
+
+    url = make_url(os.environ["DATABASE_URL"])
+    name = "reset_test_" + uuid.uuid4().hex
+    admin = create_engine(url, isolation_level="AUTOCOMMIT")
+    isolated_url = url.set(database=name)
+    engine = create_engine(isolated_url)
+    created = False
+    try:
+        with admin.connect() as conn:
+            conn.execute(text(f'CREATE DATABASE "{name}"'))
+        created = True
+        env = dict(os.environ, DATABASE_URL=isolated_url.render_as_string(hide_password=False))
+        subprocess.run(
+            [sys.executable, "-m", "alembic", "upgrade", "head"],
+            cwd=Path(__file__).resolve().parents[1], env=env, check=True,
+            capture_output=True,
+        )
+        yield engine
+    finally:
+        engine.dispose()
+        if created:
+            with admin.connect() as conn:
+                conn.execute(text(f'DROP DATABASE "{name}"'))
+        admin.dispose()
 
 
 def test_reset_requires_acknowledgement_and_production_force(monkeypatch, capsys):
@@ -21,9 +62,9 @@ def test_reset_requires_acknowledgement_and_production_force(monkeypatch, capsys
 
 @pytest.mark.skipif(os.environ.get("KINSHIP_BENCHMARK_ISOLATED_TESTS") != "1",
                     reason="reset tests require benchmark-owned disposable PostgreSQL")
-def test_reset_preserves_config_and_refuses_running_jobs():
+def test_reset_preserves_config_and_refuses_running_jobs(reset_engine):
     from sqlalchemy import text
-    from app.db import engine
+    engine = reset_engine
 
     with engine.begin() as conn:
         conn.execute(text("""
@@ -102,3 +143,21 @@ def test_reset_preserves_config_and_refuses_running_jobs():
                    dashboard_default_from, dashboard_default_to
             FROM admin_settings WHERE id=1
         """)).one() == (7, "custom", date(2020, 1, 1), date(2024, 12, 31))
+
+
+def test_reset_refuses_busy_dataset_without_deleting_rows(reset_engine):
+    from sqlalchemy import text
+    with reset_engine.begin() as conn:
+        profile = conn.scalar(text("INSERT INTO profiles DEFAULT VALUES RETURNING id"))
+    with reset_engine.connect() as blocker:
+        # This is the actual lock mode observed on the flaky suite's
+        # autovacuum worker. A real worker/read lock must also remain protected.
+        blocker.execute(text("LOCK TABLE source_records IN SHARE UPDATE EXCLUSIVE MODE"))
+        with pytest.raises(RuntimeError, match="dataset table is busy"):
+            reset_demo(reset_engine, yes=True)
+        assert blocker.scalar(text("SELECT count(*) FROM profiles WHERE id=:id"),
+                              {"id": profile}) == 1
+        blocker.rollback()
+    reset_demo(reset_engine, yes=True)
+    with reset_engine.connect() as conn:
+        assert conn.scalar(text("SELECT count(*) FROM profiles")) == 0

@@ -1,0 +1,40 @@
+{
+  "purpose": "Three-run counterbalanced full-resolution comparison before M5; not a final production timing claim",
+  "requested_people": 250000,
+  "seed": {"scale": "medium", "random_seed": 20250308},
+  "fixture": {"source_records": 625000, "gifts": 0, "events": 0, "initial_profiles": 0, "resolved_profiles": 246438},
+  "environment": {"postgresql": "17.5", "cpu_quota": 4, "memory_limit_gib": 8, "shared_buffers": "512MB", "base_work_mem": "32MB", "pg_stat_statements": true},
+  "method": "Unprofiled resolve_bulk loop including commit and final empty check; imports, database cloning, statistics extraction and cleanup excluded. Fresh clone of one untouched fixture for each run; only one run clone retained at a time. No concurrent heavy tests.",
+  "fixture_sha256": {
+    "donor_crm_contacts.csv": "5f6645d0220f811f108fb56949e23539f61f5d7ceaeb262f3b0079d3eaacfecb",
+    "esp_contacts.csv": "42e1be9e904108fff266c53675b7df793433e84f5082d2a4305cc2a228b768d0",
+    "zeta_enrichment.csv": "3fd49942820c955c8268138287c922e5795367e33b04791424b30276814616b4"
+  },
+  "engine_sha256": {
+    "ecb45a4": "3823f06925d1dfb06140f0fe642075239d86a2a27a57286700e97982271d252f",
+    "3b7e830": "d0ebf8cdbb0fe95f0767e8c7504acacf414b090bc78b79c09f3809319260f59a",
+    "incremental_only_followup": "737644de10af6de430a98b87a8be3df8b6c956576bef977467c08575b7556303"
+  },
+  "runs": [
+    {"order": 1, "commit": "ecb45a4", "seconds": 272.9275735330002},
+    {"order": 2, "commit": "3b7e830", "seconds": 295.88869752799974},
+    {"order": 3, "commit": "3b7e830", "seconds": 249.99486524300028},
+    {"order": 4, "commit": "ecb45a4", "seconds": 263.6916514950003},
+    {"order": 5, "commit": "ecb45a4", "seconds": 248.55522374400016},
+    {"order": 6, "commit": "3b7e830", "seconds": 267.4083840969997}
+  ],
+  "all_runs": {"complete": true, "records": 625000, "profiles_created": 246438, "merges": 0, "committed_calls": 2, "profiled": false},
+  "median_seconds": {"ecb45a4": 263.6916514950003, "3b7e830": 267.4083840969997},
+  "median_regression_percent": 1.4094995351302986,
+  "sql_median_execution_seconds": {
+    "source_records_assignment": {"ecb45a4": 53.655, "3b7e830": 59.773},
+    "label_aggregation": {"ecb45a4": 48.836, "3b7e830": 48.153},
+    "survivorship_update": {"ecb45a4": 29.923, "3b7e830": 32.401},
+    "identifier_insert": {"ecb45a4": 28.998, "3b7e830": 32.260},
+    "enrichment_insert": {"ecb45a4": 28.497, "3b7e830": 31.674}
+  },
+  "decision": "3b7e830 median is slower, so write-skipping, metadata narrowing and the pending assignment predicate now apply only to incremental mode. Full mode restores ecb45a4 statements. Auto mode selects incremental only when the pending graph touches existing identifier/profile owners.",
+  "limits": "SQL component medians are diagnostics, not additive or isolated causal experiments. The conditional follow-up was correctness-tested, not separately scale-timed. Final 500k timings are pending the 16-core production-server isolated-schema run.",
+  "verification": {"identity_tests_passed": 49, "opt_in_tests_skipped": 1, "seconds": 22.30},
+  "raw_fixture_cleanup": "Private fixture, clones, seed CSVs, temporary logs and fixture credentials removed after retaining this compact evidence."
+}

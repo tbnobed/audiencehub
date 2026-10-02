@@ -24,14 +24,19 @@ def _sql(db, statement, **params):
     return db.execute(text(statement), params)
 
 
-def resolve_bulk(db: Session, job_id: int | None = None) -> dict[str, int]:
+def resolve_bulk(db: Session, job_id: int | None = None, *, mode: str = "auto") -> dict[str, int]:
     """Resolve all pending records; caller commits, including an empty result.
 
     Incremental closure consists of pending records, their unblocked keys and
     every existing profile owning one of those keys. Profile nodes connect all
     pending bridges before a winner is chosen. Unrelated resolved records are
     not rebuilt. All temporary state disappears on transaction completion.
+    ``auto`` uses incremental write minimization only when the pending graph
+    touches an existing identity. A fresh full load uses the original write path.
+    Explicit ``full`` and ``incremental`` modes support controlled replay/tests.
     """
+    if mode not in ("auto", "full", "incremental"):
+        raise ValueError("Identity mode must be auto, full, or incremental")
     acquire_resolver_lock(db)
     # Use the existing partial (id WHERE resolved_at IS NULL) index, especially
     # on the worker's final empty call. Do not copy/join/count the whole source
@@ -190,6 +195,9 @@ def resolve_bulk(db: Session, job_id: int | None = None) -> dict[str, int]:
     """)
     created = _sql(db, "SELECT count(*) FROM ir_new").scalar_one()
     merges = _sql(db, "SELECT count(*) FROM ir_moves").scalar_one()
+    skip_unchanged = mode == "incremental" or (
+        mode == "auto" and bool(_sql(db, "SELECT EXISTS(SELECT 1 FROM ir_owners)").scalar_one())
+    )
     _sql(db, """
         INSERT INTO profile_merges(winner_id,loser_id,reason,job_id)
         SELECT m.winner,m.loser,jsonb_build_object('type',link.kind,'value',link.value),:job_id
@@ -203,10 +211,11 @@ def resolve_bulk(db: Session, job_id: int | None = None) -> dict[str, int]:
     _sql(db, "UPDATE profiles p SET merged_into_id=m.winner FROM ir_moves m WHERE p.id=m.loser")
     for table in ("identifiers", "source_records", "gifts", "events"):
         _sql(db, f"UPDATE {table} t SET profile_id=m.winner FROM ir_moves m WHERE t.profile_id=m.loser")
-    _materialize(db)
+    _materialize(db, skip_unchanged=skip_unchanged)
     _sql(db, """
         UPDATE source_records sr SET profile_id=a.profile_id,resolved_at=now()
-        FROM ir_assign a WHERE sr.id=a.id AND sr.resolved_at IS NULL;
+        FROM ir_assign a WHERE sr.id=a.id
+    """ + (" AND sr.resolved_at IS NULL" if skip_unchanged else "") + """;
         UPDATE gifts g SET profile_id=a.profile_id FROM ir_assign a JOIN ir_pending p ON p.id=a.id
         JOIN imports i ON i.id=p.last_import_id
         WHERE i.record_type='gift' AND g.source_id=p.source_id AND g.external_id=p.external_id
@@ -227,15 +236,17 @@ def resolve_bulk(db: Session, job_id: int | None = None) -> dict[str, int]:
         INSERT INTO identifiers(type,value,profile_id)
         SELECT DISTINCT e.kind,e.value,a.profile_id FROM ir_edges e
         JOIN ir_assign a ON a.id=e.record_id WHERE e.kind<>'profile'
+    """ + ("""
           AND NOT EXISTS (
             SELECT 1 FROM identifiers existing WHERE existing.type=e.kind
               AND existing.value=e.value AND existing.profile_id=a.profile_id
           )
+    """ if skip_unchanged else "") + """
         ORDER BY e.kind,e.value
         ON CONFLICT(type,value) DO UPDATE SET profile_id=EXCLUDED.profile_id
         WHERE identifiers.profile_id IS DISTINCT FROM EXCLUDED.profile_id
     """)
-    _survivorship(db)
+    _survivorship(db, skip_unchanged=skip_unchanged)
     for table in ("segment_membership", "profile_traits"):
         _sql(db, f"DELETE FROM {table} t USING ir_moves m WHERE t.profile_id=m.loser")
     _sql(db, """
@@ -247,18 +258,28 @@ def resolve_bulk(db: Session, job_id: int | None = None) -> dict[str, int]:
     return {"records": count, "profiles_created": created, "merges": merges}
 
 
-def _materialize(db):
+def _materialize(db, *, skip_unchanged: bool):
+    consent_scope = """
+        m.loser IS NOT NULL OR c.profile_id IN(SELECT winner FROM ir_moves)
+        OR c.profile_id IN (
+          SELECT a.profile_id FROM ir_assign a JOIN ir_pending p ON p.id=a.id
+          WHERE NULLIF(p.attributes->'_import_consent'->>'channel','') IS NOT NULL
+            AND NULLIF(p.attributes->'_import_consent'->>'status','') IS NOT NULL
+        )
+    """ if skip_unchanged else "m.loser IS NOT NULL OR c.profile_id IN(SELECT profile_id FROM ir_affected)"
+    enrichment_scope = """
+        m.loser IS NOT NULL OR e.profile_id IN(SELECT winner FROM ir_moves)
+        OR e.profile_id IN (
+          SELECT a.profile_id FROM ir_assign a JOIN ir_pending p ON p.id=a.id
+          WHERE COALESCE(NULLIF(p.attributes->'_import_enrichments','null'::jsonb),'{}'::jsonb)<>'{}'::jsonb
+        )
+    """ if skip_unchanged else "m.loser IS NOT NULL OR e.profile_id IN(SELECT profile_id FROM ir_affected)"
     _sql(db, """
         CREATE TEMP TABLE ir_consents ON COMMIT DROP AS
         SELECT COALESCE(m.winner,c.profile_id) AS profile_id,c.channel,c.status,c.source_id,
                c.captured_at,c.evidence,COALESCE(m.loser,0)::bigint AS tie
         FROM consents c LEFT JOIN ir_moves m ON m.loser=c.profile_id
-        WHERE m.loser IS NOT NULL OR c.profile_id IN(SELECT winner FROM ir_moves)
-          OR c.profile_id IN (
-            SELECT a.profile_id FROM ir_assign a JOIN ir_pending p ON p.id=a.id
-            WHERE NULLIF(p.attributes->'_import_consent'->>'channel','') IS NOT NULL
-              AND NULLIF(p.attributes->'_import_consent'->>'status','') IS NOT NULL
-          )
+        WHERE """ + consent_scope + """
         UNION ALL
         SELECT a.profile_id,p.attributes->'_import_consent'->>'channel',
                p.attributes->'_import_consent'->>'status',p.source_id,
@@ -274,18 +295,16 @@ def _materialize(db):
         ORDER BY profile_id,channel,(status='opted_out') DESC,captured_at DESC,tie
         ON CONFLICT(profile_id,channel) DO UPDATE SET status=EXCLUDED.status,
           source_id=EXCLUDED.source_id,captured_at=EXCLUDED.captured_at,evidence=EXCLUDED.evidence
+    """ + ("""
         WHERE (consents.status,consents.source_id,consents.captured_at,consents.evidence)
-          IS DISTINCT FROM (EXCLUDED.status,EXCLUDED.source_id,EXCLUDED.captured_at,EXCLUDED.evidence);
+          IS DISTINCT FROM (EXCLUDED.status,EXCLUDED.source_id,EXCLUDED.captured_at,EXCLUDED.evidence)
+    """ if skip_unchanged else "") + """;
         CREATE TEMP TABLE ir_enrich ON COMMIT DROP AS
         SELECT COALESCE(m.winner,e.profile_id) AS profile_id,e.source_id,e.attribute_key,
                e.value_text,e.value_num,e.value_bool,e.value_date,e.imported_at,e.license_expires_at,
                COALESCE(m.loser,0)::bigint AS tie
         FROM enrichment_values e LEFT JOIN ir_moves m ON m.loser=e.profile_id
-        WHERE m.loser IS NOT NULL OR e.profile_id IN(SELECT winner FROM ir_moves)
-          OR e.profile_id IN (
-            SELECT a.profile_id FROM ir_assign a JOIN ir_pending p ON p.id=a.id
-            WHERE COALESCE(NULLIF(p.attributes->'_import_enrichments','null'::jsonb),'{}'::jsonb)<>'{}'::jsonb
-          )
+        WHERE """ + enrichment_scope + """
         UNION ALL
         SELECT a.profile_id,p.source_id,k.key,
                CASE WHEN k.value->>'data_type' IN('text','enum') THEN k.value->>'value' END,
@@ -307,15 +326,16 @@ def _materialize(db):
           value_text=EXCLUDED.value_text,value_num=EXCLUDED.value_num,
           value_bool=EXCLUDED.value_bool,value_date=EXCLUDED.value_date,
           imported_at=EXCLUDED.imported_at,license_expires_at=EXCLUDED.license_expires_at
+    """ + ("""
         WHERE (enrichment_values.value_text,enrichment_values.value_num,
           enrichment_values.value_bool,enrichment_values.value_date,
           enrichment_values.imported_at,enrichment_values.license_expires_at)
           IS DISTINCT FROM (EXCLUDED.value_text,EXCLUDED.value_num,
             EXCLUDED.value_bool,EXCLUDED.value_date,EXCLUDED.imported_at,EXCLUDED.license_expires_at)
-    """)
+    """ if skip_unchanged else ""))
 
 
-def _survivorship(db):
+def _survivorship(db, *, skip_unchanged: bool):
     _sql(db, """
         CREATE TEMP TABLE ir_survivors ON COMMIT DROP AS
         SELECT sr.*,s.priority FROM source_records sr JOIN ir_affected a USING(profile_id)
@@ -348,10 +368,11 @@ def _survivorship(db):
         FROM ir_affected a LEFT JOIN emails e USING(profile_id) LEFT JOIN phones ph USING(profile_id)
           LEFT JOIN names n USING(profile_id) LEFT JOIN addresses ad USING(profile_id)
         WHERE p.id=a.profile_id
+    """ + ("""
           AND (p.email::text,p.phone,p.first_name,p.last_name,p.address1,p.city,
             p.region,p.postal_code,p.country,p.search_text)
           IS DISTINCT FROM (e.email_norm::text,ph.phone_e164,n.first_name,n.last_name,
             ad.address1,ad.city,ad.region,ad.postal_code,ad.country,
             trim(concat_ws(' ',e.email_norm,ph.phone_e164,n.first_name,n.last_name,
               ad.address1,ad.city,ad.region,ad.postal_code,ad.country)))
-    """)
+    """ if skip_unchanged else ""))

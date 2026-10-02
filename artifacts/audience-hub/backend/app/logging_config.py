@@ -43,6 +43,9 @@ def _exceptions(error: BaseException):
 
 
 def _safe_message(error: BaseException) -> str:
+    from app.jobs.handlers import SegmentTraitsRefreshRequired
+    if isinstance(error, SegmentTraitsRefreshRequired):
+        return "Required full traits refresh did not succeed; repair traits and retry the partner audience refresh"
     # Never interpolate str(error), DBAPI diagnostics, args, SQL or parameter
     # values: even apparently harmless ValueError/KeyError text may be input.
     for item in reversed(list(_exceptions(error))):

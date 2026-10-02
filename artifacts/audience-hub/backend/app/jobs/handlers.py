@@ -1,7 +1,44 @@
 import time
 
 
+class SegmentTraitsRefreshRequired(ValueError):
+    """Safe, actionable failure when an audience's trait barrier cannot pass."""
+
+
 def run(job_type: str, payload: dict, job_id: int | None = None) -> None:
+    if job_type == "segment.materialize":
+        from sqlalchemy import text
+        from sqlalchemy.orm import Session
+        from app.db import engine
+        from app.segments.service import materialize
+        from app.identity.locking import IdentityResolutionDeferred
+        with Session(engine) as db:
+            # Same transaction lock as recompute: never read half-old traits or
+            # race a recompute between readiness checking and materialization.
+            if not db.scalar(text(
+                "SELECT pg_try_advisory_xact_lock(hashtext('audience-hub:trait-recompute'))"
+            )):
+                raise IdentityResolutionDeferred("Partner audience refresh waits for traits.")
+            if payload.get("traits_window"):
+                status = db.scalar(text("""SELECT j.status FROM scheduled_runs s
+                    JOIN jobs j ON j.id=s.job_id
+                    WHERE s.task='traits.nightly_full' AND s.window_key=:window"""),
+                    {"window": payload["traits_window"]})
+                if status in ("queued", "running"):
+                    raise IdentityResolutionDeferred("Partner audience refresh waits for nightly traits.")
+                if status != "succeeded":
+                    raise SegmentTraitsRefreshRequired("Nightly traits did not succeed; repair traits and retry the partner audience refresh.")
+            if db.scalar(text("""SELECT EXISTS(SELECT 1 FROM jobs
+                WHERE type='traits.recompute' AND status IN ('queued','running'))""")):
+                raise IdentityResolutionDeferred("Partner audience refresh waits for traits.")
+            latest_full = db.scalar(text("""SELECT status FROM jobs
+                WHERE type='traits.recompute' AND payload->>'mode'='full'
+                ORDER BY id DESC LIMIT 1"""))
+            if latest_full in ("failed", "cancelled"):
+                raise SegmentTraitsRefreshRequired("Latest full traits refresh failed or was cancelled; repair traits before refreshing partner audiences.")
+            materialize(db, int(payload["segment_id"]))
+            db.commit()
+        return
     if job_type == "identity.resolve_batch":
         from sqlalchemy.orm import Session
 

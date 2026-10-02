@@ -1,0 +1,33 @@
+{
+  "scope": "Restricted-role container-schema runner tested on disposable local PostgreSQL; not a production-server timing result",
+  "suite": {
+    "filter": "schema_benchmark",
+    "passed": 15,
+    "deselected": 310,
+    "warnings": 1,
+    "seconds": 37.59
+  },
+  "production_configured_cli_smoke": {
+    "command": "kinship benchmark --traits --profiles 1500",
+    "status": "passed",
+    "counts": {
+      "profiles": 1472,
+      "gifts": 16000,
+      "events": 542,
+      "source_records": 20292
+    },
+    "compared_profiles": 1000,
+    "discrepancies": [],
+    "cleanup": "complete",
+    "public_jobs_unchanged": true,
+    "temporary_roles_removed": true
+  },
+  "real_cli_sigterm_during_trait_workload": {
+    "passed": true,
+    "cleanup": "complete",
+    "temporary_schema_removed": true,
+    "temporary_role_removed": true
+  },
+  "docker_image_execution": "not performed",
+  "profiles_500000_timing": "pending on 16-core server"
+}

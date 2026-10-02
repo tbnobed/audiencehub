@@ -18,6 +18,59 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+@pytest.mark.parametrize("mode,initial_skip,subsequent_skip", [
+    ("auto", False, True),
+    ("full", False, False),
+    ("incremental", True, True),
+])
+def test_write_minimization_is_scoped_to_incremental_mode(
+    monkeypatch, mode, initial_skip, subsequent_skip,
+):
+    module = importlib.import_module("app.identity.bulk")
+    original = module._sql
+    assignment_statements = []
+
+    def recorded(db, statement, **params):
+        if "INSERT INTO identifiers(type,value,profile_id)" in statement:
+            assignment_statements.append(statement)
+        return original(db, statement, **params)
+
+    monkeypatch.setattr(module, "_sql", recorded)
+    with Session(engine) as db:
+        source = db.scalar(text("""
+            INSERT INTO sources(key,name,kind,priority)
+            VALUES(:key,'Mode regression','csv',10) RETURNING id
+        """), {"key": "mode-" + uuid.uuid4().hex})
+        email = uuid.uuid4().hex + "@example.org"
+        db.execute(text("""
+            INSERT INTO source_records(source_id,external_id,email_norm,raw_hash)
+            VALUES(:s,'first',:email,'first')
+        """), {"s": source, "email": email})
+        assert resolve_bulk(db, mode=mode)["profiles_created"] == 1
+        first = assignment_statements[-1]
+        assert ("AND NOT EXISTS" in first) is initial_skip
+        assert ("AND sr.resolved_at IS NULL" in first) is initial_skip
+        profile = db.scalar(text("SELECT profile_id FROM source_records WHERE source_id=:s"),
+                            {"s": source})
+        ctid = db.scalar(text("SELECT ctid::text FROM profiles WHERE id=:p"), {"p": profile})
+        db.execute(text("""
+            INSERT INTO source_records(source_id,external_id,email_norm,raw_hash)
+            VALUES(:s,'second',:email,'second')
+        """), {"s": source, "email": email})
+        assert resolve_bulk(db, mode=mode) == {"records": 1, "profiles_created": 0, "merges": 0}
+        second = assignment_statements[-1]
+        assert ("AND NOT EXISTS" in second) is subsequent_skip
+        assert ("AND sr.resolved_at IS NULL" in second) is subsequent_skip
+        new_ctid = db.scalar(text("SELECT ctid::text FROM profiles WHERE id=:p"), {"p": profile})
+        assert (new_ctid == ctid) is subsequent_skip
+        db.rollback()
+
+
+def test_bulk_rejects_unknown_mode_before_querying():
+    with pytest.raises(ValueError, match="Identity mode"):
+        resolve_bulk(None, mode="unexpected")
+
+
 def test_incremental_mixed_existing_new_and_noop_survivor():
     """Existing identities are not rewritten, while new people still resolve."""
     with Session(engine) as db:

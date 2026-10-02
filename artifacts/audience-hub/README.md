@@ -20,7 +20,7 @@ Successful imports enqueue `identity.resolve_batch`. The resolver links source r
 
 ## Computed traits (M4)
 
-Verification status and reproducible commands are in [M4 verification](docs/M4_VERIFICATION.md). Incremental write minimization measured 93.930 seconds for 50k records, versus 120.377 seconds previously, but its full-resolution recheck took 684.440 seconds versus 626.745 previously. Both targets remain unmet. The final pending-index change passes identity tests but has no completed timing: the disposable benchmark database hit a storage quota and failed recovery. The approved 250k-profile trait fallback previously completed in 366.165 seconds with zero discrepancies across 1,000 sampled profiles and all 21 traits. Full-medium five-source trait timing remains unverified.
+M4 correctness is signed off; final timing is pending the production-server run (16 cores). Five consecutive pre-M5 full suites each passed 324 tests with one skip. The requested 250k-contact comparison measured medians of 263.692 seconds before write minimization and 267.408 seconds after it, so those optimizations now apply only to incremental resolution. Run `docker compose exec api kinship benchmark --traits --profiles 500000` after rebuilding/updating Compose to measure in an isolated schema in the existing PostgreSQL container, without accessing live application tables. See [M4 verification](docs/M4_VERIFICATION.md) for prerequisites, isolation guarantees, retained evidence and historical timings. Local disposable benchmark data has been cleaned up.
 
 ### Consent decisions
 

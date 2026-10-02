@@ -78,6 +78,12 @@ def tick(db: Session) -> None:
         db, "traits.nightly_full", now.strftime("%Y-%m-%d"),
         "traits.recompute", {"mode": "full"},
     )
+    if now.hour >= 4:
+        for segment_id in db.scalars(text("""SELECT id FROM segments
+          WHERE status='active' AND refresh_schedule IN ('daily','0 4 * * *') ORDER BY id""")):
+            schedule_once(db, f"segment.daily:{segment_id}", now.strftime("%Y-%m-%d"),
+                          "segment.materialize", {"segment_id": segment_id,
+                                                  "traits_window": now.strftime("%Y-%m-%d")})
     dirty_ready = db.execute(text("""
         SELECT EXISTS (
             SELECT 1 FROM trait_dirty_profiles

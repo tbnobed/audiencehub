@@ -74,6 +74,29 @@ A single registry lists every field the builder can use: key, label, group (`Pro
 - Triggers: on save (if active), on schedule (`refresh_schedule`, default daily 04:00 after traits), and before every activation run.
 - A segment that references another segment materializes its dependencies first (topological order).
 
+Schedules use canonical `daily` (04:00 UTC) or `null` (manual); the legacy
+`0 4 * * *` input is normalized to `daily`, not treated as arbitrary cron.
+Scheduled refreshes require their day's successful nightly full-traits job.
+Pending traits defer the refresh; failed/cancelled/missing nightly work fails
+explicitly for operator repair and retry. Manual refreshes also reject the latest
+failed/cancelled full recompute. Refresh and recompute share a transaction advisory
+lock through the membership commit.
+
+Delta previews remove the selected constraint and prune newly empty ancestors,
+including negated and OR groups; remaining groups retain their boolean semantics.
+If the root disappears, the comparison is all active partners. Empty groups are
+still invalid for saved definitions.
+
+### Deploying migration 0024
+
+Pause API writes and workers, let in-flight audience transactions finish, then run
+`alembic upgrade head` in the normal backend deployment environment. The migration
+uses transaction-local `lock_timeout='5s'` before its segment-table DDL. If a reader
+or writer prevents the lock, deployment must fail and roll back rather than wait
+indefinitely: identify/drain the blocking session and retry the same migration.
+Confirm `/readyz` reports the current head before resuming workers and API traffic.
+Do not bypass the lock timeout or force-terminate production sessions blindly.
+
 ## Builder UI
 
 - Tree editor: add rule, add group, toggle AND/OR, negate group, drag to reorder, duplicate, delete.

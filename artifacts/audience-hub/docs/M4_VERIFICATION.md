@@ -1,5 +1,157 @@
 # M4 verification
 
+## M4 handoff status
+
+**Correctness signed off; final timing pending the production-server run (16 cores).**
+Before starting M5, the combined resolver, reset-test isolation and container-schema
+benchmark changes passed five consecutive full suites: **324 passed, 1 skipped**
+in every run. See `RESET_TEST_VERIFICATION.md` for evidence and
+`identity-250k-comparison.json` for the requested three-run-per-version comparison.
+Full-resolution write-skipping is disabled following that comparison.
+
+Run the final measurement after rebuilding the production images and updating Compose:
+
+```sh
+docker compose exec api kinship benchmark --traits --profiles 500000
+```
+
+This mode provisions a restricted role and isolated schema in the existing
+PostgreSQL container; it does not benchmark against or modify live application
+tables. It shares server resources, so schedule it outside busy periods.
+Local disposable benchmark databases and generated fixtures were removed after
+retaining the portable reports. No further 500k sandbox performance runs are planned.
+
+## Requested 250k comparison and full-resolution regression decision
+
+No further 500k sandbox timing was run. The same **250,000-person medium contact
+fixture**, generated with seed `20250308`, produced **625,000 source records**,
+zero gifts/events and zero initial profiles. Each run cloned this untouched
+fixture, resolved all records into **246,438 profiles**, committed, and performed
+the final empty check. Setup/imports, cloning, statistics extraction and cleanup
+were excluded. Runs were unprofiled, with PostgreSQL 17.5, 4-CPU quota, 8 GiB
+memory, 512 MB shared buffers and 32 MB base work memory. Heavy test suites had
+finished before timing started.
+
+| Commit | Run times (seconds) | Median |
+|---|---|---:|
+| Previous `ecb45a4` | 272.928, 263.692, 248.555 | **263.692 s** |
+| Write-skipping `3b7e830` | 295.889, 249.995, 267.408 | **267.408 s** |
+
+Execution order was old/new/new/old/old/new. Only one disposable run clone
+existed at a time. The newer median is **3.717 seconds (1.41%) slower**, so the
+requested safeguard has been applied: **write minimization is incremental-only**.
+
+The SQL evidence explains why this optimization is not a full-load win. A fresh
+load must create its identities and populate their initially empty survivor
+fields; it has few/no existing values whose writes can be avoided. The newer
+path nevertheless performs an identifier-owner anti-lookup, survivor-value
+comparisons, and incoming-metadata candidate selection. The pending-row
+predicate is also nonselective when every source record is pending. Median SQL
+execution times increased for identifier insertion (28.998 → 32.260 s),
+survivorship (29.923 → 32.401 s), enrichment insertion (28.497 → 31.674 s), and
+source assignment (53.655 → 59.773 s), while label aggregation was essentially
+unchanged (48.836 → 48.153 s). These component medians are diagnostic and must
+not be added together or treated as isolated causal experiments: write/I/O
+timing varies, as the individual complete-run times show. The earlier single
+500k timing regression should not be attributed entirely to Python or to a
+guaranteed constant overhead. The repeated median is enough to select the
+conservative full-load path.
+
+`resolve_bulk(..., mode="auto")` now selects incremental minimization only when
+the pending graph has an existing identifier/profile owner. Fresh full loads use
+the previous full-load SQL statements, without owner prefiltering, unchanged-value
+guards, narrowed metadata candidates, or the pending assignment predicate.
+Explicit `full` and `incremental` modes are available to internal callers.
+Graph closure, oldest-profile selection, consent/enrichment precedence, locks
+and durability are unchanged.
+
+Verification after this conditional change: **49 identity tests passed, 1 opt-in
+test skipped**, in 22.30 seconds. Added cases cover auto/full/incremental selection,
+fresh and existing identities, unchanged-row retention only in incremental mode,
+and invalid-mode rejection. The conditional follow-up itself is not assigned a
+new scale timing; final timing remains the production-server responsibility.
+
+Compact evidence, input hashes and engine hashes:
+[`identity-250k-comparison.json`](identity-250k-comparison.json).
+`scripts/identity_comparison.py` reproduces preparation and the six-run protocol
+in an isolated local PostgreSQL cluster. Disposable data, credentials and raw
+temporary logs were removed after preserving compact results. Historical cache
+paths later in this document identify where evidence originated, not files that
+remain available.
+
+## Production-container measurement (isolated schema)
+
+After deploying the rebuilt image and updated Compose configuration, run the
+requested command on the 16-core server:
+
+```sh
+docker compose exec api kinship benchmark --traits --profiles 500000
+```
+
+Compose sets `KINSHIP_BENCHMARK_BACKEND=schema` for the API container. This does
+not change the application's production authentication mode. The CLI connects
+to the existing PostgreSQL container only to provision a randomly named
+`kinship_bench_<24 hex characters>` schema and equally named temporary login.
+Provisioning requires the configured database user to be a PostgreSQL superuser
+(as in the supplied Compose installation); a restricted custom deployment fails
+explicitly rather than falling back to its live application schema.
+
+Every migration, seed/import, resolver, reference calculation and trait job runs
+in a fresh child process with **only the temporary, unprivileged credentials**.
+The child inherits only an explicit runtime-path/locale allowlist, not OIDC,
+cloud, PostgreSQL environment or other test-database credentials; its settings
+loader also ignores mounted `.env` files. Provisioning and cleanup use a
+10-second connection timeout, 10-second lock timeout and 30-second statement
+timeout. These statement/lock limits do not apply to the measured workload.
+The role has no role memberships, superuser, database-creation, role-creation,
+or RLS-bypass privileges. Before execution, the runner rejects inherited PUBLIC
+table/sequence access, schema creation outside the private schema, foreign-server
+access, and executable user-defined security-definer functions. It never revokes
+or changes existing application grants. The private schema is first in
+`search_path`; `public` is present solely for already-installed citext/pg_trgm
+types and operators. ACL denial is the boundary: even a missing private table
+or an explicit `public.table` reference cannot read or write live data.
+Alembic's version table is explicitly scoped to the new schema, preventing its
+inspector from finding the live version table. Schema-local advisory-lock
+wrappers also prevent the synthetic resolver/traits job from taking the live
+application's advisory-lock keys.
+
+The workload uses the real medium generator and import/resolution path, then
+times the full production trait handler separately from setup. No 500k
+measurement has been performed in this sandbox for this container mode. Its
+production-mode CLI smoke runs 1,500 generated people and independently compares
+1,000 profiles; server timings remain pending. No live data are used as fixtures.
+The hardened isolated PostgreSQL boundary suite passed **15 tests** (37.59s):
+runtime-environment and dotenv credential exclusion, private-socket test guard,
+interruption-at-commit cleanup, repeated termination during cleanup, public sentinel
+read/write/drop denial, missing-private-table denial, role-switch denial,
+private advisory locks, unsafe PUBLIC-grant refusal, normal/interrupted/failing
+cleanup, and the actual `kinship benchmark --traits --profiles 1500` command
+under production configuration, plus a real CLI-process SIGTERM while its actual
+trait workload was running. The latter verified schema/role cleanup after child
+termination. Portable evidence: `schema-benchmark-verification.json`.
+A full Docker image run was not performed here.
+
+Evidence is written under `/data/benchmarks/traits-<random>/` on `appdata`,
+including `traits.json` and `isolation.json`; the console prints the directory.
+Generated seed/upload/export directories belonging to that invocation are
+removed on exit, while the compact evidence remains. A supplied external
+`--seed-dir` is never deleted. The owned schema and role are removed after
+success, child failure, or SIGINT/SIGTERM, and the receipt records cleanup.
+Cleanup eligibility is recorded before provisioning DDL, including interruptions
+at commit; exact-name existence-safe drops handle partial provisioning. Repeated
+termination signals are ignored during child shutdown and database cleanup.
+Do not interrupt the command with SIGKILL or stop the database/container host:
+uncatchable termination can leave that exact schema/role behind. Preserve the
+receipt and have a database administrator inspect that explicitly named schema
+and role before manual cleanup; the tool does not bulk-drop matching prefixes.
+
+The benchmark shares CPU, storage, WAL and I/O with production even though its
+data and locks are isolated. Run during a maintenance window, ensure sufficient
+disk quota for the real medium dataset, and retain the resulting JSON before
+signing off final timing. Local `python -m app.benchmark` retains the disposable
+`initdb` backend unless `KINSHIP_BENCHMARK_BACKEND=schema` is explicitly selected.
+
 ## Incremental write optimization follow-up (latest)
 
 **Current code is tested, but its final latency is not measured.** Final engine

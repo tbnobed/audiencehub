@@ -48,7 +48,7 @@ def main():
     reset.add_argument("--yes", action="store_true", help="Required explicit acknowledgement.")
     reset.add_argument("--force", action="store_true", help="With --yes, permit APP_ENV=production.")
     from app.benchmark import add_arguments, run_benchmark
-    benchmark = commands.add_parser("benchmark", help="Run synthetic imports in a disposable local database.")
+    benchmark = commands.add_parser("benchmark", help="Run isolated synthetic benchmarks (local database or container schema).")
     add_arguments(benchmark)
     seed = commands.add_parser(
         "seed",
@@ -118,6 +118,11 @@ def main():
                 import_ids = load_generated_files(result["files"])
                 print("CSV files submitted through app.importer.import_seed_files.")
                 _compute_seed_traits(import_ids)
+                from app.db import engine
+                from app.segments.service import ensure_templates
+                with Session(engine) as db:
+                    ensure_templates(db)
+                    db.commit()
                 print("Computed profile traits and backfilled 24 monthly snapshots.")
         except (ValueError, RuntimeError) as exc:
             raise SystemExit(str(exc)) from exc

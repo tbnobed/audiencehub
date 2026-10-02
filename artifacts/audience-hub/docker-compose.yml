@@ -25,6 +25,9 @@ services:
     image: audience-hub:latest
     restart: unless-stopped
     env_file: .env
+    environment:
+      KINSHIP_BENCHMARK_BACKEND: schema
+      KINSHIP_BENCHMARK_OUTPUT: /data/benchmarks
     depends_on:
       db: {condition: service_healthy}
     command: ["/app/scripts/start-api.sh"]
