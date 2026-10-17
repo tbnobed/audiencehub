@@ -15,7 +15,7 @@ DATA_TABLES = (
     "consents", "suppressions", "enrichment_values", "profile_traits",
     "trait_snapshots", "trait_dirty_profiles", "segment_membership",
     "segment_counts", "segments", "activation_runs", "activations",
-    "destinations", "deletion_requests",
+    "destinations", "deletion_requests", "activation_run_members", "activation_last_members",
     "dashboard_daily", "dashboard_donor_daily", "dashboard_donor_patterns",
     "dashboard_giving_daily", "dashboard_event_daily", "dashboard_conversion_daily",
     "dashboard_kpis", "dashboard_cache",

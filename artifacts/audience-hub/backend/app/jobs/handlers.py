@@ -6,6 +6,26 @@ class SegmentTraitsRefreshRequired(ValueError):
 
 
 def run(job_type: str, payload: dict, job_id: int | None = None) -> None:
+    if job_type == "activation.run":
+        from app.activations.service import run_activation
+        run_activation(int(payload["run_id"]), job_id=job_id)
+        return
+    if job_type == "deletion.execute":
+        from app.privacy.jobs import run_deletion
+        run_deletion(int(payload["request_id"]), job_id=job_id)
+        return
+    if job_type == "privacy.expire_uploads":
+        from app.privacy.jobs import run_upload_retention
+        run_upload_retention()
+        return
+    if job_type == "activation.expire_exports":
+        from sqlalchemy.orm import Session
+        from app.db import engine
+        from app.activations.service import expire_exports
+        with Session(engine) as db:
+            expire_exports(db)
+            db.commit()
+        return
     if job_type == "segment.materialize":
         from sqlalchemy import text
         from sqlalchemy.orm import Session

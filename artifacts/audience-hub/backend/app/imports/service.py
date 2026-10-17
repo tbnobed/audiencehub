@@ -322,6 +322,8 @@ def _row_payload(
 ) -> dict[str, Any]:
     ext_id = _external_id(record_type, values)
     attributes = _attribute_values(values)
+    if record_type == "event" and values.get("message_id"):
+        attributes["_event_message_id"] = values["message_id"]
     contact_external_id = values.get("contact_external_id")
     if record_type in {"gift", "enrichment"} and reference_source and contact_external_id:
         attributes["_identity_reference"] = {
@@ -358,12 +360,17 @@ def _upsert_source_records(db: Session, source_id: int, import_id: int,
                            profiles: dict[int, int | None] | None = None) -> dict[str, int]:
     if not records:
         return {}
+    from app.privacy.consent import consent_wins
+    authoritative = db.scalar(text(
+        "SELECT settings->>'authoritative_for_consent'='true' FROM sources WHERE id=:id"
+    ), {"id": source_id}) is True
     by_external_id = {}
     for row in records:
         previous = by_external_id.get(row["external_id"])
         if previous:
             consent = previous["attributes"].get("_import_consent", {})
-            if consent.get("status") == "opted_out":
+            incoming = row["attributes"].get("_import_consent")
+            if consent and (not incoming or not consent_wins(consent, incoming, authoritative, authoritative)):
                 row = {**row, "attributes": {
                     **row["attributes"], "_import_consent": consent,
                 }}
@@ -384,12 +391,20 @@ def _upsert_source_records(db: Session, source_id: int, import_id: int,
           address1=EXCLUDED.address1, address2=EXCLUDED.address2, city=EXCLUDED.city,
           region=EXCLUDED.region, postal_code=EXCLUDED.postal_code, country=EXCLUDED.country,
           attributes=CASE
-            WHEN source_records.attributes #>> '{_import_consent,status}' = 'opted_out'
+            WHEN source_records.attributes ? '_import_consent' AND (
+              NOT (EXCLUDED.attributes ? '_import_consent') OR NOT consent_candidate_wins(
+                source_records.attributes #>> '{_import_consent,status}',
+                COALESCE((source_records.attributes #>> '{_import_consent,captured_at}')::timestamptz, source_records.updated_at),
+                source_records.source_id,
+                EXCLUDED.attributes #>> '{_import_consent,status}',
+                COALESCE((EXCLUDED.attributes #>> '{_import_consent,captured_at}')::timestamptz, now()),
+                EXCLUDED.source_id))
             THEN EXCLUDED.attributes || jsonb_build_object(
               '_import_consent', source_records.attributes->'_import_consent')
             ELSE EXCLUDED.attributes END, raw_hash=EXCLUDED.raw_hash,
           last_import_id=EXCLUDED.last_import_id, updated_at=now()
         WHERE source_records.raw_hash IS DISTINCT FROM EXCLUDED.raw_hash
+          OR source_records.attributes->>'_event_message_id' IS DISTINCT FROM EXCLUDED.attributes->>'_event_message_id'
         RETURNING external_id, id, profile_id
     """
     params = []
@@ -555,6 +570,10 @@ def _register_enrichments(db: Session, source_id: int, records: list[dict[str, A
 
 
 def _upsert_consents(db: Session, source_id: int, records: list[dict[str, Any]]) -> None:
+    from app.privacy.consent import consent_wins
+    authoritative = db.scalar(text(
+        "SELECT settings->>'authoritative_for_consent'='true' FROM sources WHERE id=:id"
+    ), {"id": source_id}) is True
     latest: dict[tuple[int, str], dict[str, Any]] = {}
     for row in records:
         values = row["values"]
@@ -568,14 +587,7 @@ def _upsert_consents(db: Session, source_id: int, records: list[dict[str, Any]])
         }
         key = (item["profile_id"], item["channel"])
         previous = latest.get(key)
-        if not previous or (
-                item["status"] == "opted_out" and previous["status"] != "opted_out"
-        ) or (
-                previous["status"] != "opted_out"
-                and item["captured_at"] > previous["captured_at"]
-        ) or (
-                item["status"] == previous["status"]
-                and item["captured_at"] > previous["captured_at"]):
+        if consent_wins(previous, item, authoritative, authoritative):
             latest[key] = item
     params = list(latest.values())
     if not params:
@@ -586,9 +598,8 @@ def _upsert_consents(db: Session, source_id: int, records: list[dict[str, Any]])
         FROM {stage} WHERE true
         ON CONFLICT (profile_id, channel) DO UPDATE SET status=EXCLUDED.status,
           source_id=EXCLUDED.source_id, captured_at=EXCLUDED.captured_at, evidence=EXCLUDED.evidence
-        WHERE (EXCLUDED.status='opted_out' AND consents.status <> 'opted_out')
-           OR (consents.status <> 'opted_out' AND consents.captured_at < EXCLUDED.captured_at)
-           OR (EXCLUDED.status=consents.status AND consents.captured_at < EXCLUDED.captured_at)
+        WHERE consent_candidate_wins(consents.status, consents.captured_at, consents.source_id,
+          EXCLUDED.status, EXCLUDED.captured_at, EXCLUDED.source_id)
     """, params, """
         profile_id bigint, channel text, status text, source_id bigint,
         captured_at timestamptz, evidence jsonb
@@ -649,6 +660,8 @@ def _run_import(import_id: int, progress_callback=None, db: Session | None = Non
         ), {"id": import_id}).mappings().first()
         if not imported:
             raise ImportProblem("Import not found")
+        if db.scalar(text("SELECT key FROM sources WHERE id=:id"), {"id": imported["source_id"]}) == "privacy_manual":
+            raise ImportProblem("The internal manual-consent source cannot accept imports.")
         if imported["status"] == "completed":
             db.commit()
             return {key: imported[key] for key in (
@@ -784,6 +797,23 @@ def _run_import(import_id: int, progress_callback=None, db: Session | None = Non
                 identities.add((values.get("email_norm"), values.get("phone_e164")))
 
             identity_checks = _identifiers_blocked_batch(db, identities, pepper)
+            # Source-scoped tombstones also reject transactional/external-only
+            # replay whose contact address was intentionally omitted.
+            source_key = db.scalar(text("SELECT key FROM sources WHERE id=:id"),
+                                   {"id": imported["source_id"]})
+            external_hashes = {}
+            for line, _, converted, values in batch_rows:
+                if converted["errors"]:
+                    continue
+                candidates = {f"{source_key}:{_external_id(record_type, values)}"}
+                if record_type == "event" and values.get("message_id"):
+                    candidates.add(f"{source_key}:{values['message_id']}")
+                if values.get("contact_external_id") and options.get("reference_source"):
+                    candidates.add(f"{options['reference_source']}:{values['contact_external_id']}")
+                external_hashes[line] = {_identity_hash(pepper, value) for value in candidates}
+            blocked_external = set(db.scalars(text("""SELECT value_hash FROM suppressions
+                WHERE type='external' AND reason='deletion_request' AND value_hash=ANY(:hashes)"""),
+                {"hashes": list(set().union(*external_hashes.values())) if external_hashes else []}))
             for line, was_normalized, converted, values in batch_rows:
                 for message in converted["errors"]:
                     diagnostic_sink.write({"row": line, "severity": "error", "message": message})
@@ -799,7 +829,7 @@ def _run_import(import_id: int, progress_callback=None, db: Session | None = Non
                     normalized_count += 1
                 identity_key = (values.get("email_norm"), values.get("phone_e164"))
                 deletion_blocked, blocklisted, email_opted_out = identity_checks[identity_key]
-                if deletion_blocked:
+                if deletion_blocked or blocked_external.intersection(external_hashes.get(line, set())):
                     rejected += 1
                     diagnostic_sink.write({"row": line, "severity": "error",
                                       "message": "Identifier has a deletion-request suppression; row was not imported"})

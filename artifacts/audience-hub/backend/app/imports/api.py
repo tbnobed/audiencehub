@@ -219,7 +219,10 @@ def get_import(import_id: int, user: User = Depends(require_role("analyst")),
 @router.get("/{import_id}/preview")
 def preview_import(import_id: int, user: User = Depends(require_role("analyst")),
                    db: Session = Depends(session_scope)):
+    from app.privacy.locking import privacy_shared
+    privacy_shared(db)
     row = _get_import(db, import_id)
+    _local_file(row, "file_path")
     try:
         headers, preview = inspect_preview(row["file_path"], 50)
         suggestions = suggest_mapping(headers, row["record_type"])
@@ -325,6 +328,8 @@ def start_import(import_id: int, user: User = Depends(require_role("analyst")),
 @router.get("/{import_id}/errors.csv")
 def download_errors(import_id: int, user: User = Depends(require_role("analyst")),
                     db: Session = Depends(session_scope)):
+    from app.privacy.locking import privacy_shared
+    privacy_shared(db)
     row = _get_import(db, import_id)
     path = _local_file(row, "error_file_path")
     return FileResponse(path, media_type="text/csv",

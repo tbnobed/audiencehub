@@ -58,6 +58,8 @@ import_statistics: ContextVar[ImportStatistics | None] = ContextVar(
 
 def import_lock(db: Session, import_id: int):
     """Serialize checkpoint reads and writes until the caller commits/rolls back."""
+    from app.privacy.locking import privacy_shared
+    privacy_shared(db)
     db.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
                {"key": f"audience-hub:import:{import_id}"})
 

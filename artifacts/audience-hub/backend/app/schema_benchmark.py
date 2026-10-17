@@ -174,12 +174,15 @@ def isolated_schema(url, cleanup_state=None):
 
 
 def run_schema_benchmark(args):
-    if not args.traits or args.imports or args.dashboards or args.overview or args.test_suite:
-        raise ValueError("Existing-container schema mode supports --traits only")
-    if args.profiles < 1000:
+    segments = getattr(args, "segments", False)
+    if bool(args.traits) == bool(segments) or args.imports or args.dashboards or args.overview or args.test_suite:
+        raise ValueError("Existing-container schema mode requires exactly one of --traits or --segments")
+    if args.profiles < 1:
+        raise ValueError("Benchmark requires a positive profile count")
+    if not segments and args.profiles < 1000:
         raise ValueError("Trait reference requires at least 1000 generated people (use 1500 or more)")
     from app.config import get_settings
-    directory = Path(os.environ.get("KINSHIP_BENCHMARK_OUTPUT", args.output_dir)) / ("traits-" + secrets.token_hex(12))
+    directory = Path(os.environ.get("KINSHIP_BENCHMARK_OUTPUT", args.output_dir)) / (("segments-" if segments else "traits-") + secrets.token_hex(12))
     directory.mkdir(parents=True, mode=0o700)
     directory.chmod(0o700)
     migrations = Path(os.environ.get(
@@ -207,11 +210,17 @@ def run_schema_benchmark(args):
             receipt.update(schema=schema, cleanup="pending")
             (directory / "isolation.json").write_text(json.dumps(receipt))
             print(f"Isolated schema benchmark: {schema}; evidence: {directory}", flush=True)
+            workload = (
+                "from pathlib import Path; from app.segments.verification import measure; "
+                f"measure(Path({str(directory)!r}), {args.profiles}, scale={args.scale!r}, seed_dir={args.seed_dir!r})"
+                if segments else
+                "from pathlib import Path; from app.traits.verification import measure; "
+                f"measure(Path({str(directory)!r}), {args.profiles}, seed_dir={args.seed_dir!r})"
+            )
             commands = [
                 [sys.executable, "-c", CHILD_BOOTSTRAP + "from alembic.config import main; main()",
                  "-c", str(migrations), "upgrade", "head"],
-                [sys.executable, "-c", CHILD_BOOTSTRAP + "from pathlib import Path; from app.traits.verification import measure; "
-                 f"measure(Path({str(directory)!r}), {args.profiles}, seed_dir={args.seed_dir!r})"],
+                [sys.executable, "-c", CHILD_BOOTSTRAP + workload],
             ]
             try:
                 for command in commands:

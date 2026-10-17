@@ -15,6 +15,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { displayValue, displayDate, displayAmount, displayNumber, displayJoined, records, record } from '@/lib/profile-display';
 import { ProfileSectionBoundary } from '@/components/ProfileSectionBoundary';
 import { Skeleton } from '@/components/ui/skeleton';
+import { ConsentEditor } from '@/components/privacy/consent-editor';
 
 export default function ProfileDetail() {
   const { id } = useParams<{ id: string }>();
@@ -220,8 +221,8 @@ export default function ProfileDetail() {
               </CardContent>
             </Card>}</ProfileSectionBoundary>
             <ProfileSectionBoundary {...boundary} section="Consent summary panel">{() => <Card>
-              <CardHeader className="pb-3"><CardTitle className="text-sm">Consent by channel</CardTitle><CardDescription>Recorded communication preferences and provenance.</CardDescription></CardHeader>
-              <CardContent className="p-0"><Table><TableHeader><TableRow><TableHead>Channel</TableHead><TableHead>Status</TableHead><TableHead>Source</TableHead><TableHead className="text-right">Captured</TableHead></TableRow></TableHeader><TableBody>{profile.consents.length ? profile.consents.map((c, i) => <TableRow key={i}><TableCell className="uppercase text-xs">{displayValue(c.channel)}</TableCell><TableCell className="text-xs">{displayValue(c.status)}</TableCell><TableCell className="font-mono text-xs">{displayValue(c.source_key)}</TableCell><TableCell className="text-right text-xs">{displayDate(c.captured_at)}</TableCell></TableRow>) : <TableRow><TableCell colSpan={4} className="text-center text-xs text-muted-foreground py-6">No consent records yet.</TableCell></TableRow>}</TableBody></Table></CardContent>
+              <CardHeader className="pb-3"><CardTitle className="text-sm">Consent by channel</CardTitle><CardDescription>Current status per channel with source and capture time.</CardDescription></CardHeader>
+              <CardContent className="pt-0"><ConsentEditor partnerId={Number(id)} /></CardContent>
             </Card>}</ProfileSectionBoundary>
             </>}</ProfileSectionBoundary>
           </TabsContent>

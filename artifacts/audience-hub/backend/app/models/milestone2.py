@@ -363,6 +363,9 @@ class Destination(Base):
 class Activation(Base):
     __tablename__ = "activations"
     id: Mapped[int] = identity_pk()
+    name: Mapped[str] = mapped_column(Text, nullable=False, server_default="Partner activation")
+    timezone: Mapped[str] = mapped_column(Text, nullable=False, server_default="America/Chicago")
+    column_order: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, server_default=text("'{}'::text[]"))
     segment_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("segments.id"), nullable=False)
     destination_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("destinations.id"), nullable=False)
     field_mapping: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
@@ -384,13 +387,30 @@ class ActivationRun(Base):
     profiles_selected: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     profiles_excluded_consent: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     profiles_excluded_suppressed: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    profiles_excluded_missing_fields: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     profiles_sent: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    snapshot_encrypted: Mapped[bytes | None] = mapped_column(LargeBinary)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     file_path: Mapped[str | None] = mapped_column(Text)
     file_sha256: Mapped[str | None] = mapped_column(String(64))
     error: Mapped[str | None] = mapped_column(Text)
     triggered_by: Mapped[str] = mapped_column(Text, nullable=False, server_default="manual")
     user_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class ActivationRunMember(Base):
+    __tablename__ = "activation_run_members"
+    __table_args__ = (Index("ix_activation_run_members_profile", "profile_id"),)
+    run_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("activation_runs.id", ondelete="CASCADE"), primary_key=True)
+    profile_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("profiles.id", ondelete="CASCADE"), primary_key=True)
+
+
+class ActivationLastMember(Base):
+    __tablename__ = "activation_last_members"
+    __table_args__ = (Index("ix_activation_last_members_profile", "profile_id"),)
+    activation_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("activations.id", ondelete="CASCADE"), primary_key=True)
+    profile_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("profiles.id", ondelete="CASCADE"), primary_key=True)
 
 
 class DeletionRequest(Base):
@@ -404,3 +424,8 @@ class DeletionRequest(Base):
     executed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     notes: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    approved_by: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"))
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    result_counts: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    error: Mapped[str | None] = mapped_column(Text)
+    identifier_encrypted: Mapped[bytes | None] = mapped_column(LargeBinary)

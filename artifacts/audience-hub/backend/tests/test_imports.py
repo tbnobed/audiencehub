@@ -249,6 +249,10 @@ class _ExecuteRecorder:
     def connection(self):
         return SimpleNamespace(connection=SimpleNamespace(driver_connection=self))
 
+    def scalar(self, statement, params=None):
+        assert "authoritative_for_consent" in str(statement)
+        return False
+
     @contextmanager
     def cursor(self):
         yield self

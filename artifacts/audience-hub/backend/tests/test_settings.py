@@ -181,7 +181,7 @@ def test_migration_constraints_on_disposable_pg_only():
         with engine.connect() as connection:
             transaction = connection.begin()
             try:
-                assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0024_segment_templates"
+                assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0026_privacy_workflows"
                 connection.execute(text(
                     "UPDATE admin_settings SET dashboard_default_preset='custom', "
                     "dashboard_default_from='2020-01-01', dashboard_default_to='2020-01-02' WHERE id=1"

@@ -1,7 +1,15 @@
 // Run: node --test src/lib/api.test.ts (Node >= 22.18)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ApiTimeoutError, fetchApi } from './api.ts';
+import { apiUrl, ApiTimeoutError, fetchApi } from './api.ts';
+
+test('API and download paths respect the artifact base without double-prefixing', () => {
+  assert.equal(apiUrl('/api/activation-runs/12/download', '/audience-hub/'),
+    '/audience-hub/api/activation-runs/12/download');
+  assert.equal(apiUrl('/api/activations', '/'), '/api/activations');
+  assert.equal(apiUrl('/audience-hub/api/activations', '/audience-hub/'),
+    '/audience-hub/api/activations');
+});
 
 test('a never-resolving fetch times out and aborts the underlying request', async () => {
   const originalFetch = globalThis.fetch;

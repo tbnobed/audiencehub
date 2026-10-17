@@ -39,6 +39,9 @@ function Router() {
           <Route path="/segments/:id" element={<Segments />} />
           <Route path="/segments/:id/edit" element={<Segments />} />
           <Route path="/activations" element={user.role === 'viewer' ? <Navigate to="/" /> : <Activations />} />
+          <Route path="/activations/new" element={user.role === 'viewer' ? <Navigate to="/" /> : <Activations />} />
+          <Route path="/activations/:id" element={user.role === 'viewer' ? <Navigate to="/" /> : <Activations />} />
+          <Route path="/activations/:id/edit" element={user.role === 'viewer' ? <Navigate to="/" /> : <Activations />} />
           <Route path="/imports" element={user.role === 'viewer' ? <Navigate to="/" /> : <Imports />} />
           <Route path="/sources" element={user.role === 'viewer' ? <Navigate to="/" /> : <Sources />} />
           <Route path="/admin" element={user.role === 'admin' ? <Admin /> : <Navigate to="/" />} />

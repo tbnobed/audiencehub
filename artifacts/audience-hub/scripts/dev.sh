@@ -12,10 +12,12 @@ if [ -z "${DATABASE_URL:-}" ]; then
   echo "DATABASE_URL is required" >&2
   exit 1
 fi
-# Development-only ephemeral secrets; never use these in production.
-export SECRET_KEY="${SECRET_KEY:-$(python3 -c 'import secrets;print(secrets.token_hex(32))')}"
-export FERNET_KEY="${FERNET_KEY:-$(python3 -c 'from cryptography.fernet import Fernet;print(Fernet.generate_key().decode())')}"
-export PII_HASH_PEPPER="${PII_HASH_PEPPER:-$(python3 -c 'import secrets;print(secrets.token_hex(32))')}"
+# Derive missing development keys in-process from a stable SESSION_SECRET.
+# No key material is printed, shell-evaluated, or written to disk.
+export PYTHONPATH="$PWD/backend"
+if [ -z "${SECRET_KEY:-}" ] || [ -z "${FERNET_KEY:-}" ] || [ -z "${PII_HASH_PEPPER:-}" ]; then
+  exec python3 -m app.dev_bootstrap "$PWD/scripts/dev.sh" "$@"
+fi
 export UPLOAD_DIR="${UPLOAD_DIR:-$PWD/.data/uploads}"
 export EXPORT_DIR="${EXPORT_DIR:-$PWD/.data/exports}"
 # The seed CLI writes to $UPLOAD_DIR/seed-data, including when installed.

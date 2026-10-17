@@ -187,7 +187,8 @@ def test_public_grants_fail_closed(admin):
 
 
 @pytest.mark.parametrize("terminate", [False, True])
-def test_child_failure_or_sigterm_cleans_owned_schema(admin, tmp_path, monkeypatch, terminate):
+@pytest.mark.parametrize("mode", ["traits", "segments"])
+def test_child_failure_or_sigterm_cleans_owned_schema(admin, tmp_path, monkeypatch, terminate, mode):
     from app.schema_benchmark import run_schema_benchmark
     engine, url = admin
     monkeypatch.setattr("app.config.get_settings", lambda: SimpleNamespace(database_url=url))
@@ -207,7 +208,8 @@ def test_child_failure_or_sigterm_cleans_owned_schema(admin, tmp_path, monkeypat
             child_state["terminated"] = True
 
     monkeypatch.setattr("app.schema_benchmark.subprocess.Popen", lambda *args, **kwargs: Child())
-    args = SimpleNamespace(traits=True, imports=False, dashboards=False, overview=False,
+    args = SimpleNamespace(traits=mode == "traits", segments=mode == "segments",
+                           imports=False, dashboards=False, overview=False, scale="small",
                            test_suite=False, profiles=1500, output_dir=str(tmp_path), seed_dir=None)
     with pytest.raises(KeyboardInterrupt if terminate else RuntimeError):
         run_schema_benchmark(args)

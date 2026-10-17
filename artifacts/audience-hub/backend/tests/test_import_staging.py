@@ -90,7 +90,7 @@ def test_consents_collapse_newest_with_opt_out_winning_ties():
     assert len(db.params) == 1
     assert db.params[0]["status"] == "opted_out"
     assert db.params[0]["evidence"] == '{"source_record_id": 2}'
-    assert "consents.captured_at < EXCLUDED.captured_at" in db.statement
+    assert "consent_candidate_wins(consents.status" in db.statement
     assert len(db.copies) == 1
 
 

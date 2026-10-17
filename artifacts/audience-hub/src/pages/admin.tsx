@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react';
 import { RefreshCw, Settings2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { SuppressionsPanel } from '@/components/privacy/suppressions-panel';
+import { DeletionPanel } from '@/components/privacy/deletion-panel';
 import { useAuth } from '@/hooks/use-auth';
 import { useAdminSettings, useUpdateAdminSettings, type DashboardSettingsPatch } from '@/hooks/use-dashboards';
 import { validateCustomRange, type DashboardDefaultRange } from '@/lib/date-range';
@@ -53,12 +56,18 @@ export default function Admin() {
     updateSettings.mutate(patch);
   };
 
-  return <div className="max-w-[900px] mx-auto space-y-5 pb-8 animate-in fade-in duration-300">
+  return <div className="max-w-[1100px] mx-auto space-y-5 pb-8 animate-in fade-in duration-300">
     <header>
       <div className="flex items-center gap-2 text-[10px] uppercase tracking-[.16em] font-mono text-signal mb-1"><Settings2 size={13} /> Organization controls</div>
       <h1 className="kin-title text-ink">Admin Settings</h1>
-      <p className="text-xs text-ink-muted mt-1">Configure organization-wide dashboard behavior.</p>
+      <p className="text-xs text-ink-muted mt-1">Configure organization-wide settings and partner privacy controls.</p>
     </header>
+
+    <Tabs defaultValue="settings">
+      <TabsList className="mb-4"><TabsTrigger data-testid="tab-admin-settings" value="settings">Settings</TabsTrigger><TabsTrigger data-testid="tab-admin-suppressions" value="suppressions">Suppressions</TabsTrigger><TabsTrigger data-testid="tab-admin-deletions" value="deletions">Deletion requests</TabsTrigger></TabsList>
+      <TabsContent value="suppressions"><SuppressionsPanel /></TabsContent>
+      <TabsContent value="deletions"><DeletionPanel /></TabsContent>
+      <TabsContent value="settings">
 
     {settings.isLoading ? <div className="rounded-md border border-line bg-surface p-6 text-xs text-ink-muted">Loading settings…</div>
       : settings.isError ? <div role="alert" className="border border-danger/30 bg-danger/5 rounded-md p-5 text-sm text-ink"><p>Settings could not be loaded.</p><p className="text-xs text-ink-muted mt-1">{settings.error instanceof Error ? settings.error.message : 'The request could not be completed.'}</p><Button variant="outline" size="sm" className="mt-3" onClick={() => settings.refetch()}><RefreshCw size={13} className="mr-2" /> Retry</Button></div>
@@ -97,5 +106,7 @@ export default function Admin() {
           {updateSettings.isError && <p role="alert" className="text-xs text-danger">Settings were not saved: {updateSettings.error instanceof Error ? updateSettings.error.message : 'The request could not be completed.'}</p>}
         </div>
       </section>}
+      </TabsContent>
+    </Tabs>
   </div>;
 }

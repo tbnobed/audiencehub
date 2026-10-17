@@ -14,6 +14,12 @@ export class ApiTimeoutError extends Error {
 type ApiRequestOptions = RequestInit & { timeoutMs?: number };
 export const API_TIMEOUT_MS = 15_000;
 
+export function apiUrl(path: string, baseUrl = import.meta.env?.BASE_URL ?? '/') {
+  return path.startsWith('/api/')
+    ? `${baseUrl.replace(/\/$/, '')}${path}`
+    : path;
+}
+
 export async function fetchApi(url: string, options: ApiRequestOptions = {}) {
   // Bound dashboard reads without changing long-running upload/validation writes.
   const { timeoutMs = url.startsWith('/api/dashboards/') ? API_TIMEOUT_MS : undefined, signal, ...requestOptions } = options;
@@ -51,7 +57,7 @@ export async function fetchApi(url: string, options: ApiRequestOptions = {}) {
 
   try {
     return await Promise.race([(async () => {
-      const response = await fetch(url, fetchOptions);
+      const response = await fetch(apiUrl(url), fetchOptions);
       if (!response.ok) {
         let message = 'API Error';
         try {

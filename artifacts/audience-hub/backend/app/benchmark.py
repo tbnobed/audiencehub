@@ -1,7 +1,8 @@
-"""Synthetic import-only measurements in a new disposable local PostgreSQL cluster.
+"""Isolated synthetic import, trait, dashboard and segment measurements.
 
-Never uses DATABASE_URL or application credentials. Inputs and evidence are retained;
-the private PostgreSQL process is stopped on exit. Identity/trait workers are excluded.
+Local mode provisions a disposable PostgreSQL cluster without app credentials.
+Container schema mode uses the configured database only to provision a restricted
+benchmark role/schema; workload connections cannot access live application tables.
 """
 from __future__ import annotations
 
@@ -165,10 +166,15 @@ def _measure(directory: Path, gift_rows: int, contact_rows: int, profile: bool) 
 
 
 def run_benchmark(args) -> int:
+    if getattr(args, "segments", False):
+        if any(getattr(args, flag, False) for flag in ("traits", "imports", "dashboards", "overview", "test_suite")):
+            raise ValueError("--segments cannot be combined with another benchmark mode")
+        if args.profiles < 1:
+            raise ValueError("Segment benchmark requires a positive profile count")
     if os.environ.get("KINSHIP_BENCHMARK_BACKEND") == "schema":
         from app.schema_benchmark import run_schema_benchmark
         return run_schema_benchmark(args)
-    if not args.imports and not getattr(args, "overview", False) and not getattr(args, "dashboards", False) and not getattr(args, "traits", False):
+    if not args.imports and not getattr(args, "overview", False) and not getattr(args, "dashboards", False) and not getattr(args, "traits", False) and not getattr(args, "segments", False):
         raise ValueError("Specify --imports to explicitly start an isolated synthetic benchmark.")
     if os.environ.get("APP_ENV", "").lower() == "production":
         raise ValueError("Benchmark is forbidden when APP_ENV=production.")
@@ -226,6 +232,13 @@ def run_benchmark(args) -> int:
             print(f"Isolated test suite exit={test_result.returncode}: {directory / 'pytest.txt'}",
                   flush=True)
             return test_result.returncode
+        if getattr(args, "segments", False):
+            env["KINSHIP_BENCHMARK_ISOLATED_TESTS"] = "1"
+            result = subprocess.run([sys.executable, "-c",
+                "from pathlib import Path; from app.segments.verification import measure; "
+                f"measure(Path({str(directory)!r}), {args.profiles}, scale={args.scale!r}, seed_dir={args.seed_dir!r})"],
+                cwd=backend, env=env, check=False)
+            return result.returncode
         if getattr(args, "traits", False):
             env["KINSHIP_BENCHMARK_ISOLATED_TESTS"] = "1"
             result = subprocess.run([sys.executable, "-c",
@@ -269,10 +282,13 @@ def run_benchmark(args) -> int:
 
 
 def add_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--segments", action="store_true", help="Six template preview/sample/materialization measurements in isolated PostgreSQL.")
+    parser.add_argument("--scale", choices=("small", "medium", "large"), default="medium",
+                        help="Segment benchmark seed density (default medium; small plausibility uses --profiles 50000 --scale small).")
     parser.add_argument("--traits", action="store_true", help="Real medium seed, full trait job and independent reference in isolated PostgreSQL.")
-    parser.add_argument("--seed-dir", help="Reuse a completed real medium seed directory (traits benchmark only).")
+    parser.add_argument("--seed-dir", help="Reuse matching generated seed files (traits or segments benchmark).")
     parser.add_argument("--dashboards", action="store_true", help="Measure every dashboard in disposable PostgreSQL, no browser.")
-    parser.add_argument("--profiles", type=int, default=500_000, help="Dashboard benchmark population (default 500000).")
+    parser.add_argument("--profiles", type=int, default=500_000, help="Trait/dashboard/segment benchmark population (default 500000).")
     parser.add_argument("--overview", action="store_true", help="Isolated overview scale benchmark.")
     parser.add_argument("--imports", action="store_true", help="Explicitly run isolated import benchmark.")
     parser.add_argument("--rows", type=int, help="Override both row counts.")

@@ -42,7 +42,9 @@ function loadPage(response, dev = false) {
     }).outputText;
     const exports = {};
     cache.set(filename, exports);
-    vm.runInNewContext(output.replaceAll('import.meta.env.DEV', String(dev)), {
+    // The real API helper also reads Vite's BASE_URL. Provide the complete
+    // test environment before evaluating transpiled CommonJS in the VM.
+    vm.runInNewContext(output.replaceAll('import.meta.env', JSON.stringify({ DEV: dev, BASE_URL: '/' })), {
       exports, console, URL, URLSearchParams, setTimeout, clearTimeout,
       fetch: transport, Headers, Response, AbortController, DOMException,
       window, document, navigator, HTMLElement, getComputedStyle,

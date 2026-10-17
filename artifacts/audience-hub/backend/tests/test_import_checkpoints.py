@@ -26,6 +26,8 @@ def test_import_mutex_and_identity_locks_are_transaction_owned():
     import_lock(db, 17)
     import_batch_identity_lock(db)
     assert statements == [
+        ("SELECT pg_catalog.pg_advisory_xact_lock_shared(hashtext(current_schema() || :scope))",
+         {"scope": ":audience-hub:privacy"}),
         ("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))",
          {"key": "audience-hub:import:17"}),
         ("SELECT pg_advisory_xact_lock_shared(:key)", {"key": 0x41484944454E54}),

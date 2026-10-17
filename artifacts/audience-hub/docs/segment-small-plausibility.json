@@ -1,0 +1,165 @@
+{
+  "requested_people": 50000,
+  "scale": "small",
+  "random_seed": 20250308,
+  "as_of": "2024-12-31",
+  "status": "passed",
+  "setup_seconds": {
+    "generate_seed": 42.77840577799725,
+    "real_csv_imports": 156.98693899700083,
+    "identity_resolution": 174.7665105260021,
+    "traits": 204.35751277599775
+  },
+  "templates": [
+    {
+      "key": "lapsed-high-value",
+      "name": "Lapsed partners \u2014 lifetime giving $500+",
+      "count": 39,
+      "preview_cold_ms": 67.9049779973866,
+      "preview_warm_ms": [
+        29.302394003025256,
+        30.56563399877632,
+        26.650582000002032
+      ],
+      "preview_warm_median_ms": 29.302394003025256,
+      "sample_ms": 99.04079199986882,
+      "sample_rows": 25,
+      "materialize_ms": 65.94043799850624,
+      "materialized_count": 39,
+      "expected_range": [
+        39,
+        39
+      ],
+      "pass": true
+    },
+    {
+      "key": "new-partners",
+      "name": "New giving partners \u2014 last 90 days",
+      "count": 843,
+      "preview_cold_ms": 33.89151300143567,
+      "preview_warm_ms": [
+        23.218652000650764,
+        22.095418000390055,
+        22.702743000991177
+      ],
+      "preview_warm_median_ms": 22.702743000991177,
+      "sample_ms": 67.33866600188776,
+      "sample_rows": 25,
+      "materialize_ms": 102.07565000018803,
+      "materialized_count": 843,
+      "expected_range": [
+        843,
+        843
+      ],
+      "pass": true
+    },
+    {
+      "key": "recurring-partners",
+      "name": "Active recurring partners",
+      "count": 7420,
+      "preview_cold_ms": 47.8368820004107,
+      "preview_warm_ms": [
+        34.397253999486566,
+        23.988315002497984,
+        23.098187000869075
+      ],
+      "preview_warm_median_ms": 23.988315002497984,
+      "sample_ms": 76.62765599889099,
+      "sample_rows": 25,
+      "materialize_ms": 248.1232820027799,
+      "materialized_count": 7420,
+      "expected_range": [
+        7420,
+        7420
+      ],
+      "pass": true
+    },
+    {
+      "key": "top-giving",
+      "name": "Top 5% of giving partners",
+      "count": 620,
+      "preview_cold_ms": 66.43116600025678,
+      "preview_warm_ms": [
+        43.77881199980038,
+        39.99621300317813,
+        38.70423199987272
+      ],
+      "preview_warm_median_ms": 39.99621300317813,
+      "sample_ms": 124.59154399766703,
+      "sample_rows": 25,
+      "materialize_ms": 75.09565600048518,
+      "materialized_count": 620,
+      "expected_range": [
+        620,
+        620
+      ],
+      "pass": true
+    },
+    {
+      "key": "engaged-not-giving",
+      "name": "Engaged partners who have not given",
+      "count": 0,
+      "preview_cold_ms": 52.46862800049712,
+      "preview_warm_ms": [
+        25.693483999930322,
+        25.591165001969784,
+        36.809874000027776
+      ],
+      "preview_warm_median_ms": 25.693483999930322,
+      "sample_ms": 85.88238599986653,
+      "sample_rows": 0,
+      "materialize_ms": 45.2108280005632,
+      "materialized_count": 0,
+      "expected_range": [
+        0,
+        0
+      ],
+      "pass": true
+    },
+    {
+      "key": "lapsing-opted-in",
+      "name": "Email-permitted partners with past giving",
+      "count": 1404,
+      "preview_cold_ms": 99.65092700076639,
+      "preview_warm_ms": [
+        76.70285399944987,
+        74.47063699873979,
+        68.14846000270336
+      ],
+      "preview_warm_median_ms": 74.47063699873979,
+      "sample_ms": 177.47918700115406,
+      "sample_rows": 25,
+      "materialize_ms": 120.18673200145713,
+      "materialized_count": 1404,
+      "expected_range": [
+        1404,
+        1404
+      ],
+      "pass": true
+    }
+  ],
+  "seed_sha256": {
+    "donor_crm_contacts.csv": "7579cb835009e4ea65ef28186f01060beaf36d85394ca7f7cdaa14dfa97e35f6",
+    "giving_platform_gifts.csv": "d8c9647d593eff081fc3d23c8b1271011bf6f8e1c104b8c3460ae808ece0bb3b",
+    "esp_contacts.csv": "69d6688a407aa5b12ed71142ea3759fda03c07f153b0b03791c729e03ac3845f",
+    "five9_calls.csv": "4609004ea199df0a9d685c43bc6ec5a7d7c9bf3f14eddfe0762bf820485d1c66",
+    "zeta_enrichment.csv": "47cbb3f46d79721f0ee127849ae6e687c2f96109797fda3df5cb6dc70017d986"
+  },
+  "reference_sql": {
+    "lapsed-high-value": "\nSELECT count(*) FROM active_profiles p JOIN profile_traits t ON t.profile_id=p.id\nWHERE t.donor_status='lapsed' AND t.ltv_total>=500\nAND p.id IN (SELECT profile_id FROM gifts WHERE gift_date<=:as_of\n GROUP BY profile_id HAVING max(gift_date)<CAST(:as_of AS date)-730 AND sum(amount)>=500)\n",
+    "new-partners": "\nSELECT count(*) FROM active_profiles p JOIN profile_traits t ON t.profile_id=p.id\nWHERE t.first_gift_date BETWEEN CAST(:as_of AS date)-89 AND :as_of\nAND p.id IN (SELECT profile_id FROM gifts WHERE gift_date<=:as_of\n GROUP BY profile_id HAVING min(gift_date)>=CAST(:as_of AS date)-89)\n",
+    "recurring-partners": "\nSELECT count(*) FROM active_profiles p JOIN profile_traits t ON t.profile_id=p.id\nWHERE t.is_recurring_active AND EXISTS (SELECT 1 FROM gifts g WHERE g.profile_id=p.id\n AND g.is_recurring AND g.gift_date BETWEEN CAST(:as_of AS date)-44 AND :as_of)\n",
+    "top-giving": "\nWITH totals AS (\n SELECT p.id, sum(g.amount) AS amount FROM active_profiles p\n JOIN gifts g ON g.profile_id=p.id\n WHERE g.gift_date BETWEEN CAST(:as_of AS date)-364 AND :as_of\n GROUP BY p.id HAVING sum(g.amount)>0\n), ranked AS (\n SELECT id, amount, rank() OVER(ORDER BY amount DESC) AS position,\n count(*) OVER() AS population FROM totals\n)\nSELECT count(*) FROM ranked r JOIN profile_traits t ON t.profile_id=r.id\nWHERE r.position<=ceil(r.population*0.05) AND t.gift_amount_12m=r.amount\n",
+    "engaged-not-giving": "\nSELECT count(*) FROM active_profiles p JOIN profile_traits t ON t.profile_id=p.id\nWHERE t.video_views_30d>=3 AND t.gift_count_total=0\nAND NOT EXISTS (SELECT 1 FROM gifts g WHERE g.profile_id=p.id AND g.gift_date<=:as_of)\nAND (SELECT count(*) FROM events e WHERE e.profile_id=p.id AND e.name='Video Watched'\n AND e.occurred_at>=CAST(:as_of AS date)-29\n AND e.occurred_at<CAST(:as_of AS date)+1)>=3\n",
+    "lapsing-opted-in": "\nSELECT count(*) FROM active_profiles p JOIN profile_traits t ON t.profile_id=p.id\nWHERE t.gift_count_12m=0 AND t.gift_count_total>=2\nAND EXISTS (SELECT 1 FROM consents c WHERE c.profile_id=p.id\n AND c.channel='email' AND c.status='opted_in')\nAND p.id IN (SELECT profile_id FROM gifts WHERE gift_date<=:as_of\n GROUP BY profile_id HAVING count(*)>=2 AND max(gift_date)<CAST(:as_of AS date)-364)\n"
+  },
+  "cold_definition": "First preview in a fresh connection pool after fixture preparation; PostgreSQL/OS caches are NOT flushed.",
+  "warm_definition": "Median of three further previews in the same session.",
+  "scope": "Preview includes validation/compiler/count and timeout guard; sample includes 25 rows and breakdowns; materialize includes membership/history/audit and commit. Setup excluded.",
+  "population": {
+    "active_profiles": 49151,
+    "gifts": 480225,
+    "events": 3731,
+    "source_records": 608956
+  }
+}

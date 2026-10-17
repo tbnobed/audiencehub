@@ -70,6 +70,10 @@ def schedule_once(db: Session, task: str, window_key: str, job_type: str,
 
 def tick(db: Session) -> None:
     now = datetime.now(timezone.utc)
+    from app.activations.schedule import tick_activations
+    tick_activations(db, now)
+    schedule_once(db, "activation.exports.retention", now.strftime("%Y-%m-%d"),
+                  "activation.expire_exports", {})
     # Keep an inexpensive hourly heartbeat for scheduler health and run one full
     # trait recompute per UTC day.
     hour = now.strftime("%Y-%m-%dT%H")

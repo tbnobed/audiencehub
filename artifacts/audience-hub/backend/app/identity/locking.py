@@ -28,6 +28,8 @@ def import_identity_lock(engine):
 
 def acquire_import_lock(db):
     """Acquire on the writing session at the start of each import batch."""
+    from app.privacy.locking import privacy_shared
+    privacy_shared(db)
     db.execute(
         text("SELECT pg_advisory_xact_lock_shared(:key)"),
         {"key": IDENTITY_IMPORT_LOCK_KEY},
@@ -62,6 +64,8 @@ def acquire_identifier_locks(db, identifiers):
 
 def acquire_resolver_lock(db):
     """Nonblocking exclusive transaction lock; held until commit/rollback."""
+    from app.privacy.locking import privacy_shared
+    privacy_shared(db)
     if not db.scalar(
         text("SELECT pg_try_advisory_xact_lock(:key)"),
         {"key": IDENTITY_IMPORT_LOCK_KEY},

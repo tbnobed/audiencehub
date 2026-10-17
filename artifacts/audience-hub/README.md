@@ -2,6 +2,35 @@
 
 Self-hosted customer data operations console for OBTV/TBN. The console provides login, PostgreSQL job processing, synthetic CSV generation, source management, imports, deterministic identity resolution, profile search/detail, and Data Health. No real donor data is included.
 
+## M5 checks and M7 activation/privacy
+
+M7 is implemented before M6 at the user's request. Activations support CSV,
+Google Customer Match and Meta manual-upload files, and signed webhooks. The
+wizard configures audiences, mappings, consent, schedules and destinations;
+run history includes funnel counts and audited downloads. Admins can manage
+consent, suppressions and two-admin deletion requests. Google/Meta API sync is
+not included.
+
+Run production-scale segment checks only in the isolated benchmark schema:
+
+```sh
+docker compose exec api kinship benchmark --segments --profiles 500000 --scale medium
+```
+
+This prints each template's count, first-query and warm-median preview latency,
+sample time and materialization time. “Cold” does not mean flushed database/OS
+caches. See [M5 verification](docs/M5_VERIFICATION.md) for independent SQL
+plausibility checks on the 50,000-person small seed, and
+[M7 verification](docs/M7_VERIFICATION.md) for required-test coverage.
+[Earlier-item merge audit](docs/PRE_M7_MERGE_AUDIT.md) records commit IDs and the
+remaining uncertainty about the historical production profile crash.
+
+Before updating a deployment, back up and drain workers, apply migrations
+through `0026_privacy_workflows`, then restart the API and workers together.
+Deletion revokes retained exports and historical source files; previously
+downloaded/delivered copies and backups cannot be recalled. Review the warnings
+in Admin and [Security and privacy](docs/SECURITY_PRIVACY.md) before approval.
+
 ## Development
 
 Requires Python 3.12, Node 20+, npm, PostgreSQL 16, and the variables in `.env.example`. Use a disposable PostgreSQL database with **synthetic data only**. For Replit the preconfigured `DATABASE_URL` is used; do not import real records.

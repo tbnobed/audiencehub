@@ -223,7 +223,7 @@ def resolve_bulk(db: Session, job_id: int | None = None, *, mode: str = "auto") 
         UPDATE events e SET profile_id=links.profile_id FROM (
           SELECT DISTINCT ON(p.source_id,k.message_id) p.source_id,k.message_id,a.profile_id
           FROM ir_pending p JOIN ir_assign a ON a.id=p.id
-          CROSS JOIN LATERAL (VALUES(p.raw_hash),(p.external_id)) k(message_id)
+          CROSS JOIN LATERAL (VALUES(p.raw_hash),(p.external_id),(p.attributes->>'_event_message_id')) k(message_id)
           ORDER BY p.source_id,k.message_id,p.id
         ) links WHERE e.source_id=links.source_id AND e.message_id=links.message_id
           AND e.profile_id IS NULL;
@@ -291,8 +291,17 @@ def _materialize(db, *, skip_unchanged: bool):
         DELETE FROM consents c USING ir_moves m WHERE c.profile_id=m.loser;
         INSERT INTO consents(profile_id,channel,status,source_id,captured_at,evidence)
         SELECT DISTINCT ON(profile_id,channel)
-               profile_id,channel,status,source_id,captured_at,evidence FROM ir_consents
-        ORDER BY profile_id,channel,(status='opted_out') DESC,captured_at DESC,tie
+               profile_id,channel,status,source_id,captured_at,evidence FROM (
+          SELECT c.*, s.settings->>'authoritative_for_consent'='true' AS authoritative,
+            max(c.captured_at) FILTER(WHERE c.status='opted_out')
+              OVER(PARTITION BY c.profile_id,c.channel) AS last_out
+          FROM ir_consents c JOIN sources s ON s.id=c.source_id
+        ) candidates
+        ORDER BY profile_id,channel,
+          CASE WHEN status='opted_in' AND authoritative AND
+            captured_at>COALESCE(last_out,'-infinity'::timestamptz) THEN 3
+            WHEN status='opted_out' THEN 2 WHEN status='opted_in' THEN 1 ELSE 0 END DESC,
+          captured_at DESC,tie
         ON CONFLICT(profile_id,channel) DO UPDATE SET status=EXCLUDED.status,
           source_id=EXCLUDED.source_id,captured_at=EXCLUDED.captured_at,evidence=EXCLUDED.evidence
     """ + ("""

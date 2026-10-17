@@ -28,6 +28,8 @@ An activation connects one segment to one destination with a field mapping, an o
 ### Meta custom audience file
 - Columns: `email`, `phone`, `fn`, `ln`, `zip`, `ct`, `st`, `country`, `external_id`.
 - Normalize per Meta's rules (lowercase, trim, phone digits only with country code, first name without punctuation, state 2-letter lowercase), then SHA-256 hex. `external_id` is the profile ID, hashed.
+- The `external_id` mapping is fixed to `profile.id`; custom or cleared mappings
+  are rejected explicitly. Other provider fields remain configurable.
 - Output CSV ready for manual upload.
 
 ### Webhook
@@ -57,3 +59,61 @@ An activation connects one segment to one destination with a field mapping, an o
 - Webhook signing verifies with the documented algorithm; retry and failure paths behave as specified (use a local test server).
 - SSRF guard blocks `127.0.0.1`, `10.0.0.0/8`, `169.254.169.254`, and hostnames resolving to private addresses unless allowed.
 - Delta mode sends correct adds and removes across two runs.
+
+## M7 implementation details
+
+- Destinations and activations are exposed under the paths in `API.md`. File
+  destinations produce manual-upload files; Google and Meta API synchronization
+  is deliberately not implemented.
+- A mapping is an ordered object of output column labels to
+  `{kind: "profile"|"trait"|"enrichment"|"constant", key?, source?, value?, required?}`.
+  The server validates every source field, preserves column order separately from
+  PostgreSQL JSONB, and rejects expired/non-exportable enrichment. `include_pii=false`
+  excludes contact/enrichment fields and free-form constants. Explicit
+  `required:true` makes a missing mapped value count as a missing-field exclusion;
+  ad files always require at least a valid email or phone.
+- Fernet encrypts signing secrets, custom-header values and queued configuration
+  snapshots. Responses expose only a signing-secret suffix and header names.
+  URLs cannot contain credentials, fragments or query strings; put credentials in
+  encrypted custom headers instead.
+- The SSRF check rejects any non-global DNS answer unless an admin explicitly
+  allows internal networking. The validated address is pinned to the TCP
+  connection, retaining the original TLS SNI/certificate hostname. Proxies and
+  redirects are not used. DNS resolution has a five-second bound; HTTP attempts
+  have an absolute ten-second deadline, a bounded response read, and an 8 MiB
+  payload cap. Unsafe transport headers cannot be overridden.
+- “Five attempts” means five requests total, with four intervening waits of
+  2, 4, 8 and 16 seconds (32 seconds is the backoff cap, not a sixth attempt).
+  Each retry uses identical body bytes and the same run/batch idempotency key.
+  A failed run does not advance the last-successful delta membership. Successful
+  added records are counted even if a later batch fails. Explicit operator
+  re-runs get a new run ID; delivery jobs are single-attempt at the queue level
+  because network retries are handled inside the sender.
+- The erasure index and planned filename are durable before any export bytes
+  are written. Incomplete/failed exports cannot be downloaded. A worker crash
+  therefore cannot leave an untraceable partial file containing deleted partner
+  data. Privacy changes serialize against selection/delivery/downloads through
+  the schema-scoped privacy advisory lock. Selection/delivery also takes the
+  nonblocking resolver/import lock before trait and segment locks to keep
+  survivor values stable.
+- Numeric five-field cron accepts wildcards, ranges, lists and steps. IANA
+  timezone defaults to `America/Chicago`. Nonexistent spring-forward wall times
+  are skipped; repeated autumn wall-clock minutes have one durable scheduling
+  key. Disabling an activation or its snapshotted destination cancels a queued
+  delivery before it sends.
+
+### Provider normalization sources
+
+Google's format guidance:
+<https://support.google.com/google-ads/answer/10589050?hl=en-GB>.
+Meta's customer-list guidance:
+<https://developers.facebook.com/docs/marketing-api/audiences/guides/custom-audiences>.
+
+The project emits SHA-256 **hex**. Google email is trimmed/lowercased and dots are
+removed from Gmail/Googlemail local parts; phone is E.164 including `+`.
+Names are NFC lowercase Unicode letters with punctuation removed: accents are
+retained, not transliterated (`Zoë` → `zoë`, `Pérez-O'Neil` → `pérezoneil`).
+Google country and US five-digit zip remain unhashed. Meta phone is country-code
+digits, state is two-letter lowercase (US full state names are mapped), and
+partner ID is hashed for `external_id`. Regression vectors include uppercase
+email, punctuated phones, accents and apostrophes.

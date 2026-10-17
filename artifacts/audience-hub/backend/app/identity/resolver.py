@@ -185,12 +185,10 @@ def _move_profile_references(db: Session, winner_id: int, loser_id: int) -> None
             text("SELECT * FROM consents WHERE profile_id=:winner AND channel=:channel"),
             {"winner": winner_id, "channel": consent["channel"]},
         ).mappings().first()
-        prefer_loser = old is None or (
-            consent["status"] == "opted_out" and old["status"] != "opted_out"
-        ) or (
-            (consent["status"] == "opted_out") == (old["status"] == "opted_out")
-            and consent["captured_at"] > old["captured_at"]
-        )
+        prefer_loser = old is None or db.scalar(text(
+            "SELECT consent_candidate_wins(:os,:ot,:oi,:ns,:nt,:ni)"
+        ), {"os": old["status"], "ot": old["captured_at"], "oi": old["source_id"],
+            "ns": consent["status"], "nt": consent["captured_at"], "ni": consent["source_id"]})
         if prefer_loser:
             db.execute(
                 text("""
@@ -266,11 +264,8 @@ def _materialize_source_attributes_batch(db: Session, assignments: list[tuple[di
                 ON CONFLICT (profile_id, channel) DO UPDATE SET status=EXCLUDED.status,
                   source_id=EXCLUDED.source_id, captured_at=EXCLUDED.captured_at,
                   evidence=EXCLUDED.evidence
-                WHERE (EXCLUDED.status='opted_out' AND consents.status <> 'opted_out')
-                   OR (consents.status <> 'opted_out'
-                       AND consents.captured_at < EXCLUDED.captured_at)
-                   OR (EXCLUDED.status=consents.status
-                       AND consents.captured_at < EXCLUDED.captured_at)
+                WHERE consent_candidate_wins(consents.status,consents.captured_at,consents.source_id,
+                  EXCLUDED.status,EXCLUDED.captured_at,EXCLUDED.source_id)
             """),
             consents,
         )
@@ -353,6 +348,8 @@ def _assign_record_references(
             (record["source_id"], record["raw_hash"], record_id, profile_id),
             (record["source_id"], record["external_id"], record_id, profile_id),
         ))
+        if (record.get("attributes") or {}).get("_event_message_id"):
+            event_links.append((record["source_id"], record["attributes"]["_event_message_id"], record_id, profile_id))
     db.execute(
         text("""
             UPDATE events e SET profile_id=event_link.profile_id

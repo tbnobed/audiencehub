@@ -104,6 +104,8 @@ class Source(Base):
 from app.models.milestone2 import (  # noqa: E402,F401
     Activation,
     ActivationRun,
+    ActivationRunMember,
+    ActivationLastMember,
     Consent,
     DeletionRequest,
     Destination,

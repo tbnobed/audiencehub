@@ -23,6 +23,8 @@ from app.dashboards.api import router as dashboards_router
 from app.settings.api import router as settings_router
 from app.client_errors import router as client_errors_router
 from app.segments.api import router as segments_router
+from app.activations.api import router as activations_router
+from app.privacy.api import router as privacy_router
 
 
 @asynccontextmanager
@@ -41,6 +43,8 @@ async def lifespan(app: FastAPI):
 settings = get_settings()
 app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 app.include_router(segments_router)
+app.include_router(activations_router)
+app.include_router(privacy_router)
 app.include_router(dev.router)
 app.include_router(oidc.router)
 app.include_router(sources_router)

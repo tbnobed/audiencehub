@@ -4,7 +4,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(extra="ignore", env_file=".env")
+    model_config = SettingsConfigDict(extra="ignore", env_file=".env", hide_input_in_errors=True)
     app_env: str = "development"
     database_url: str
     secret_key: str
@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     gmail_style_domains: str = "gmail.com,googlemail.com"
     upload_retention_days: int = 7
     deletion_two_person: bool = True
+    backup_keep_days: int = Field(default=14, ge=1)
     event_retention_days: int = 730
     export_retention_days: int = 14
     worker_concurrency: int = 4

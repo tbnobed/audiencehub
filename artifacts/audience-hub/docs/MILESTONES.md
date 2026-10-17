@@ -2,6 +2,9 @@
 
 Build in this order. Each milestone ends with its acceptance checks passing, tests green (`pytest -q` and `npm run build && npm run lint`), the README updated, and a short summary to me.
 
+**User-directed order update:** after M5, implement **M7 before M6**, then M8.
+Milestone numbers remain unchanged. M5 is accepted pending production-scale checks.
+
 ## M1: Foundation
 
 - Repo layout from the prompt, `pyproject.toml` with pinned deps, frontend scaffold (Vite + React + TS + Tailwind + Router + Query), theme tokens from `UI.md`, bundled fonts.
