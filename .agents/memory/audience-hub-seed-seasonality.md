@@ -11,8 +11,9 @@ In seed acceptance reports, show the November–December share for all gifts and
 
 Seed history must be relative to one UTC `as_of`, defaulting to today, never to
 fixed demo years or the maximum observed gift date. Explicit dates are for
-reproducibility. Target giver recency is 35–45% active, 10–15% lapsing, remainder
-lapsed; include new, reactivated, recurring and engaged nongiver populations.
+reproducibility. The earlier 35–45% active / 10–15% lapsing demo target is
+superseded by the real-account proportions in [Zeta replacement scope](zeta-parity-scope.md).
+Keep imported model-score recency separate from computed donation recency.
 
 **Why:** The user found that fixed historical seeds made current dashboards,
 recency templates and RFM misleading despite otherwise plausible distributions.

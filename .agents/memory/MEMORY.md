@@ -8,3 +8,4 @@
 - [Verification scope and copy](verification-scope-and-copy.md) — final 500k timings belong on the user's 16-core server; use “partners” in user-facing copy.
 - [Milestone order](milestone-order.md) — build M7 activation, consent and deletion before M6 event ingestion and SDK.
 - [Development key stability](development-key-stability.md) — encryption and suppression keys must survive restarts; never restore per-start random fallbacks.
+- [Zeta replacement scope](zeta-parity-scope.md) — audit-led sequence supersedes generic seed mix; Master ID first, SDK waits, exclusions explicit.

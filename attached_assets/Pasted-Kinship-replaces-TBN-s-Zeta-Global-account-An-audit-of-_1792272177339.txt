@@ -1,0 +1,121 @@
+Kinship replaces TBN's Zeta Global account. An audit of that account (Oct 17, 2026) defines what Kinship must receive, store, segment and export. Align Kinship to it and build a permanent Master ID as the identity foundation. Do the steps in order; report after each with tests and timings. Out of scope: email/SMS sending, journeys, web overlays, AI tools, Zeta insight products. Existing Google/Meta destinations stay as-is with no new work. The M6 JS SDK waits.
+
+What the audit shows
+- 7.83M profiles. All TBN Reference 7,807,899; Known to Customer 7,675,779; Has Active Email 4,475,258; Known to Zeta (third-party match) 3,858,427; Active (seen or contacted in last 120 days) 2,902,186.
+- About 93% of profiles are "cdp-<id>" records (TBN donor/CRM ids); the rest are Zeta UUIDs ("Zeta Known"). Cross-reference fields: HubSpot record id, Okta customer id (TBN+ login), donor account number, email_md5, email_sha256, last_mobile_phone. Zeta's identity settings were never configured.
+- All feeds come from TBN's Snowflake ("TBN UES"), written as JSONL to SFTP folders /users/, /resources/ and /events_non_real_time/, split at 500k lines:
+  - Hourly: people file (email md5).
+  - Daily about 9 PM ET: donation (about 3,000 rows a day), donation_return (about 27), order_shipped (about 171), vod_viewed.
+  - Daily 5 AM ET: resources, namely source/appeal codes (180,472), products (2,267), VOD titles (92,926).
+  - Monthly: analyst model scores (RFM, donation likelihood, donation ask models, wealth score).
+  - Historical vod_viewed backfill: about 132M rows.
+- Live exports: All TBN Reference to CustomerPulse PII on the 2nd monthly; RFM TBN All Donor Reference to CustomerPulse on the 1st and to Trilogy SFTP (CSV, all attributes) on the 29th.
+- Zeta also has three file-drop lookup flows: a CSV of HubSpot record ids, Okta ids or donor account numbers goes in, matching profile ids come out.
+- Third-party enrichment (religion, politics, income bands, military/veteran, content affinity) is appended on about 50% of the file. TBN will license it from a vendor; it is sensitive data.
+
+Step 1: Master ID
+- profiles.master_id: "kin_" + ULID. Assigned once, immutable, never derived from PII, never reused. Backfill in a resumable batched migration. First, report how profile ids behave today on merge and unmerge.
+- Keys:
+  - System keys (one person per value): donor_account_number, hubspot_record_id, okta_customer_id, zeta_cdp_id ("cdp-<id>"), zeta_uid (Zeta UUID).
+  - Contact keys (shareable within a household): email, email_md5, email_sha256, mobile_phone (E.164).
+- Normalization: email trimmed and lowercased; md5 and sha256 computed on ingest from every plain email; hash-only records match on the hash. Phones via libphonenumber, default region US.
+- Resolver:
+  - Contact keys merge profiles only if the result would not hold two different values of any system key; otherwise create an identity review item (spouses sharing an email).
+  - Multiple hubspot_record_ids per person are allowed, flagged duplicate_in_source and listed in a report.
+- Merges: the survivor keeps the oldest master_id. Retired ids go to master_id_aliases(retired_id, survivor_id, merge_id, merged_at) and chain-resolve.
+- Unmerge: the original id stays with the side holding the oldest system key; the other side gets a new id.
+- Crosswalk table identity_xref(master_id, key_type, key_value, source_id, first_seen_at, last_seen_at, status), indexed on (key_type, key_value) and on master_id.
+- API: GET /api/identity/lookup?key_type=&value=, POST /api/identity/lookup/bulk (up to 10k), GET /api/identity/master/{id}. All resolve retired ids.
+- File-drop lookup, replacing Zeta's three lookup flows: a CSV of hubspot_record_ids, okta_customer_ids or donor_account_numbers is dropped in an SFTP folder, and a CSV of key → master_id comes back.
+- UI: master_id on the profile with a copy button; searchable in Profiles; available in every export. Data Health card for key coverage, conflicts and hash-only profiles.
+- Tests:
+  - Merge chain A+B+C keeps the oldest id and resolves retired ids.
+  - Unmerge rule.
+  - Spouses stay separate and create a review item.
+  - Hash-only match.
+  - Duplicate HubSpot ids are flagged.
+  - Bulk lookup of 10k keys in under 2 s at 500k profiles.
+
+Step 2: Data model matching the Zeta schema
+Use Zeta's property names (snake_case) as Kinship's canonical names so migrated data maps one-to-one. Drop the camel-case duplicates (lastdonationdate and similar).
+- Donor (Donor Direct): donor_account_status, donor_account_type, donor_status, ambassador, inception_source_code, last_donation_amount, last_donation_date, last_donation_source, lifetime_amount, lifetime_avg_donation, number_of_donations, has_recurring_donation, donation_trend; mail preferences recptpref, stopmail, offerpref, phonepref, newspref, receives_nl, do_not_call, suprcore; inmate (flag as sensitive).
+- Model scores (imported, each with a model date):
+  - RFM: rfm_raw_recency/frequency/monetary, rfm_recency/frequency/monetary_score, rfm_rfm_score, rfm_bi_segment, rfm_date.
+  - Likelihood: donation_likelihood_prob/decile/percentile/model_date.
+  - Ask amounts: donation_prob_20_40, _50_75, _80_120, _200_300, _1000_1500, est_best_amt, amt_suggested, donation_ask_2_2_multinomial, donation_ask_2_2_knn.
+  - wealth_score.
+  - Kinship's own RFM stays a separate trait for cross-checking.
+- SMS consent: mobile_mktg_optin_tbn, mobile_mktg_optin_date_tbn, mobile_mktg_optout_date_tbn, initial/last mobile_mktg source, keyword_tbn, mobile_consent, tbn_call_center_sms_optin, tlv_optin_date, carrier, aggregator_code, last_mobile_bounce_reason. Keep these as consent evidence: SMS is moving to another platform, and its opt-in history must survive.
+- TBN+: tbn_plus_subscription (basic, premium_monthly, premium_annual), tbn_plus_subscription_status, tbn_plus_subscription_update (values like "Upgrade…"), tbn_plus_subscription_end_date, tbn_video_on_demand_updates_opt_status, signup_date, historical_vimeo.
+- Email hygiene: has_active_email, email_validated, historical_email_engaged, historical_email_hard_bounce_reason.
+- Address: standard fields plus NCOA return code, last processed date and address update date.
+- Activity: last_seen and last_contact, so "Active (120 days)" can be computed.
+- Events: donation, donation_return, order_shipped, vod_viewed, email_signup, user_web_signup, preference_update, text_signup, text_web_signup, text_call_center_signup, text_reply_confirmation, text_reply_stop. Donation events carry amount, fund and source code.
+- Resources: first-class tables for source_codes, products and vod_titles. Events reference them. Segment conditions can join through them (gift on a source code in a list; VOD in series X).
+- Enrichment: vendor attributes stored separately from first-party data, each tagged with vendor, license id, append date and a sensitive flag. Religion, politics and military are always sensitive. Sensitive attributes are hidden from viewer role and excluded from exports unless an admin selects them explicitly; every such export is audit-logged.
+
+Step 3: Ingestion matching the current feeds
+- SFTP JSONL drop, compatible with Zeta's layout: folders /users/, /resources/, /events_non_real_time/; files split at 500k lines; same field names. Cutover is then just pointing the existing Snowflake exports at Kinship.
+- Snowflake source, read-only: key-pair auth (private key stored with Fernet); maps a query or table to people, events or resources; cursor column for incremental pulls; schedule; 100-row dry run; mock-based tests.
+- Both use the existing COPY/set-based import path and the Step 1 identity rules.
+- Default schedules: people hourly; events daily 9 PM ET; resources daily 5 AM ET; model scores monthly.
+- Zeta migration import: load Zeta's exit exports (people properties, full event history, appended enrichment, lookup tables) keyed on zeta_cdp_id/zeta_uid, so every Zeta profile gets a master_id.
+
+Step 4: Seed matching the audit, dated from today
+- as_of defaults to today (UTC). Event history covers the 5 years before as_of; --as-of for tests. No hardcoded dates. Traits and rollups use one reference date, never the data's maximum date.
+- Proportions, scaled to --profiles and taken from the real counts:
+  - 93% zeta_cdp_id; 7% zeta_uid only.
+  - About 30% with a donor account: 22.5% with RFM/giving history; 7.6% with an account but no rfm_date.
+  - About 91% of givers with rfm_recency_score 0 (lapsed); about 1.1% of givers with a donation in the last 30 days.
+  - 27% TBN+: basic 26.2%, premium 0.46%; about 11% of premium are upgraders.
+  - 57% active email; 37% active in the last 120 days; 18% with vod_viewed; 23% with VOD updates opted out.
+  - SMS: 1.1% subscribed, 1.9% call-center opt-ins, 0.5% with an opt-out date, 92% with no active phone.
+  - Daily rates in the last 30 days, scaled: about 3,000 donations, 27 returns and 171 orders per day at 7.83M.
+  - 49% known_to_zeta, with synthetic enrichment attributes on those profiles only.
+  - Identity overlap: shared household emails, some hash-only records, a few duplicate HubSpot ids.
+- Giving: log-normal amounts (median about $50), year-end heavier, Giving Tuesday donations on source codes T4XWDGT, T4XPCGT, T4YWDGT and T4YPCGT.
+- Test: a small seed with as_of = today must hit every proportion above within ±20% relative, and the default dashboard range must be non-empty.
+
+Step 5: Segment parity
+Replace the generic templates with these in-use Zeta audiences, using these rules:
+- All TBN Reference: every master_id.
+- Has Active Email: has_active_email = true.
+- Active: last_seen or last_contact within 120 days.
+- TBN Plus Subscription: tbn_plus_subscription in (basic, premium_monthly, premium_annual).
+- TBN Plus Free Users: = basic.
+- TBN Plus Premium: premium_monthly or premium_annual.
+- Premium Upgraders: tbn_plus_subscription_update starts with "Upgrade".
+- TBN App Non-Donors: any plan, no donor account, no donation in 720 days.
+- TBN App Donors: any plan and a donation in 720 days.
+- Basic Donors: basic, a donor account and lifetime_amount > 0.
+- Basic Recurring Donors: basic and has_recurring_donation = true.
+- Basic One-Time Donors: basic and rfm_raw_frequency = 1.
+- RFM TBN All Donor Reference: donor_account_status and rfm_date exist.
+- RFM Lapsed Donors: rfm_recency_score = 0.
+- Partner Names Non-Donors: donor account and no rfm_date.
+- Donors Past 30 Days: a donation event in the last 30 days.
+- Living Legacy Prospects V2: donation_likelihood_prob > 0.75, wealth_score > 4, amt_suggested > 500, a donation within 5 years.
+- Giving Tuesday 2024: a donation on source codes T4XWDGT, T4XPCGT, T4YWDGT or T4YPCGT.
+- Mobile Subscribed: mobile_mktg_optin_tbn = true and an active phone.
+- Call Center SMS Opt-ins: tbn_call_center_sms_optin = true and an active phone.
+- SMS Opt-Out Date Exists: mobile_mktg_optout_date_tbn exists.
+- VOD Optouts: tbn_video_on_demand_updates_opt_status = false.
+- Customers with VOD Viewed: any vod_viewed event.
+- Each one: a test asserting its count share on the seed is within ±20% of the real share (real counts / 7.83M). Report counts and run times at 500k.
+
+Step 6: Exports matching the live ones
+- Scheduled SFTP destination: key auth, host key pinning, cron schedule, CSV with all or selected attributes, optional gzip, manifest with row count and checksum, run history, failure alerts.
+- Preconfigured, disabled until credentials are added:
+  - "CustomerPulse – All TBN Reference": 2nd of each month.
+  - "CustomerPulse – RFM Donor Reference": 1st of each month.
+  - "Trilogy – RFM Donor Reference": 29th of each month, CSV, all attributes.
+- Crosswalk export: master_id, key_type, key_value, status, updated_at, plus an aliases file. Daily to SFTP, and to Snowflake once that writer exists.
+- master_id is included in every export.
+
+Step 7: Fixes from the 500k run
+- run_import sets its own statement_timeout, so in-process callers do not inherit the session default.
+- `kinship benchmark --segments` defaults to read-only against existing data. --isolated keeps the separate-schema mode, and that schema is dropped on failure too.
+
+Step 8: Plan for production scale (8M profiles, 150M+ events)
+- Write SCALE_8M.md: projected Zeta migration import and identity full pass times, extrapolated from the 500k measurements; monthly partitioning of events; parallel identity passes; index strategy; disk and memory needs.
+- Add --profiles 8000000 --scale large support. Do not run it.
