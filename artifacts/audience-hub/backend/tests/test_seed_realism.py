@@ -1,4 +1,6 @@
 import csv
+from collections import Counter, defaultdict
+from datetime import date, timedelta
 from pathlib import Path
 from statistics import median
 
@@ -12,6 +14,7 @@ COLUMNS = (
     "external_id", "contact_external_id", "email", "phone", "amount",
     "gift_date", "campaign", "channel", "is_recurring", "recurring_plan_id",
 )
+AS_OF = date(2025, 1, 1)
 
 
 @pytest.fixture(scope="module")
@@ -21,7 +24,7 @@ def small_report(tmp_path_factory):
     with path.open("w", newline="", encoding="utf-8") as stream:
         writer = csv.DictWriter(stream, fieldnames=COLUMNS)
         writer.writeheader()
-        for number, gift in enumerate(generate_giving(50_000, 0.5, 20250308)):
+        for number, gift in enumerate(generate_giving(50_000, 0.5, 20250308, as_of=AS_OF)):
             writer.writerow({
                 "external_id": f"gift-{number}", "contact_external_id": f"p-{gift.person_index}",
                 "amount": f"{gift.amount:.2f}", "gift_date": str(gift.gift_date),
@@ -74,28 +77,81 @@ def test_annual_seasonality_growth_and_flat_monthly_plans(small_report):
 
 
 def test_retention_has_churn_and_replacement_not_100_percent(small_report):
+    first_year = min(small_report["annual"])
     for year, stats in small_report["annual"].items():
-        if year == 2020:
+        if year == first_year:
             assert stats["retention_pct"] is None  # no fabricated 2019 cohort
             continue
         assert 40 <= stats["retention_pct"] <= 50
         assert 0 < stats["retained_donors"] < stats["prior_year_donors"]
-        assert stats["donors"] > stats["prior_year_donors"]
+        assert stats["donors"] > 0  # Revenue growth is not donor-count growth.
 
 
 def test_giving_is_deterministic_and_tiny_fixtures_work():
-    first = list(generate_giving(100, 0.5, 19))
-    assert first == list(generate_giving(100, 0.5, 19))
-    assert first != list(generate_giving(100, 0.5, 20))
+    first = list(generate_giving(100, 0.5, 19, as_of=AS_OF))
+    assert first == list(generate_giving(100, 0.5, 19, as_of=AS_OF))
+    assert first != list(generate_giving(100, 0.5, 20, as_of=AS_OF))
     assert all(g.amount > 0 for g in first)
-    assert list(generate_giving(1, 0.5, 19))
+    assert list(generate_giving(1, 0.5, 19, as_of=AS_OF))
 
 
 @pytest.mark.parametrize("density", [0.5, 1.0, 2.0])
 def test_density_does_not_destroy_typical_size_or_long_tail(density):
-    amounts = [gift.amount for gift in generate_giving(10_000, density, 19)]
+    amounts = [gift.amount for gift in generate_giving(10_000, density, 19, as_of=AS_OF)]
     assert 42 <= median(amounts) <= 58
     assert 0.01 <= sum(amount >= 1000 for amount in amounts) / len(amounts) <= 0.02
+
+
+@pytest.mark.parametrize("as_of", [date(2026, 7, 18), date(2024, 2, 29), AS_OF])
+def test_current_lifecycles_and_monthly_partners(as_of):
+    from app.seed_dates import seed_window
+
+    window = seed_window(as_of)
+    gifts = list(generate_giving(10_000, 0.5, 19, as_of=as_of))
+    dates = defaultdict(list)
+    recurring = defaultdict(list)
+    for gift in gifts:
+        assert window.start <= gift.gift_date <= window.end
+        dates[gift.person_index].append(gift.gift_date)
+        if gift.recurring:
+            recurring[gift.person_index].append(gift.gift_date)
+    statuses = Counter(
+        "active" if (as_of - max(days)).days <= 365 else
+        "lapsing" if (as_of - max(days)).days <= 730 else "lapsed"
+        for days in dates.values())
+    assert len(dates) == 7000  # Prospects are not part of the giver denominator.
+    for status, expected in (("active", 0.40), ("lapsing", 0.12), ("lapsed", 0.48)):
+        assert statuses[status] / len(dates) == pytest.approx(expected, abs=0.005)
+    assert any(min(days) >= as_of - timedelta(days=90) for days in dates.values())
+    assert any((as_of - max(days)).days <= 365 and len(days) >= 2
+               and (sorted(days)[-1] - sorted(days)[-2]).days > 730 for days in dates.values())
+    last_month = as_of.replace(day=1) - timedelta(days=1)
+    assert recurring
+    assert all(any((day.year, day.month) == (last_month.year, last_month.month)
+                   for day in days) for days in recurring.values())
+    assert all((as_of - max(days)).days <= 365 for days in recurring.values())
+
+
+def test_partial_years_do_not_fabricate_complete_year_growth(tmp_path):
+    as_of = date(2026, 7, 18)
+    path = tmp_path / "partial.csv"
+    with path.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.DictWriter(stream, fieldnames=COLUMNS)
+        writer.writeheader()
+        for number, gift in enumerate(generate_giving(10_000, 0.5, 19, as_of=as_of)):
+            writer.writerow(dict(external_id=str(number), contact_external_id=str(gift.person_index),
+                                 amount=f"{gift.amount:.2f}", gift_date=str(gift.gift_date),
+                                 campaign=gift.campaign, channel=gift.channel,
+                                 is_recurring=str(gift.recurring).lower()))
+    annual = measure_giving(path)["annual"]
+    assert len(annual) == 6
+    # Only consecutive complete calendar years have the modeled annual growth.
+    for year in range(2023, 2026):
+        assert 3 <= annual[year]["dollar_growth_pct"] <= 6
+        assert 29.9 <= annual[year]["one_time_nov_dec_share_pct"] <= 30.1
+        assert 40 <= annual[year]["retention_pct"] <= 50
+    assert annual[2026]["one_time_nov_dec_share_pct"] == 0
+    assert annual[2026]["dollar_growth_pct"] < 0
 
 
 def _write_fixture(path: Path, rows):

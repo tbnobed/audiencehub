@@ -133,3 +133,73 @@ def test_all_registry_fields_with_future_null_and_window_edges(db):
         assert {key: row[key] for key in expected[row["profile_id"]]} == expected[row["profile_id"]]
     assert actual[0]["video_views_30d"] == 2
     assert actual[0]["is_recurring_active"] is True
+
+
+def test_reference_date_advances_status_without_using_dataset_max_and_republishes(db):
+    from app.segments.verification import acceptance_summary
+    pinned, _ = fixture(db)
+    recompute_traits(db, as_of=pinned)
+    before = acceptance_summary(db, pinned)
+    assert before["current_status_publication_matches"]
+    assert before["giver_groups"]["active_ish"]["count"] > 0
+    assert before["dashboard_last_12m"]["nonempty"]
+    generation = db.scalar(text("SELECT value FROM dashboard_kpis WHERE key='generation'"))
+
+    later = pinned + timedelta(days=731)
+    recompute_traits(db, as_of=later)
+    after = acceptance_summary(db, later)
+    assert after["current_status_publication_matches"]
+    assert after["giver_groups"]["active_ish"]["count"] == 0
+    assert after["giver_groups"]["lapsing"]["count"] == 0
+    assert after["giver_groups"]["lapsed"]["count"] == after["givers"] == 9
+    assert not after["dashboard_last_12m"]["nonempty"]
+    assert db.scalar(text("SELECT value FROM dashboard_kpis WHERE key='generation'")) != generation
+    # No new data was inserted; age must nevertheless advance by the explicit clock.
+    assert db.scalar(text("SELECT days_since_last_gift FROM profile_traits WHERE profile_id=9")) == 731
+
+
+def test_current_month_backfill_and_rfm_ignore_future_gifts(db):
+    pinned, _ = fixture(db)
+    db.execute(text("""
+        INSERT INTO gifts(source_id,external_id,profile_id,amount,gift_date)
+        VALUES(1,'future-donor',1,100000,:future)
+    """), {"future": pinned + timedelta(days=1)})
+    db.execute(text("DELETE FROM trait_snapshots"))
+    midmonth = pinned - timedelta(days=14)
+    backfill_trait_snapshots(db, as_of=midmonth)
+    assert db.scalar(text("""
+        SELECT sum(ltv_sum) FROM trait_snapshots WHERE month=:month
+    """), {"month": midmonth.replace(day=1)}) == db.scalar(text("""
+        SELECT sum(amount) FROM gifts WHERE gift_date<=:as_of
+    """), {"as_of": midmonth})
+    recompute_traits(db, as_of=pinned)
+    assert db.scalar(text("SELECT rfm_score FROM profile_traits WHERE profile_id=1")) is None
+    recompute_traits(db, as_of=pinned + timedelta(days=1))
+    assert db.scalar(text("SELECT rfm_monetary FROM profile_traits WHERE profile_id=1")) == 5
+
+
+def test_trait_event_windows_are_utc_even_with_non_utc_database_timezone(db):
+    from datetime import datetime, timezone
+    pinned, _ = fixture(db)
+    db.execute(text("SET LOCAL TIME ZONE 'America/Los_Angeles'"))
+    db.execute(text("""
+        INSERT INTO events(source_id,message_id,profile_id,type,name,occurred_at)
+        VALUES(1,'utc-start',1,'track','Video Watched',:start),
+              (1,'utc-end',1,'track','Video Watched',:end),
+              (1,'utc-next',1,'track','Video Watched',:future)
+    """), {"start": datetime(2024, 12, 2, tzinfo=timezone.utc),
+          "end": datetime(2024, 12, 31, 23, 59, tzinfo=timezone.utc),
+          "future": datetime(2025, 1, 1, tzinfo=timezone.utc)})
+    recompute_traits(db, as_of=pinned)
+    assert db.scalar(text("SELECT video_views_30d FROM profile_traits WHERE profile_id=1")) == 2
+    assert db.scalar(text("SELECT events FROM dashboard_event_daily WHERE day='2024-12-31'")) == 1
+
+
+def test_segment_reference_counts_do_not_depend_on_persisted_traits(db):
+    from app.segments.verification import REFERENCE_SQL
+    pinned, _ = fixture(db)
+    recompute_traits(db, as_of=pinned)
+    expected = {key: db.scalar(text(sql), {"as_of": pinned}) for key, sql in REFERENCE_SQL.items()}
+    assert expected["new-partners"] > 0 and expected["top-giving"] > 0
+    db.execute(text("DELETE FROM profile_traits"))
+    assert {key: db.scalar(text(sql), {"as_of": pinned}) for key, sql in REFERENCE_SQL.items()} == expected

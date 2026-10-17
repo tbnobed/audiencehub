@@ -212,10 +212,10 @@ def run_schema_benchmark(args):
             print(f"Isolated schema benchmark: {schema}; evidence: {directory}", flush=True)
             workload = (
                 "from pathlib import Path; from app.segments.verification import measure; "
-                f"measure(Path({str(directory)!r}), {args.profiles}, scale={args.scale!r}, seed_dir={args.seed_dir!r})"
+                f"measure(Path({str(directory)!r}), {args.profiles}, scale={args.scale!r}, seed_dir={args.seed_dir!r}, as_of={getattr(args, 'as_of', None)!r})"
                 if segments else
                 "from pathlib import Path; from app.traits.verification import measure; "
-                f"measure(Path({str(directory)!r}), {args.profiles}, seed_dir={args.seed_dir!r})"
+                f"measure(Path({str(directory)!r}), {args.profiles}, seed_dir={args.seed_dir!r}, as_of={getattr(args, 'as_of', None)!r})"
             )
             commands = [
                 [sys.executable, "-c", CHILD_BOOTSTRAP + "from alembic.config import main; main()",

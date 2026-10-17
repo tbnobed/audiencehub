@@ -1,6 +1,5 @@
 """Admin-managed settings and safe settings exposed to dashboard viewers."""
 
-import os
 from datetime import date
 from typing import Annotated, Literal
 
@@ -20,7 +19,7 @@ class SettingsUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     fiscal_year_start_month: Annotated[int, Field(strict=True, ge=1, le=12)] | None = None
-    dashboard_default_preset: Literal["90d", "custom"] | None = None
+    dashboard_default_preset: Literal["12m", "90d", "custom"] | None = None
     dashboard_default_from: str | None = None
     dashboard_default_to: str | None = None
 
@@ -51,11 +50,11 @@ class SettingsUpdate(BaseModel):
                 end = date.fromisoformat(self.dashboard_default_to)
                 if start > end or (end - start).days > 3660:
                     raise ValueError("Custom default must have start <= end and span at most 3660 days")
-            elif self.dashboard_default_preset == "90d":
+            elif self.dashboard_default_preset in ("12m", "90d"):
                 if self.dashboard_default_from is not None or self.dashboard_default_to is not None:
-                    raise ValueError("90d default cannot include custom dates")
+                    raise ValueError("Relative defaults cannot include custom dates")
             else:
-                raise ValueError("Date changes require a 90d or custom preset")
+                raise ValueError("Date changes require a 12m, 90d or custom preset")
         if "fiscal_year_start_month" in fields and self.fiscal_year_start_month is None:
             raise ValueError("Fiscal year start month cannot be null")
         return self
@@ -82,13 +81,8 @@ def _stored_settings(db: Session) -> dict:
 def _settings_json(db: Session) -> dict:
     settings = _stored_settings(db)
     if settings["dashboard_default_preset"] is None:
-        if os.environ.get("APP_ENV", "development") == "development":
-            settings.update(dashboard_default_preset="custom",
-                            dashboard_default_from="2020-01-01",
-                            dashboard_default_to="2024-12-31")
-        else:
-            settings.update(dashboard_default_preset="90d",
-                            dashboard_default_from=None, dashboard_default_to=None)
+        settings.update(dashboard_default_preset="12m",
+                        dashboard_default_from=None, dashboard_default_to=None)
     return settings
 
 

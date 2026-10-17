@@ -2,7 +2,7 @@
 import csv
 import copy
 import io
-from datetime import date, timedelta, datetime
+from datetime import date, timedelta, datetime, timezone
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -22,8 +22,10 @@ def invalidate_cache():
 
 
 def _date_range(from_date, to_date):
-    end = to_date or date.today()
-    start = from_date or end.replace(day=1)
+    from app.dashboards.overview import month_shift
+
+    end = to_date or datetime.now(timezone.utc).date()
+    start = from_date or month_shift(end, -12) + timedelta(days=1)
     if end < start:
         raise HTTPException(422, detail="'to' must be on or after 'from'")
     if (end-start).days > 3660:

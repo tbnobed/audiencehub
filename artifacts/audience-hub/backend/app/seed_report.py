@@ -9,7 +9,7 @@ import argparse
 import csv
 import json
 from collections import defaultdict
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from statistics import median
@@ -24,7 +24,7 @@ def _date(value: str):
     raise ValueError(f"Unrecognized gift date: {value!r}")
 
 
-def measure_giving(path: str | Path) -> dict:
+def measure_giving(path: str | Path, *, as_of: date | None = None) -> dict:
     """Measure unique, valid CSV gifts in integer cents, grouped independently.
 
     Retention uses contact_external_id, NOT email, names or gift IDs. This is
@@ -99,6 +99,17 @@ def measure_giving(path: str | Path) -> dict:
     if not amounts:
         raise ValueError("No valid gift rows found")
     total = sum(amounts)
+    metadata_path = Path(path).parent / "generator_stats.json"
+    if as_of is None and metadata_path.exists():
+        metadata = json.loads(metadata_path.read_text())
+        if metadata.get("as_of"):
+            as_of = date.fromisoformat(metadata["as_of"])
+    start = None
+    if as_of is not None:
+        try:
+            start = as_of.replace(year=as_of.year - 5)
+        except ValueError:
+            start = as_of.replace(year=as_of.year - 5, day=28)
 
     def percent(numerator, denominator):
         return round(100 * numerator / denominator, 6) if denominator else None
@@ -117,6 +128,9 @@ def measure_giving(path: str | Path) -> dict:
         previous = cohorts.get(year - 1, set())
         retained = len(previous & cohorts[year])
         stats.update({
+            "complete_calendar_year": (
+                start <= date(year, 1, 1) and date(year, 12, 31) < as_of
+                if start is not None else None),
             "dollars": stats["cents"] / 100,
             "one_time_dollars": stats["one_time_cents"] / 100,
             "nov_dec_share_pct": percent(stats["nov_dec_cents"], stats["cents"]),
@@ -130,6 +144,10 @@ def measure_giving(path: str | Path) -> dict:
             "retained_donors": retained, "retention_pct": percent(retained, len(previous)),
         })
     return {
+        "as_of": as_of.isoformat() if as_of else None,
+        "history_start": start.isoformat() if start else None,
+        "history_end": (as_of - timedelta(days=1)).isoformat() if as_of else None,
+        "partial_year_note": "Seasonality and full-year growth targets apply to complete calendar years; boundary years are partial, not annualized.",
         "source": str(Path(path).resolve()),
         "basis": "Unique valid CSV gifts; retention by contact_external_id before identity resolution",
         "valid_gifts": len(amounts), "duplicate_rows_excluded": duplicate_rows,

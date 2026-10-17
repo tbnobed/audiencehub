@@ -5,13 +5,13 @@ with traits. MVCC readers continue to see the previous complete generation.
 """
 import json
 import uuid
-from datetime import date
+from datetime import date, datetime, timezone
 
 from sqlalchemy import text
 
 
-def refresh_dashboard_rollups(db, *, as_of=None):
-    as_of = as_of or date.today()
+def refresh_dashboard_rollups(db, *, as_of: date | None = None):
+    as_of = as_of or datetime.now(timezone.utc).date()
     db.execute(text("SELECT pg_advisory_xact_lock(hashtext('dashboard-rollups'))"))
     for table in ("dashboard_daily", "dashboard_donor_daily", "dashboard_donor_patterns", "dashboard_giving_daily",
                   "dashboard_event_daily", "dashboard_conversion_daily", "dashboard_kpis"):
@@ -57,12 +57,12 @@ def refresh_dashboard_rollups(db, *, as_of=None):
     """))
     db.execute(text("""
       INSERT INTO dashboard_event_daily
-      SELECT e.occurred_at::date,s.key,e.name,e.type,count(*)
+      SELECT (e.occurred_at AT TIME ZONE 'UTC')::date,s.key,e.name,e.type,count(*)
       FROM events e JOIN sources s ON s.id=e.source_id GROUP BY 1,2,3,4
     """))
     db.execute(text("""
       INSERT INTO dashboard_conversion_daily
-      WITH e AS (SELECT profile_id,min(occurred_at::date) AS day FROM events GROUP BY profile_id),
+      WITH e AS (SELECT profile_id,min((occurred_at AT TIME ZONE 'UTC')::date) AS day FROM events GROUP BY profile_id),
            g AS (SELECT profile_id,min(gift_date) AS day FROM gifts GROUP BY profile_id)
       SELECT g.day,count(*) FROM g JOIN e USING(profile_id) WHERE e.day<g.day GROUP BY g.day
     """))

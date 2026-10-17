@@ -116,7 +116,8 @@ def reference(db, sample: list[int], as_of: date) -> dict:
     return result
 
 
-def measure(directory: Path, profiles: int, seed_dir: str | None = None) -> None:
+def measure(directory: Path, profiles: int, seed_dir: str | None = None, *,
+            as_of: date | str | None = None) -> None:
     from sqlalchemy import event, text
     from sqlalchemy.orm import Session
     from app.db import engine
@@ -135,7 +136,11 @@ def measure(directory: Path, profiles: int, seed_dir: str | None = None) -> None
             assert_private(connection, os.environ["KINSHIP_BENCHMARK_SCHEMA"])
     elif engine.url.host or not str(engine.url.query.get("host", "")).startswith("/tmp/kinship-bench-"):
         raise RuntimeError("Refusing non-private benchmark socket")
-    pinned = date(2024, 12, 31)
+    if isinstance(as_of, str):
+        as_of = date.fromisoformat(as_of)
+    if as_of is not None and (isinstance(as_of, datetime) or not isinstance(as_of, date)):
+        raise ValueError("as_of must be a date or an ISO YYYY-MM-DD string")
+    pinned = as_of or datetime.now(timezone.utc).date()
     report = dict(requested_people=profiles, scale="medium", random_seed=20250308,
                   as_of=str(pinned), timings={}, python=platform.python_version(),
                   cpu_count=os.cpu_count(), cpu_quota=Path("/sys/fs/cgroup/cpu.max").read_text().strip(),
@@ -163,12 +168,15 @@ def measure(directory: Path, profiles: int, seed_dir: str | None = None) -> None
         stats = json.loads((seed_path / "generator_stats.json").read_text())
         if (stats["requested_people"], stats["scale"], stats["random_seed"]) != (profiles, "medium", 20250308):
             raise ValueError("Reused seed metadata does not match requested medium fixture")
+        if stats.get("as_of") != str(pinned):
+            raise ValueError("Reused seed as_of does not match the verification reference date")
         generated = {"files": {name: seed_path / name for name in CSV_FILES},
                      "counts": {name: data["rows_generated"] for name, data in stats["files"].items()}}
         report["reused_seed_directory"] = str(seed_path)
     else:
         generated = timed("generate_seed", lambda: generate_seed(
-            profiles=profiles, scale="medium", random_seed=20250308, output_dir=directory / "seed"))
+            profiles=profiles, scale="medium", random_seed=20250308,
+            output_dir=directory / "seed", as_of=pinned))
     report["generated_counts"] = generated["counts"]
 
     def drain_imports(*args, **kwargs):

@@ -2,11 +2,14 @@
 import hashlib
 import os
 import time
+from datetime import datetime, time as daytime, timedelta, timezone
 from urllib.parse import urlsplit
 import httpx
 
 
-def send_events(*, profiles, random_seed, host, write_key=None, contacts_path=None):
+def send_events(*, profiles, random_seed, host, write_key=None, contacts_path=None, as_of=None):
+    reference = as_of or datetime.now(timezone.utc).date()
+    timestamp = datetime.combine(reference - timedelta(days=1), daytime(12), timezone.utc).isoformat()
     key = write_key or os.environ.get("INGEST_WRITE_KEY")
     parsed = urlsplit(host)
     if not key:
@@ -54,7 +57,7 @@ def send_events(*, profiles, random_seed, host, write_key=None, contacts_path=No
                 return
         for person in range(profiles):
             aid = hashlib.sha256(f"seed:{random_seed}:{person}".encode()).hexdigest()[:32]
-            common = {"anonymousId": aid, "context": {"library": "kinship-seed"}}
+            common = {"anonymousId": aid, "timestamp": timestamp, "context": {"library": "kinship-seed"}}
             contact = contacts[person] if person < len(contacts) else {}
             messages = [
                 {"type": "page", "properties": {"path": "/", "title": "Synthetic visitor"}},
@@ -66,7 +69,7 @@ def send_events(*, profiles, random_seed, host, write_key=None, contacts_path=No
                 {"type": "track", "event": "App Opened", "userId": f"seed-{person}", "properties": {"platform": "synthetic-app"}},
             ]
             for index, message in enumerate(messages):
-                batch.append({**common, **message, "messageId": f"seed-{random_seed}-{person}-{index}"})
+                batch.append({**common, **message, "messageId": f"seed-{random_seed}-{reference}-{person}-{index}"})
                 if len(batch) == 100:
                     flush()
         flush()

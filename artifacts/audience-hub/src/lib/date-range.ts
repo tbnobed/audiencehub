@@ -1,10 +1,10 @@
 // Pure date-range helpers for dashboards. No imports so they run under `node --test`.
 export type Preset = '30d' | '90d' | '12m' | 'ytd' | 'fy' | 'custom';
 export const PRESETS: Preset[] = ['30d', '90d', '12m', 'ytd', 'fy', 'custom'];
-export const DEFAULT_PRESET = '90d' as const;
+export const DEFAULT_PRESET = '12m' as const;
 export const MAX_RANGE_DAYS = 3660;
 
-export const toIso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+export const toIso = (d: Date) => `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
 
 /** True only for real calendar dates YYYY-MM-DD with a plausible year (1900–2999). */
 export function isValidIsoDate(value: string | null | undefined): value is string {
@@ -31,22 +31,29 @@ export function rangeDays(from: string, to: string) {
 }
 
 export function presetRange(preset: Exclude<Preset, 'custom'>, fiscalStart = 1, now = new Date()): [string, string] {
-  const end = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
   const start = new Date(end);
-  if (preset === '30d') start.setDate(start.getDate() - 29);
-  if (preset === '90d') start.setDate(start.getDate() - 89);
-  if (preset === '12m') { start.setFullYear(start.getFullYear() - 1); start.setDate(start.getDate() + 1); }
-  if (preset === 'ytd') start.setMonth(0, 1);
+  if (preset === '30d') start.setUTCDate(start.getUTCDate() - 29);
+  if (preset === '90d') start.setUTCDate(start.getUTCDate() - 89);
+  if (preset === '12m') {
+    // Clamp the prior-year anniversary before adding one inclusive day.
+    const year = end.getUTCFullYear() - 1;
+    const month = end.getUTCMonth();
+    const lastDay = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+    start.setUTCFullYear(year, month, Math.min(end.getUTCDate(), lastDay));
+    start.setUTCDate(start.getUTCDate() + 1);
+  }
+  if (preset === 'ytd') start.setUTCMonth(0, 1);
   if (preset === 'fy') {
-    const fyYear = end.getMonth() + 1 >= fiscalStart ? end.getFullYear() : end.getFullYear() - 1;
-    return [toIso(new Date(fyYear - 1, fiscalStart - 1, 1)), toIso(new Date(fyYear, fiscalStart - 1, 0))];
+    const fyYear = end.getUTCMonth() + 1 >= fiscalStart ? end.getUTCFullYear() : end.getUTCFullYear() - 1;
+    return [toIso(new Date(Date.UTC(fyYear - 1, fiscalStart - 1, 1))), toIso(new Date(Date.UTC(fyYear, fiscalStart - 1, 0)))];
   }
   return [toIso(start), toIso(end)];
 }
 
 export type ParsedRange = { preset: Preset; range: [string, string] | null };
 export type DashboardDefaultRange = {
-  dashboard_default_preset: '90d' | 'custom';
+  dashboard_default_preset: '12m' | '90d' | 'custom';
   dashboard_default_from: string | null;
   dashboard_default_to: string | null;
 };
@@ -56,7 +63,7 @@ export type DashboardDefaultRange = {
  * legacy links with only from/to are treated as custom. `range` is null for
  * Last FY until the fiscal start month is known (caller must not query yet).
  * The fourth argument is the resolved organization default; null means settings
- * have not loaded, while omission keeps legacy callers on the 90-day default.
+ * have not loaded, while omission uses the rolling 12-month UTC default.
  */
 export function parseRangeParams(params: URLSearchParams, fiscalStart: number | null, now = new Date(), defaultRange?: DashboardDefaultRange | null): ParsedRange {
   const raw = params.get('range');
@@ -68,7 +75,8 @@ export function parseRangeParams(params: URLSearchParams, fiscalStart: number | 
     if (defaultRange?.dashboard_default_preset === 'custom') {
       return { preset: 'custom', range: [defaultRange.dashboard_default_from!, defaultRange.dashboard_default_to!] };
     }
-    return { preset: DEFAULT_PRESET, range: presetRange(DEFAULT_PRESET, 1, now) };
+    const preset = defaultRange?.dashboard_default_preset ?? DEFAULT_PRESET;
+    return { preset, range: presetRange(preset, 1, now) };
   };
   const preset: Preset | null = PRESETS.includes(raw as Preset) ? raw as Preset : (!raw && customOk ? 'custom' : null);
   if (!preset) return defaultSelection();

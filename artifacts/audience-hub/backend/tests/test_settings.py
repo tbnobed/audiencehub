@@ -88,9 +88,9 @@ def test_fiscal_year_month_rejects_values_outside_strict_integer_range(month):
 
 
 @pytest.mark.parametrize("environment,preset,start,end", [
-    ("development", "custom", "2020-01-01", "2024-12-31"),
-    ("production", "90d", None, None),
-    ("test", "90d", None, None),
+    ("development", "12m", None, None),
+    ("production", "12m", None, None),
+    ("test", "12m", None, None),
 ])
 def test_unset_resolves_at_read_time_without_writing(monkeypatch, environment, preset, start, end):
     monkeypatch.setenv("APP_ENV", environment)
@@ -106,7 +106,7 @@ def test_update_persists_setting_and_audits_only_changed_values(monkeypatch):
     monkeypatch.setenv("APP_ENV", "production")
     db = _Database()
     assert _update(db, fiscal_year_start_month=7) == {
-        "fiscal_year_start_month": 7, "dashboard_default_preset": "90d",
+        "fiscal_year_start_month": 7, "dashboard_default_preset": "12m",
         "dashboard_default_from": None, "dashboard_default_to": None,
     }
     assert db.executed[-2][1] == {"month": 7, "preset": None, "start": None, "end": None}
@@ -149,6 +149,20 @@ def test_custom_override_persists_across_environment_and_90d_clears_dates(monkey
     assert db.executed[-2][1]["start"] is None
 
 
+@pytest.mark.parametrize("preset", ["90d", "12m"])
+def test_relative_presets_persist_and_survive_unrelated_updates(preset):
+    db = _Database(1, "custom", date(2020, 1, 1), date(2024, 12, 31))
+    expected = _update(db, dashboard_default_preset=preset)
+    assert expected["dashboard_default_preset"] == preset
+    assert expected["dashboard_default_from"] is None
+    assert expected["dashboard_default_to"] is None
+    assert api.get_dashboard_settings(user=SimpleNamespace(role="viewer"), db=db) == expected
+    updated = _update(db, fiscal_year_start_month=7)
+    assert updated["dashboard_default_preset"] == preset
+    assert updated["dashboard_default_from"] is None
+    assert updated["dashboard_default_to"] is None
+
+
 @pytest.mark.parametrize("values", [
     {"dashboard_default_preset": "custom"},
     {"dashboard_default_preset": "custom", "dashboard_default_from": "2020-01-01"},
@@ -161,6 +175,7 @@ def test_custom_override_persists_across_environment_and_90d_clears_dates(monkey
     {"dashboard_default_preset": "custom", "dashboard_default_from": "2020-01-01", "dashboard_default_to": "3000-01-01"},
     {"dashboard_default_preset": "custom", "dashboard_default_from": "2020-1-1", "dashboard_default_to": "2020-01-02"},
     {"dashboard_default_preset": "90d", "dashboard_default_from": "2020-01-01"},
+    {"dashboard_default_preset": "12m", "dashboard_default_to": "2020-01-01"},
     {"dashboard_default_preset": None},
     {"dashboard_default_preset": "all"},
 ])
@@ -181,7 +196,11 @@ def test_migration_constraints_on_disposable_pg_only():
         with engine.connect() as connection:
             transaction = connection.begin()
             try:
-                assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0028_event_ingestion"
+                assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0029_dashboard_rolling_default"
+                connection.execute(text(
+                    "UPDATE admin_settings SET dashboard_default_preset='12m', "
+                    "dashboard_default_from=NULL, dashboard_default_to=NULL WHERE id=1"
+                ))
                 connection.execute(text(
                     "UPDATE admin_settings SET dashboard_default_preset='custom', "
                     "dashboard_default_from='2020-01-01', dashboard_default_to='2020-01-02' WHERE id=1"
@@ -189,6 +208,8 @@ def test_migration_constraints_on_disposable_pg_only():
                 for preset, start, end in [
                     ("bogus", None, None), ("custom", None, None),
                     ("90d", "2020-01-01", None),
+                    ("12m", None, "2020-01-01"),
+                    (None, "2020-01-01", None),
                     ("custom", "2020-02-01", "2020-01-01"),
                     ("custom", "1899-01-01", "1900-01-01"),
                     ("custom", "2020-01-01", "3000-01-01"),

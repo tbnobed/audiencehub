@@ -4,12 +4,17 @@ import random
 import subprocess
 import sys
 import os
+from collections import Counter, defaultdict
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+
+import pytest
 
 from app.importer import _mapping
 import app.seed as seed_module
 from app.seed import CSV_FILES, _email, generate_seed
 from app.imports.validation import map_and_validate_row, normalize_email
+from app.seed_dates import seed_window
 
 
 def test_seed_email_ids_do_not_collide_after_gmail_normalization():
@@ -101,3 +106,132 @@ def test_seed_stats_cover_messiness_and_unrecoverable_rows(tmp_path):
                          if row.get("external_id"))
         assert stats["files"][filename]["import_handling"] is None
     assert len(truth["records"]) == len(truth_ids)
+
+
+@pytest.mark.parametrize("as_of,expected_start", [
+    (date(2026, 7, 18), date(2021, 7, 18)),
+    (date(2024, 2, 29), date(2019, 2, 28)),
+    (date(2025, 1, 1), date(2020, 1, 1)),
+])
+def test_seed_calendar_anniversary_window(as_of, expected_start):
+    window = seed_window(as_of)
+    assert window.start == expected_start
+    assert window.end == as_of - timedelta(days=1)
+    assert window.start_at == datetime.combine(expected_start, datetime.min.time(), timezone.utc)
+    assert window.end_at < datetime.combine(as_of, datetime.min.time(), timezone.utc)
+
+
+def test_seed_defaults_to_utc_today():
+    before = datetime.now(timezone.utc).date()
+    window = seed_window()
+    after = datetime.now(timezone.utc).date()
+    assert before <= window.as_of <= after
+
+
+def _parse_seed_timestamp(value):
+    for pattern in ("%Y-%m-%d", "%m/%d/%Y", "%b %d, %Y"):
+        try:
+            return datetime.strptime(value, pattern).replace(tzinfo=timezone.utc)
+        except ValueError:
+            pass
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+@pytest.mark.parametrize("as_of", [date(2026, 7, 18), date(2024, 2, 29), date(2025, 1, 1)])
+def test_every_seed_timestamp_is_bounded_and_metadata_explicit(tmp_path, as_of):
+    generated = generate_seed(300, random_seed=19, output_dir=tmp_path, as_of=as_of)
+    window = seed_window(as_of)
+    fields = {
+        CSV_FILES[0]: ("created_at",), CSV_FILES[1]: ("gift_date",),
+        CSV_FILES[2]: ("consent_captured_at",),
+        CSV_FILES[3]: ("occurred_at", "received_at"), CSV_FILES[4]: ("enriched_at",),
+    }
+    dates, views = {}, Counter()
+    for filename, columns in fields.items():
+        with generated["files"][filename].open(encoding="utf-8", newline="") as stream:
+            rows = list(csv.DictReader(stream))
+        seen = set()
+        for row in rows:
+            if not row["external_id"] or row["external_id"] in seen:
+                continue  # Known rejected sentinel or deliberate duplicate.
+            seen.add(row["external_id"])
+            for column in columns:
+                stamp = _parse_seed_timestamp(row[column])
+                assert window.start_at <= stamp <= window.end_at, (filename, column, stamp)
+            if filename == CSV_FILES[1]:
+                dates[row["email"]] = True
+            if filename == CSV_FILES[3]:
+                assert _parse_seed_timestamp(row["received_at"]) >= _parse_seed_timestamp(row["occurred_at"])
+                if row["name"] == "Video Watched":
+                    assert _parse_seed_timestamp(row["occurred_at"]).date() >= as_of - timedelta(days=29)
+                    views[row["email"]] += 1
+    assert any(count >= 3 and email not in dates for email, count in views.items())
+    for path in (generated["generator_stats"], generated["ground_truth"]):
+        metadata = json.loads(path.read_text())
+        assert metadata["as_of"] == as_of.isoformat()
+        assert metadata["start_date"] == window.start.isoformat()
+        assert metadata["end_date"] == window.end.isoformat()
+    assert generated["as_of"] == as_of.isoformat()
+
+
+def test_seed_explicit_date_is_byte_deterministic(tmp_path):
+    first = generate_seed(80, random_seed=19, output_dir=tmp_path / "one", as_of=date(2026, 7, 18))
+    second = generate_seed(80, random_seed=19, output_dir=tmp_path / "two", as_of=date(2026, 7, 18))
+    for name in CSV_FILES:
+        assert first["files"][name].read_bytes() == second["files"][name].read_bytes()
+    for name in ("generator_stats", "ground_truth"):
+        assert first[name].read_bytes() == second[name].read_bytes()
+
+
+def test_integrated_small_seed_50k_has_all_six_template_populations(tmp_path):
+    """Cross-file CSV acceptance; deliberately independent of importer/trait SQL."""
+    as_of = date(2026, 7, 18)
+    window = seed_window(as_of)
+    result = generate_seed(50_000, random_seed=20250308, output_dir=tmp_path, as_of=as_of)
+    dates, lifetime, recent = defaultdict(list), Counter(), Counter()
+    recurring, opted_in, videos = set(), set(), Counter()
+    for filename in CSV_FILES:
+        with result["files"][filename].open(encoding="utf-8", newline="") as stream:
+            seen = set()
+            for row in csv.DictReader(stream):
+                identifier = row["external_id"]
+                if not identifier or identifier in seen:
+                    continue
+                seen.add(identifier)
+                for column in ("created_at", "gift_date", "consent_captured_at",
+                               "occurred_at", "received_at", "enriched_at"):
+                    if row.get(column):
+                        assert window.start_at <= _parse_seed_timestamp(row[column]) <= window.end_at
+                if filename == CSV_FILES[1]:
+                    person = row["contact_external_id"]
+                    when = _parse_seed_timestamp(row["gift_date"]).date()
+                    cents = round(float(row["amount"]) * 100)
+                    dates[person].append(when)
+                    lifetime[person] += cents
+                    if (as_of - when).days <= 365:
+                        recent[person] += cents
+                        if row["is_recurring"] == "true":
+                            recurring.add(person)
+                elif filename == CSV_FILES[2] and row["email_consent"] == "opted_in":
+                    opted_in.add(row["contact_external_id"])
+                elif filename == CSV_FILES[3] and row["name"] == "Video Watched":
+                    videos["crm-" + identifier.split("-")[1]] += 1
+    status = Counter("active" if (as_of - max(days)).days <= 365 else
+                     "lapsing" if (as_of - max(days)).days <= 730 else "lapsed"
+                     for days in dates.values())
+    assert len(dates) == 35_000
+    assert status == {"active": 14_000, "lapsing": 4_200, "lapsed": 16_800}
+    top_count = max(1, (len(recent) + 19) // 20)
+    top_threshold = sorted(recent.values(), reverse=True)[top_count - 1]
+    populations = {
+        "lapsed-high-value": sum((as_of - max(days)).days > 730 and lifetime[person] >= 50_000
+                                 for person, days in dates.items()),
+        "new-partners": sum(min(days) >= as_of - timedelta(days=90) for days in dates.values()),
+        "recurring-partners": len(recurring),
+        "top-giving": sum(value >= top_threshold for value in recent.values()),
+        "engaged-not-giving": sum(count >= 3 and person not in dates
+                                 for person, count in videos.items()),
+        "lapsing-opted-in": sum(person in opted_in and len(days) >= 2
+                               and (as_of - max(days)).days > 365 for person, days in dates.items()),
+    }
+    assert all(count > 0 for count in populations.values()), populations

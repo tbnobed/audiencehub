@@ -144,6 +144,67 @@ def test_recompute_passes_the_pinned_as_of_date_to_one_set_based_upsert(monkeypa
     assert "INSERT INTO profile_traits" in upsert
 
 
+def test_recompute_and_backfill_default_to_one_utc_today(monkeypatch):
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+    from app.traits import engine
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            assert tz is timezone.utc
+            return cls(2032, 3, 1, 0, 1, tzinfo=tz)
+
+    class Recorder:
+        def __init__(self):
+            self.executions = []
+
+        def execute(self, statement, params=None):
+            self.executions.append((str(statement), params))
+            return SimpleNamespace(rowcount=1, scalar_one=lambda: 24)
+
+    published = []
+    monkeypatch.setattr(engine, "datetime", Clock)
+    monkeypatch.setattr("app.dashboards.rollups.refresh_dashboard_rollups",
+                        lambda db, **kw: published.append(kw["as_of"]))
+    db = Recorder()
+    recompute_traits(db)
+    assert engine.backfill_trait_snapshots(db) == 24
+    references = [params["as_of"] for _, params in db.executions if params and "as_of" in params]
+    assert references and set(references) == {date(2032, 3, 1)}
+    assert published == [date(2032, 3, 1)]
+
+
+def test_rollup_default_publication_date_is_utc_today(monkeypatch):
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+    from app.dashboards import rollups
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            assert tz is timezone.utc
+            return cls(2032, 3, 1, 0, 1, tzinfo=tz)
+
+    publications = []
+
+    class Recorder:
+        def execute(self, statement, params=None):
+            sql = str(statement)
+            if "INSERT INTO dashboard_kpis" in sql:
+                publications.append(params)
+            if "AS email_opted_in" in sql:
+                return SimpleNamespace(mappings=lambda: SimpleNamespace(one=lambda: {
+                    "profiles": 1, "email_opted_in": 0, "recurring_partners": 0, "lapsing": 0,
+                }))
+            return SimpleNamespace(mappings=lambda: [])
+
+    monkeypatch.setattr(rollups, "datetime", Clock)
+    monkeypatch.setattr("app.dashboards.offline_charts.static_charts", lambda db: {})
+    rollups.refresh_dashboard_rollups(Recorder())
+    assert publications and {row["day"] for row in publications} == {date(2032, 3, 1)}
+
+
 def test_dashboard_cache_is_not_invalidated_when_trait_recompute_fails(monkeypatch):
     from app.jobs import handlers
     from app.traits import engine

@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -33,6 +33,31 @@ def test_analyst_csv_role_gate_rejects_viewers():
 def test_dashboard_prior_range_matches_inclusive_period_length():
     assert api._date_range(date(2025, 3, 10), date(2025, 3, 20)) == (
         date(2025, 3, 10), date(2025, 3, 20), date(2025, 2, 27), date(2025, 3, 9))
+
+
+@pytest.mark.parametrize("end,start", [
+    (date(2026, 9, 24), date(2025, 9, 25)),
+    (date(2024, 2, 29), date(2023, 3, 1)),
+    (date(2025, 2, 28), date(2024, 2, 29)),
+    (date(2026, 1, 1), date(2025, 1, 2)),
+])
+def test_dashboard_missing_start_uses_inclusive_rolling_twelve_months(end, start):
+    actual_start, actual_end, prior_start, prior_end = api._date_range(None, end)
+    assert (actual_start, actual_end) == (start, end)
+    assert (prior_end - prior_start).days == (end - start).days
+    assert prior_end < start
+
+
+def test_dashboard_missing_end_uses_utc_today(monkeypatch):
+    class Clock:
+        @staticmethod
+        def now(tz):
+            assert tz is timezone.utc
+            return datetime(2026, 1, 1, 0, 30, tzinfo=tz)
+
+    monkeypatch.setattr(api, "datetime", Clock)
+    assert api._date_range(None, None)[:2] == (date(2025, 1, 2), date(2026, 1, 1))
+    assert api._date_range(date(2025, 12, 1), None)[:2] == (date(2025, 12, 1), date(2026, 1, 1))
 
 
 def test_email_count_only_reads_published_ledger_aggregate(monkeypatch):

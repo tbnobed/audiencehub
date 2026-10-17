@@ -87,3 +87,18 @@ def test_traits_recompute_publishes_rollups(db):
     recompute_traits(db, as_of=date(2025, 1, 31))
     assert db.scalar(text("SELECT value FROM dashboard_kpis WHERE key='profiles'")) == 1
     assert db.scalar(text("SELECT value FROM dashboard_kpis WHERE key='generation'"))
+
+
+def test_selected_historical_range_does_not_relabel_current_status_publication(db):
+    from app.traits.engine import recompute_traits
+    seed(db)
+    reference = date(2025, 2, 1)
+    recompute_traits(db, as_of=reference)
+    result = _build_dashboard(db, "overview", date(2024, 1, 1), date(2024, 1, 31),
+                              date(2023, 12, 1), date(2023, 12, 31))
+    stats = result["overview"]["stats"]
+    assert stats["lapsing"]["as_of"] == reference.isoformat()
+    assert stats["lapsing"]["basis"] == "current_profile_traits"
+    assert stats["lapsing"]["value"] == 2
+    assert stats["recurring_partners"]["as_of"] == reference.isoformat()
+    assert set(db.scalars(text("SELECT DISTINCT as_of FROM dashboard_kpis"))) == {reference}

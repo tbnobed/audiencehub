@@ -20,7 +20,8 @@ from typing import Any
 import phonenumbers
 from faker import Faker
 
-from app.seed_giving import CAMPAIGNS, generate_giving
+from app.seed_dates import seed_window
+from app.seed_giving import CAMPAIGNS, generate_giving, seed_giver_indices
 
 SCALE_DENSITY = {"small": 0.5, "medium": 1.0, "large": 2.0}
 CSV_FILES = (
@@ -99,7 +100,7 @@ def _gmail_variant(email: str, rng: random.Random) -> str:
         split_at = rng.randint(1, len(local) - 1)
         local = local[:split_at] + "." + local[split_at:]
     if rng.random() < 0.6:
-        local += "+" + rng.choice(("esp", "newsletter", "family", "2025"))
+        local += "+" + rng.choice(("esp", "newsletter", "family", "updates"))
     result = f"{local}@{domain}"
     return rng.choice((result, result.upper(), f" {result} "))
 
@@ -123,12 +124,16 @@ def _mark_messiness(stats: dict[str, dict[str, int]], filename: str,
 
 
 def generate_seed(profiles: int = 50_000, scale: str = "small",
-                  random_seed: int = 20250308, output_dir: str | Path | None = None) -> dict[str, Any]:
+                  random_seed: int = 20250308, output_dir: str | Path | None = None,
+                  as_of: date | None = None) -> dict[str, Any]:
     """Write five deterministic CSVs and ground_truth.json; return output metadata."""
     if profiles < 1:
         raise ValueError("--profiles must be at least 1")
     if scale not in SCALE_DENSITY:
         raise ValueError(f"Unsupported scale {scale!r}; choose small, medium, or large")
+    window = seed_window(as_of)
+    date_metadata = {"as_of": window.as_of.isoformat(), "start_date": window.start.isoformat(),
+                     "end_date": window.end.isoformat()}
 
     rng = random.Random(random_seed)
     fake = Faker("en_US")
@@ -156,7 +161,7 @@ def generate_seed(profiles: int = 50_000, scale: str = "small",
             "region": fake.state_abbr(),
             "postal_code": fake.postcode(),
             "country": "US",
-            "created_at": date(2018, 1, 1) + timedelta(days=rng.randrange(2500)),
+            "created_at": window.random_date(rng),
         })
 
     # A small number of pairs intentionally share a household phone. The
@@ -248,7 +253,7 @@ def generate_seed(profiles: int = 50_000, scale: str = "small",
                 _mark_messiness(injected, CSV_FILES[2], "gmail_plus_variant")
             bounced = rng.random() < 0.025
             esp_id = f"esp-{index + 1:08d}"
-            captured = datetime(2020, 1, 1, tzinfo=timezone.utc) + timedelta(days=rng.randrange(1826))
+            captured = window.random_datetime(rng)
             row = {
                 "external_id": esp_id,
                 "contact_external_id": person["external_id"],
@@ -287,7 +292,7 @@ def generate_seed(profiles: int = 50_000, scale: str = "small",
     duplicated_gift = False
     gift_numbers: dict[int, int] = {}
     try:
-        for gift in generate_giving(profiles, density, random_seed):
+        for gift in generate_giving(profiles, density, random_seed, as_of=window.as_of):
             person_index = gift.person_index
             person = people[person_index]
             gift_numbers[person_index] = gift_numbers.get(person_index, 0) + 1
@@ -337,15 +342,21 @@ def generate_seed(profiles: int = 50_000, scale: str = "small",
         "occurred_at", "received_at", "properties", "context",
     ))
     event_rng = random.Random(random_seed ^ 0xF1F9)
+    giver_indices = seed_giver_indices(profiles, random_seed)
     duplicated_call = False
     try:
         for person_index, person in enumerate(people):
             call_count = int(event_rng.expovariate(1 / (0.75 * density)))
             if person_index == 0 and call_count == 0:
                 call_count = 1
-            for call_number in range(call_count):
-                occurred = datetime(2020, 1, 1, tzinfo=timezone.utc) + timedelta(
-                    days=event_rng.randrange(1826), seconds=event_rng.randrange(86400))
+            # The standard track-event mapping also carries a small genuine
+            # nongiver video cohort, making the engaged-not-giving template useful.
+            video_count = 3 if person_index not in giver_indices and person_index % 3 == 0 else 0
+            for call_number in range(call_count + video_count):
+                video = call_number >= call_count
+                occurred = (window.end_at - timedelta(
+                    days=event_rng.randrange(29), seconds=event_rng.randrange(86400))
+                    if video else window.random_datetime(event_rng))
                 call_id = f"call-{person_index + 1:08d}-{call_number + 1:03d}"
                 row = {
                     "external_id": call_id,
@@ -353,15 +364,18 @@ def generate_seed(profiles: int = 50_000, scale: str = "small",
                     "email": person["email"],
                     "phone": person["phone"],
                     "type": "track",
-                    "name": event_rng.choice(("Inbound Call", "Outbound Call", "Call Connected", "Voicemail")),
+                    "name": ("Video Watched" if video else
+                             event_rng.choice(("Inbound Call", "Outbound Call", "Call Connected", "Voicemail"))),
                     "occurred_at": _mixed_datetime(occurred, event_rng),
-                    "received_at": _mixed_datetime(occurred + timedelta(seconds=event_rng.randrange(1, 3600)), event_rng),
-                    "properties": json.dumps({
+                    "received_at": _mixed_datetime(min(window.end_at, occurred + timedelta(
+                        seconds=event_rng.randrange(1, 3600))), event_rng),
+                    "properties": json.dumps({"video_id": "ministry-update"} if video else {
                         "direction": event_rng.choice(("inbound", "outbound")),
                         "duration_seconds": event_rng.randint(0, 2400),
                         "disposition": event_rng.choice(("connected", "voicemail", "no_answer", "follow_up")),
                     }, sort_keys=True, separators=(",", ":")),
-                    "context": json.dumps({"channel": "phone", "vendor": "five9"}, sort_keys=True),
+                    "context": json.dumps({"channel": "web" if video else "phone",
+                                           "vendor": "five9"}, sort_keys=True),
                 }
                 calls_writer.writerow(row)
                 _record_truth(records, "five9", call_id, person["person_id"],
@@ -391,7 +405,7 @@ def generate_seed(profiles: int = 50_000, scale: str = "small",
     try:
         for index, person in enumerate(people):
             enrichment_id = f"zeta-{index + 1:08d}"
-            enriched = datetime(2024, 1, 1, tzinfo=timezone.utc) + timedelta(days=enrichment_rng.randrange(366))
+            enriched = window.random_datetime(enrichment_rng)
             row = {
                 "external_id": enrichment_id,
                 "contact_external_id": person["external_id"],
@@ -424,6 +438,7 @@ def generate_seed(profiles: int = 50_000, scale: str = "small",
 
     ground_truth = {
         "format_version": 1,
+        **date_metadata,
         "random_seed": random_seed,
         "scale": scale,
         "requested_people": profiles,
@@ -451,6 +466,15 @@ def generate_seed(profiles: int = 50_000, scale: str = "small",
     }
     stats = {
         "format_version": 1,
+        **date_metadata,
+        "giving_model": {
+            "giver_status_targets_pct": {"active_including_new_and_reactivated": 40,
+                                         "lapsing": 12, "lapsed": 48},
+            "annual_dollar_growth_pct": 4.5,
+            "partial_years": "Boundary calendar years contain only in-window seasonal exposure; "
+                            "compare growth, retention, and full-year seasonal shares only "
+                            "between complete years.",
+        },
         "random_seed": random_seed,
         "scale": scale,
         "requested_people": profiles,
@@ -473,6 +497,7 @@ def generate_seed(profiles: int = 50_000, scale: str = "small",
         handle.write("\n")
 
     return {
+        **date_metadata,
         "output_dir": destination,
         "files": {name: destination / name for name in CSV_FILES},
         "ground_truth": ground_truth_path,

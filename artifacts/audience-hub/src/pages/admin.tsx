@@ -18,7 +18,7 @@ export default function Admin() {
   const settings = useAdminSettings();
   const updateSettings = useUpdateAdminSettings();
   const [month, setMonth] = useState('');
-  const [preset, setPreset] = useState<DashboardDefaultRange['dashboard_default_preset']>('90d');
+  const [preset, setPreset] = useState<DashboardDefaultRange['dashboard_default_preset']>('12m');
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
 
@@ -84,6 +84,7 @@ export default function Admin() {
         <div className="p-5 space-y-4">
           <fieldset className="space-y-2 text-sm text-ink">
             <legend className="text-xs text-ink-muted mb-2">Default range</legend>
+            <label className="flex items-center gap-2"><input type="radio" name="dashboard-default-preset" checked={preset === '12m'} onChange={() => { edit(); setPreset('12m'); }} /> Last 12 months (UTC)</label>
             <label className="flex items-center gap-2"><input type="radio" name="dashboard-default-preset" checked={preset === '90d'} onChange={() => { edit(); setPreset('90d'); }} /> Last 90 days</label>
             <label className="flex items-center gap-2"><input type="radio" name="dashboard-default-preset" checked={preset === 'custom'} onChange={() => { edit(); setPreset('custom'); }} /> Custom date range</label>
           </fieldset>
@@ -96,7 +97,6 @@ export default function Admin() {
                 <input data-testid="default-range-to" type="date" min="1900-01-01" max="2999-12-31" value={to} onChange={event => { edit(); setTo(event.target.value); }} className="rounded-sm border border-line-strong bg-surface-raised px-3 py-2 text-sm text-ink" />
               </label>
             </div>
-            <Button type="button" variant="outline" size="sm" onClick={() => { edit(); setFrom('2020-01-01'); setTo('2024-12-31'); }}>Use seeded dates (Jan 1, 2020 – Dec 31, 2024)</Button>
             {customError && <p role="alert" className="text-xs text-danger">{customError}</p>}
           </div>}
           <div className="flex items-center gap-3">

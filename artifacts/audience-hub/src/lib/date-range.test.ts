@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { isValidIsoDate, validateCustomRange, parseRangeParams, withRangeParams, presetRange, millionsTick, rangeDays } from './date-range.ts';
 
-const now = new Date(2026, 8, 24); // Sep 24, 2026
+const now = new Date('2026-09-24T00:00:00Z');
 
 test('rejects partial / implausible dates typed into date inputs', () => {
   for (const v of ['', '0001-01-01', '0020-05-01', '2026-02-30', '2026-13-01', '202-01-01', '2026-1-01']) assert.equal(isValidIsoDate(v), false, v);
@@ -36,7 +36,7 @@ test('URL parsing round-trips and keeps tab', () => {
   assert.equal(parseRangeParams(ytd, 1, now).preset, 'ytd');
   assert.equal(withRangeParams(ytd, '90d').get('range'), '90d');
   assert.deepEqual(parseRangeParams(new URLSearchParams('range=fy'), null, now), { preset: 'fy', range: null });
-  assert.equal(parseRangeParams(new URLSearchParams('range=custom&from=0001-01-01&to=2026-01-01'), 1, now).preset, '90d');
+  assert.equal(parseRangeParams(new URLSearchParams('range=custom&from=0001-01-01&to=2026-01-01'), 1, now).preset, '12m');
   assert.equal(parseRangeParams(new URLSearchParams('from=2026-01-01&to=2026-02-01'), 1, now).preset, 'custom');
 });
 
@@ -50,6 +50,27 @@ test('server defaults apply only when URL has no valid explicit range', () => {
   assert.deepEqual(parseRangeParams(new URLSearchParams('range=fy'), 10, now, seeded), { preset: 'fy', range: ['2024-10-01', '2025-09-30'] });
   assert.deepEqual(parseRangeParams(new URLSearchParams('range=custom&from=invalid&to=2024-01-01'), 1, now, seeded), { preset: 'custom', range: ['2020-01-01', '2024-12-31'] });
   assert.equal(withRangeParams(base, '90d').get('range'), '90d');
+});
+
+test('rolling default is 12m but preserves saved 90d and explicit choices', () => {
+  const base = new URLSearchParams();
+  const rolling = { dashboard_default_preset: '12m' as const, dashboard_default_from: null, dashboard_default_to: null };
+  const ninety = { ...rolling, dashboard_default_preset: '90d' as const };
+  const expected = { preset: '12m', range: ['2025-09-25', '2026-09-24'] };
+  assert.deepEqual(parseRangeParams(base, 1, now), expected);
+  assert.deepEqual(parseRangeParams(base, 1, now, rolling), expected);
+  assert.deepEqual(parseRangeParams(base, 1, now, ninety), { preset: '90d', range: ['2026-06-27', '2026-09-24'] });
+  assert.deepEqual(parseRangeParams(new URLSearchParams('range=12m'), 1, now, ninety), expected);
+  assert.deepEqual(parseRangeParams(new URLSearchParams('range=90d'), 1, now, rolling), { preset: '90d', range: ['2026-06-27', '2026-09-24'] });
+  assert.deepEqual(parseRangeParams(new URLSearchParams('range=custom&from=2026-01-01&to=2026-01-31'), 1, now, rolling), { preset: 'custom', range: ['2026-01-01', '2026-01-31'] });
+});
+
+test('presets use UTC days across timezones, year boundaries and leap anniversaries', () => {
+  assert.deepEqual(presetRange('12m', 1, new Date('2024-02-29T23:30:00Z')), ['2023-03-01', '2024-02-29']);
+  assert.deepEqual(presetRange('12m', 1, new Date('2025-02-28T00:30:00Z')), ['2024-02-29', '2025-02-28']);
+  const utcNewYear = new Date('2025-12-31T20:30:00-04:00');
+  assert.deepEqual(presetRange('12m', 1, utcNewYear), ['2025-01-02', '2026-01-01']);
+  assert.deepEqual(presetRange('ytd', 1, utcNewYear), ['2026-01-01', '2026-01-01']);
 });
 
 test('y axis is always millions', () => {

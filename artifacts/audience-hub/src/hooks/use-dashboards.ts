@@ -64,9 +64,9 @@ function validateSettings(settings: DashboardSettings): DashboardSettings {
     throw new Error('The server returned an invalid fiscal year start month.');
   }
   if (
-    !['90d', 'custom'].includes(settings.dashboard_default_preset)
+    !['12m', '90d', 'custom'].includes(settings.dashboard_default_preset)
     || (settings.dashboard_default_preset === 'custom' && validateCustomRange(settings.dashboard_default_from ?? '', settings.dashboard_default_to ?? '') !== null)
-    || (settings.dashboard_default_preset === '90d' && (settings.dashboard_default_from !== null || settings.dashboard_default_to !== null))
+    || (settings.dashboard_default_preset !== 'custom' && (settings.dashboard_default_from !== null || settings.dashboard_default_to !== null))
   ) throw new Error('The server returned an invalid dashboard default date range.');
   return settings;
 }

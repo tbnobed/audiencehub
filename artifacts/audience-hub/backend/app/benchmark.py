@@ -236,14 +236,14 @@ def run_benchmark(args) -> int:
             env["KINSHIP_BENCHMARK_ISOLATED_TESTS"] = "1"
             result = subprocess.run([sys.executable, "-c",
                 "from pathlib import Path; from app.segments.verification import measure; "
-                f"measure(Path({str(directory)!r}), {args.profiles}, scale={args.scale!r}, seed_dir={args.seed_dir!r})"],
+                f"measure(Path({str(directory)!r}), {args.profiles}, scale={args.scale!r}, seed_dir={args.seed_dir!r}, as_of={getattr(args, 'as_of', None)!r})"],
                 cwd=backend, env=env, check=False)
             return result.returncode
         if getattr(args, "traits", False):
             env["KINSHIP_BENCHMARK_ISOLATED_TESTS"] = "1"
             result = subprocess.run([sys.executable, "-c",
                 "from pathlib import Path; from app.traits.verification import measure; "
-                f"measure(Path({str(directory)!r}), {args.profiles}, seed_dir={getattr(args, 'seed_dir', None)!r})"],
+                f"measure(Path({str(directory)!r}), {args.profiles}, seed_dir={getattr(args, 'seed_dir', None)!r}, as_of={getattr(args, 'as_of', None)!r})"],
                 cwd=backend, env=env, check=False)
             if result.returncode:
                 report_path = directory / "traits.json"
@@ -282,6 +282,8 @@ def run_benchmark(args) -> int:
 
 
 def add_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--as-of", metavar="YYYY-MM-DD",
+                        help="Explicit seed/traits/segment reference date (default today UTC).")
     parser.add_argument("--segments", action="store_true", help="Six template preview/sample/materialization measurements in isolated PostgreSQL.")
     parser.add_argument("--scale", choices=("small", "medium", "large"), default="medium",
                         help="Segment benchmark seed density (default medium; small plausibility uses --profiles 50000 --scale small).")

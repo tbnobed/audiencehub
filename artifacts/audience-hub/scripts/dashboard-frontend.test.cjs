@@ -62,6 +62,31 @@ test('settings PATCH sends only fiscal month when dashboard default is unchanged
   assert.deepEqual(JSON.parse(JSON.stringify(await hooks.useDashboardSettings().queryFn({ signal: new AbortController().signal }))), resolved);
 });
 
+test('settings hooks accept relative presets without dates and reject dates on relative presets', async () => {
+  let response;
+  const hooks = load('src/hooks/use-dashboards.ts', {
+    '@tanstack/react-query': { useQuery: options => options, useMutation: options => options, useQueryClient: () => ({}) },
+    '@/lib/api': { fetchApi: async () => response },
+    '@/lib/date-range': load('src/lib/date-range.ts'),
+  });
+  const signal = new AbortController().signal;
+  for (const preset of ['12m', '90d']) {
+    response = {
+      fiscal_year_start_month: 10, dashboard_default_preset: preset,
+      dashboard_default_from: null, dashboard_default_to: null,
+    };
+    assert.deepEqual(JSON.parse(JSON.stringify(await hooks.useDashboardSettings().queryFn({ signal }))), response);
+    assert.deepEqual(JSON.parse(JSON.stringify(await hooks.useAdminSettings().queryFn())), response);
+    assert.deepEqual(JSON.parse(JSON.stringify(await hooks.useUpdateAdminSettings().mutationFn(response))), response);
+    for (const field of ['dashboard_default_from', 'dashboard_default_to']) {
+      const valid = response;
+      response = { ...valid, [field]: '2026-01-01' };
+      await assert.rejects(hooks.useDashboardSettings().queryFn({ signal }), /invalid dashboard default date range/);
+      response = valid;
+    }
+  }
+});
+
 test('admin default range form loads persisted dates, validates changes, and sends fiscal setting together', async () => {
   const { JSDOM } = require('jsdom');
   const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'http://localhost/admin' });
@@ -93,10 +118,11 @@ test('admin default range form loads persisted dates, validates changes, and sen
     const view = render(React.createElement(Admin));
     await waitFor(() => assert.equal(view.getByTestId('default-range-from').value, '2020-01-01'));
     assert.equal(view.getByTestId('default-range-to').value, '2024-12-31');
+    assert.equal(view.queryByRole('button', { name: /Use seeded dates/ }), null);
     fireEvent.change(view.getByTestId('default-range-to'), { target: { value: '2019-01-01' } });
     assert.equal(view.getByTestId('save-settings').disabled, true);
     assert.match(view.getByRole('alert').textContent, /on or before/);
-    fireEvent.click(view.getByRole('button', { name: /Use seeded dates/ }));
+    fireEvent.change(view.getByTestId('default-range-to'), { target: { value: '2024-12-31' } });
     fireEvent.change(view.getByTestId('default-range-from'), { target: { value: '2021-01-01' } });
     fireEvent.click(view.getByTestId('save-settings'));
     assert.deepEqual(JSON.parse(JSON.stringify(saved)), {
@@ -108,12 +134,32 @@ test('admin default range form loads persisted dates, validates changes, and sen
     assert.equal(saved.dashboard_default_preset, '90d');
     assert.equal(saved.dashboard_default_from, null);
     assert.equal(saved.dashboard_default_to, null);
+    fireEvent.click(view.getByLabelText('Last 12 months (UTC)'));
+    assert.equal(view.queryByTestId('default-range-from'), null);
+    fireEvent.click(view.getByTestId('save-settings'));
+    assert.deepEqual(JSON.parse(JSON.stringify(saved)), {
+      fiscal_year_start_month: 10, dashboard_default_preset: '12m',
+      dashboard_default_from: null, dashboard_default_to: null,
+    });
     fireEvent.click(view.getByLabelText('Custom date range'));
-    fireEvent.click(view.getByRole('button', { name: /Use seeded dates/ }));
+    assert.equal(view.getByTestId('default-range-from').value, '2021-01-01',
+      'switching presets must preserve unsaved custom input');
+    fireEvent.change(view.getByTestId('default-range-from'), { target: { value: '2020-01-01' } });
     fireEvent.change(view.getByTestId('fiscal-year-start-month'), { target: { value: '11' } });
     fireEvent.click(view.getByTestId('save-settings'));
     assert.deepEqual(JSON.parse(JSON.stringify(saved)), { fiscal_year_start_month: 11 },
-      'a fiscal-only change must not pin the resolved environment default');
+      'a fiscal-only change must not overwrite saved custom dates');
+    settings.data = {
+      fiscal_year_start_month: 10, dashboard_default_preset: '12m',
+      dashboard_default_from: null, dashboard_default_to: null,
+    };
+    view.rerender(React.createElement(Admin));
+    await waitFor(() => assert.equal(view.getByLabelText('Last 12 months (UTC)').checked, true));
+    assert.equal(view.getByTestId('save-settings').disabled, true);
+    fireEvent.change(view.getByTestId('fiscal-year-start-month'), { target: { value: '11' } });
+    fireEvent.click(view.getByTestId('save-settings'));
+    assert.deepEqual(JSON.parse(JSON.stringify(saved)), { fiscal_year_start_month: 11 },
+      'a fiscal-only change must not pin the resolved rolling default');
   } finally {
     cleanup();
     dom.window.close();

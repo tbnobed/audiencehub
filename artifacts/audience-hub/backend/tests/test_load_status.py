@@ -466,6 +466,6 @@ def test_seed_cli_load_does_not_wait_twice(pg, tmp_path, monkeypatch):
         "kinship", "seed", "--profiles", "1", "--output-dir", str(tmp_path), "--load"])
     monkeypatch.setattr(seed, "load_generated_files", lambda files: calls.append("load") or [8, 9])
     monkeypatch.setattr(cli_module, "_compute_seed_traits",
-                        lambda ids: calls.append(("traits", ids)))
+                        lambda ids, **kwargs: calls.append(("traits", ids)))
     cli_module.main()
     assert calls == ["load", ("traits", [8, 9])]

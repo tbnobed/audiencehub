@@ -125,5 +125,7 @@ def test_seed_events_cli_is_additive_and_keeps_key_out_of_arguments(monkeypatch,
     monkeypatch.setattr(sys, "argv", ["app.cli", "seed", "--profiles", "1", "--events",
                                     "--events-host", "http://localhost:8000"])
     main()
-    assert calls == [{"profiles": 1, "random_seed": 20250308, "host": "http://localhost:8000", "contacts_path": contacts}]
+    from datetime import datetime, timezone
+    assert calls == [{"profiles": 1, "random_seed": 20250308, "host": "http://localhost:8000", "contacts_path": contacts,
+                      "as_of": datetime.now(timezone.utc).date()}]
     assert "Event API accepted 4" in capsys.readouterr().out

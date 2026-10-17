@@ -1,12 +1,13 @@
 import argparse
 import os
 import time
+from datetime import date, datetime, timezone
 from sqlalchemy import select
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 
-def _compute_seed_traits(import_ids: list[int]) -> None:
+def _compute_seed_traits(import_ids: list[int], *, as_of: date | None = None) -> None:
     """Wait for queued identity resolution, then compute seeded traits/history."""
     from app.traits.engine import backfill_trait_snapshots, recompute_traits
     from app.db import engine
@@ -24,8 +25,9 @@ def _compute_seed_traits(import_ids: list[int]) -> None:
             raise RuntimeError("Seed trait computation timed out waiting for identity resolution.")
         time.sleep(2)
     with Session(engine) as db:
-        recompute_traits(db)
-        backfill_trait_snapshots(db)
+        reference = as_of or datetime.now(timezone.utc).date()
+        recompute_traits(db, as_of=reference)
+        backfill_trait_snapshots(db, as_of=reference)
         db.execute(text("DELETE FROM trait_dirty_profiles"))
         db.commit()
 
@@ -70,6 +72,9 @@ def main():
     seed.add_argument("--profiles", type=int, default=50_000)
     seed.add_argument("--scale", choices=("small", "medium", "large"), default="small")
     seed.add_argument("--random-seed", type=int, default=20250308)
+    seed.add_argument("--as-of", type=date.fromisoformat,
+                      default=None, metavar="YYYY-MM-DD",
+                      help="UTC reference date; history covers the preceding five years through yesterday (default: today UTC).")
     seed.add_argument("--events", action="store_true",
                       help="Also send synthetic web/app traffic through the real API (INGEST_WRITE_KEY required).")
     seed.add_argument("--events-host", default="http://127.0.0.1:8000",
@@ -122,11 +127,13 @@ def main():
         from app.seed import generate_seed, load_generated_files
 
         try:
+            reference = args.as_of or datetime.now(timezone.utc).date()
             result = generate_seed(
                 profiles=args.profiles,
                 scale=args.scale,
                 random_seed=args.random_seed,
                 output_dir=args.output_dir,
+                as_of=reference,
             )
             print(f"Synthetic CSVs written to: {result['output_dir']}")
             for filename, count in result["counts"].items():
@@ -136,7 +143,7 @@ def main():
             if args.load:
                 import_ids = load_generated_files(result["files"])
                 print("CSV files submitted through app.importer.import_seed_files.")
-                _compute_seed_traits(import_ids)
+                _compute_seed_traits(import_ids, as_of=reference)
                 from app.db import engine
                 from app.segments.service import ensure_templates
                 with Session(engine) as db:
@@ -146,6 +153,7 @@ def main():
             if args.events:
                 from app.ingestion.seed_events import send_events
                 sent = send_events(profiles=args.profiles, random_seed=args.random_seed, host=args.events_host,
+                                   as_of=reference,
                                    contacts_path=result["files"].get("donor_crm_contacts.csv"))
                 print(f"Event API accepted {sent:,} synthetic messages.")
         except (ValueError, RuntimeError) as exc:

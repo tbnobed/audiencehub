@@ -1,6 +1,6 @@
 """Set-based computation and persistence of profile traits."""
 
-from datetime import date
+from datetime import date, datetime, timezone
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -59,18 +59,18 @@ latest_gap AS (
 event_rollup AS (
     SELECT p.profile_id,
            count(e.id) FILTER (
-               WHERE e.occurred_at >= CAST(:as_of AS date) - 29
-                 AND e.occurred_at < CAST(:as_of AS date) + 1
+               WHERE e.occurred_at >= ((CAST(:as_of AS date) - 29)::timestamp AT TIME ZONE 'UTC')
+                 AND e.occurred_at < ((CAST(:as_of AS date) + 1)::timestamp AT TIME ZONE 'UTC')
            )::integer AS event_count_30d,
            max(e.occurred_at) AS last_event_at,
            count(e.id) FILTER (
                WHERE e.name='Video Watched'
-                 AND e.occurred_at >= CAST(:as_of AS date) - 29
-                 AND e.occurred_at < CAST(:as_of AS date) + 1
+                 AND e.occurred_at >= ((CAST(:as_of AS date) - 29)::timestamp AT TIME ZONE 'UTC')
+                 AND e.occurred_at < ((CAST(:as_of AS date) + 1)::timestamp AT TIME ZONE 'UTC')
            )::integer AS video_views_30d
     FROM target_profiles p
     LEFT JOIN events e ON e.profile_id=p.profile_id
-                      AND e.occurred_at < CAST(:as_of AS date) + 1
+                      AND e.occurred_at < ((CAST(:as_of AS date) + 1)::timestamp AT TIME ZONE 'UTC')
     GROUP BY p.profile_id
 ),
 source_rollup AS (
@@ -98,7 +98,7 @@ engagement_candidates AS (
     SELECT e.profile_id, e.occurred_at AS engaged_at, s.key AS source_key, e.id AS tie_id
     FROM events e JOIN target_profiles p ON p.profile_id=e.profile_id
     JOIN sources s ON s.id=e.source_id
-    WHERE e.occurred_at < CAST(:as_of AS date) + 1
+    WHERE e.occurred_at < ((CAST(:as_of AS date) + 1)::timestamp AT TIME ZONE 'UTC')
 ),
 last_engagement AS (
     SELECT DISTINCT ON (profile_id) profile_id, source_key
@@ -221,7 +221,7 @@ def recompute_traits(db: Session, *, as_of: date | None = None,
     db.execute(text(
         "SELECT pg_advisory_xact_lock(hashtext('audience-hub:trait-recompute'))"
     ))
-    pinned_date = as_of or date.today()
+    pinned_date = as_of or datetime.now(timezone.utc).date()
     if profile_ids is not None and write_snapshot:
         month = pinned_date.replace(day=1)
         snapshot_exists = db.execute(text("""
@@ -255,7 +255,7 @@ def recompute_traits(db: Session, *, as_of: date | None = None,
 
 def backfill_trait_snapshots(db: Session, *, as_of: date | None = None) -> int:
     """Build up to 24 monthly snapshots from historical gift dates once."""
-    pinned_date = as_of or date.today()
+    pinned_date = as_of or datetime.now(timezone.utc).date()
     missing_months = db.execute(text("""
         WITH months AS (
             SELECT generated.month::date AS month
@@ -284,7 +284,8 @@ def backfill_trait_snapshots(db: Session, *, as_of: date | None = None) -> int:
             )
         ),
         profile_months AS MATERIALIZED (
-            SELECT p.id AS profile_id, m.month, (m.month + interval '1 month - 1 day')::date AS month_end
+            SELECT p.id AS profile_id, m.month,
+                   LEAST((m.month + interval '1 month - 1 day')::date, CAST(:as_of AS date)) AS month_end
             FROM profiles p CROSS JOIN months m
             WHERE p.merged_into_id IS NULL AND p.is_deleted=false
         ),
