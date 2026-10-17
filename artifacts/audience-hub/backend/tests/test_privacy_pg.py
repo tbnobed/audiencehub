@@ -457,6 +457,7 @@ def test_history_scan_skips_impossible_normalizations(db, tmp_path, monkeypatch)
 
 def test_deletion_reimport_external_only_aliases_and_unaffected_partner(db, tmp_path, monkeypatch):
     from app.identity.bulk import resolve_bulk
+    from app.identity.attachments import attach_transactions
     admins, source, p = people(db)
     # Use real importer-managed files inside the configured private upload root.
     uploads = tmp_path / "uploads"; uploads.mkdir()
@@ -464,7 +465,7 @@ def test_deletion_reimport_external_only_aliases_and_unaffected_partner(db, tmp_
         "external_id,email,phone\nremoved,erase@example.org,+12025550123\nkept,keep@example.org,+12025550125\n", source=source)
     gifts, _ = ingest(db, uploads, "external_id,email,amount,gift_date\ngift-1,erase@example.org,25,2024-01-01\n", "gift")
     events, _ = ingest(db, uploads, "message_id,email,name,occurred_at\nevent-1,erase@example.org,Test,2024-01-01T00:00:00Z\n", "event")
-    resolve_bulk(db); db.commit()
+    resolve_bulk(db); attach_transactions(db); db.commit()
     pid = db.scalar(text("SELECT profile_id FROM source_records WHERE external_id='removed'"))
     request = service.create_deletion(db, "email", "erase@example.org", admins[0].id)
     service.approve_deletion(db, request["id"], admins[1].id)

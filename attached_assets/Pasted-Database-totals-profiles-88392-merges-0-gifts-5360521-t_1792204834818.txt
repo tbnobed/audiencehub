@@ -1,0 +1,104 @@
+Database totals: profiles=88392 merges=0 gifts=5360521; total_wallclock=6889.9s
+PENDING: Queued/running work remains.
+Load status: PENDING; monitored=6882.1s; queued=0 running=1 unresolved=6589171
+  import 1 donor_crm_contacts.csv: completed ok=504951 rejected=1 warn=7599 total=504952 rows/s=3628.6
+  import 2 giving_platform_gifts.csv: completed ok=5360522 rejected=1 warn=534798 total=5360523 rows/s=2876.8
+  import 3 esp_contacts.csv: completed ok=251444 rejected=1 warn=0 total=251445 rows/s=3183.2
+  import 4 five9_calls.csv: completed ok=178604 rejected=1 warn=0 total=178605 rows/s=2614.3
+  import 5 zeta_enrichment.csv: completed ok=500001 rejected=1 warn=0 total=500002 rows/s=6184.7
+Database totals: profiles=88392 merges=0 gifts=5360521; total_wallclock=6921.0s
+PENDING: Queued/running work remains.
+Load status: PENDING; monitored=6913.0s; queued=0 running=1 unresolved=6589171
+  import 1 donor_crm_contacts.csv: completed ok=504951 rejected=1 warn=7599 total=504952 rows/s=3628.6
+  import 2 giving_platform_gifts.csv: completed ok=5360522 rejected=1 warn=534798 total=5360523 rows/s=2876.8
+  import 3 esp_contacts.csv: completed ok=251444 rejected=1 warn=0 total=251445 rows/s=3183.2
+  import 4 five9_calls.csv: completed ok=178604 rejected=1 warn=0 total=178605 rows/s=2614.3
+  import 5 zeta_enrichment.csv: completed ok=500001 rejected=1 warn=0 total=500002 rows/s=6184.7
+Database totals: profiles=88392 merges=0 gifts=5360521; total_wallclock=6951.9s
+PENDING: Queued/running work remains.
+Load status: PENDING; monitored=6944.1s; queued=0 running=1 unresolved=6589171
+  import 1 donor_crm_contacts.csv: completed ok=504951 rejected=1 warn=7599 total=504952 rows/s=3628.6
+  import 2 giving_platform_gifts.csv: completed ok=5360522 rejected=1 warn=534798 total=5360523 rows/s=2876.8
+  import 3 esp_contacts.csv: completed ok=251444 rejected=1 warn=0 total=251445 rows/s=3183.2
+  import 4 five9_calls.csv: completed ok=178604 rejected=1 warn=0 total=178605 rows/s=2614.3
+  import 5 zeta_enrichment.csv: completed ok=500001 rejected=1 warn=0 total=500002 rows/s=6184.7
+Database totals: profiles=88392 merges=0 gifts=5360521; total_wallclock=6983.0s
+PENDING: Queued/running work remains.
+Load status: PENDING; monitored=6974.9s; queued=0 running=1 unresolved=6589171
+  import 1 donor_crm_contacts.csv: completed ok=504951 rejected=1 warn=7599 total=504952 rows/s=3628.6
+  import 2 giving_platform_gifts.csv: completed ok=5360522 rejected=1 warn=534798 total=5360523 rows/s=2876.8
+  import 3 esp_contacts.csv: completed ok=251444 rejected=1 warn=0 total=251445 rows/s=3183.2
+  import 4 five9_calls.csv: completed ok=178604 rejected=1 warn=0 total=178605 rows/s=2614.3
+  import 5 zeta_enrichment.csv: completed ok=500001 rejected=1 warn=0 total=500002 rows/s=6184.7
+Database totals: profiles=88392 merges=0 gifts=5360521; total_wallclock=7013.8s
+PENDING: Queued/running work remains.
+Load status: PENDING; monitored=7005.9s; queued=0 running=1 unresolved=6589171
+  import 1 donor_crm_contacts.csv: completed ok=504951 rejected=1 warn=7599 total=504952 rows/s=3628.6
+  import 2 giving_platform_gifts.csv: completed ok=5360522 rejected=1 warn=534798 total=5360523 rows/s=2876.8
+  import 3 esp_contacts.csv: completed ok=251444 rejected=1 warn=0 total=251445 rows/s=3183.2
+  import 4 five9_calls.csv: completed ok=178604 rejected=1 warn=0 total=178605 rows/s=2614.3
+  import 5 zeta_enrichment.csv: completed ok=500001 rejected=1 warn=0 total=500002 rows/s=6184.7
+Database totals: profiles=88392 merges=0 gifts=5360521; total_wallclock=7044.8s
+PENDING: Queued/running work remains.
+Load status: PENDING; monitored=7036.8s; queued=0 running=1 unresolved=6589171
+  import 1 donor_crm_contacts.csv: completed ok=504951 rejected=1 warn=7599 total=504952 rows/s=3628.6
+  import 2 giving_platform_gifts.csv: completed ok=5360522 rejected=1 warn=534798 total=5360523 rows/s=2876.8
+  import 3 esp_contacts.csv: completed ok=251444 rejected=1 warn=0 total=251445 rows/s=3183.2
+  import 4 five9_calls.csv: completed ok=178604 rejected=1 warn=0 total=178605 rows/s=2614.3
+  import 5 zeta_enrichment.csv: completed ok=500001 rejected=1 warn=0 total=500002 rows/s=6184.7
+Database totals: profiles=88392 merges=0 gifts=5360521; total_wallclock=7075.7s
+PENDING: Queued/running work remains.
+Load status: PENDING; monitored=7067.9s; queued=0 running=1 unresolved=6589171
+  import 1 donor_crm_contacts.csv: completed ok=504951 rejected=1 warn=7599 total=504952 rows/s=3628.6
+  import 2 giving_platform_gifts.csv: completed ok=5360522 rejected=1 warn=534798 total=5360523 rows/s=2876.8
+  import 3 esp_contacts.csv: completed ok=251444 rejected=1 warn=0 total=251445 rows/s=3183.2
+  import 4 five9_calls.csv: completed ok=178604 rejected=1 warn=0 total=178605 rows/s=2614.3
+  import 5 zeta_enrichment.csv: completed ok=500001 rejected=1 warn=0 total=500002 rows/s=6184.7
+Database totals: profiles=88392 merges=0 gifts=5360521; total_wallclock=7106.8s
+PENDING: Queued/running work remains.
+Load status: PENDING; monitored=7099.1s; queued=0 running=1 unresolved=6589171
+  import 1 donor_crm_contacts.csv: completed ok=504951 rejected=1 warn=7599 total=504952 rows/s=3628.6
+  import 2 giving_platform_gifts.csv: completed ok=5360522 rejected=1 warn=534798 total=5360523 rows/s=2876.8
+  import 3 esp_contacts.csv: completed ok=251444 rejected=1 warn=0 total=251445 rows/s=3183.2
+  import 4 five9_calls.csv: completed ok=178604 rejected=1 warn=0 total=178605 rows/s=2614.3
+  import 5 zeta_enrichment.csv: completed ok=500001 rejected=1 warn=0 total=500002 rows/s=6184.7
+Database totals: profiles=88392 merges=0 gifts=5360521; total_wallclock=7138.0s
+PENDING: Queued/running work remains.
+Load status: PENDING; monitored=7130.2s; queued=0 running=1 unresolved=6589171
+  import 1 donor_crm_contacts.csv: completed ok=504951 rejected=1 warn=7599 total=504952 rows/s=3628.6
+  import 2 giving_platform_gifts.csv: completed ok=5360522 rejected=1 warn=534798 total=5360523 rows/s=2876.8
+  import 3 esp_contacts.csv: completed ok=251444 rejected=1 warn=0 total=251445 rows/s=3183.2
+  import 4 five9_calls.csv: completed ok=178604 rejected=1 warn=0 total=178605 rows/s=2614.3
+  import 5 zeta_enrichment.csv: completed ok=500001 rejected=1 warn=0 total=500002 rows/s=6184.7
+Database totals: profiles=88392 merges=0 gifts=5360521; total_wallclock=7169.1s
+PENDING: Queued/running work remains.
+Load status: PENDING; monitored=7161.3s; queued=0 running=1 unresolved=6589171
+  import 1 donor_crm_contacts.csv: completed ok=504951 rejected=1 warn=7599 total=504952 rows/s=3628.6
+  import 2 giving_platform_gifts.csv: completed ok=5360522 rejected=1 warn=534798 total=5360523 rows/s=2876.8
+  import 3 esp_contacts.csv: completed ok=251444 rejected=1 warn=0 total=251445 rows/s=3183.2
+  import 4 five9_calls.csv: completed ok=178604 rejected=1 warn=0 total=178605 rows/s=2614.3
+  import 5 zeta_enrichment.csv: completed ok=500001 rejected=1 warn=0 total=500002 rows/s=6184.7
+Database totals: profiles=88392 merges=0 gifts=5360521; total_wallclock=7200.2s
+PENDING: Queued/running work remains.
+Load status: PENDING; monitored=7192.2s; queued=0 running=1 unresolved=6589171
+  import 1 donor_crm_contacts.csv: completed ok=504951 rejected=1 warn=7599 total=504952 rows/s=3628.6
+  import 2 giving_platform_gifts.csv: completed ok=5360522 rejected=1 warn=534798 total=5360523 rows/s=2876.8
+  import 3 esp_contacts.csv: completed ok=251444 rejected=1 warn=0 total=251445 rows/s=3183.2
+  import 4 five9_calls.csv: completed ok=178604 rejected=1 warn=0 total=178605 rows/s=2614.3
+  import 5 zeta_enrichment.csv: completed ok=500001 rejected=1 warn=0 total=500002 rows/s=6184.7
+Database totals: profiles=88392 merges=0 gifts=5360521; total_wallclock=7231.1s
+PENDING: Queued/running work remains.
+Load status: FAIL; monitored=7201.1s; queued=0 running=1 unresolved=6589171
+  import 1 donor_crm_contacts.csv: completed ok=504951 rejected=1 warn=7599 total=504952 rows/s=3628.6
+  import 2 giving_platform_gifts.csv: completed ok=5360522 rejected=1 warn=534798 total=5360523 rows/s=2876.8
+  import 3 esp_contacts.csv: completed ok=251444 rejected=1 warn=0 total=251445 rows/s=3183.2
+  import 4 five9_calls.csv: completed ok=178604 rejected=1 warn=0 total=178605 rows/s=2614.3
+  import 5 zeta_enrichment.csv: completed ok=500001 rejected=1 warn=0 total=500002 rows/s=6184.7
+Database totals: profiles=88392 merges=0 gifts=5360521; total_wallclock=7240.0s
+FAIL: Timed out after 7200s waiting for queued/running work.
+Seed load failed; see load-status summary above.
+
+real    128m58.649s
+user    0m1.830s
+sys     0m0.599s
+Isolated schema benchmark: kinship_bench_670fdc95e449df8422af9061; evidence: /data/benchmarks/traits-b66932dc49f866f7e60bcd81

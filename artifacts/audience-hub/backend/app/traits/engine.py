@@ -207,7 +207,7 @@ ON CONFLICT (month, donor_status) DO NOTHING
 
 def recompute_traits(db: Session, *, as_of: date | None = None,
                      profile_ids: list[int] | None = None,
-                     write_snapshot: bool = True) -> int:
+                     write_snapshot: bool = True, job_id: int | None = None) -> int:
     """Recompute all active profiles or an incremental subset in one SQL statement.
 
     RFM ranks are always computed against the complete donor population, even for
@@ -246,6 +246,9 @@ def recompute_traits(db: Session, *, as_of: date | None = None,
     if write_snapshot:
         db.execute(_SNAPSHOT_SQL, {"as_of": pinned_date})
     from app.dashboards.rollups import refresh_dashboard_rollups
+    if job_id is not None:
+        from app.jobs.phase_progress import begin_phase
+        begin_phase(db.get_bind(), job_id, "rollups")
     refresh_dashboard_rollups(db, as_of=pinned_date)
     return updated
 

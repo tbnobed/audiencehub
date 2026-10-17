@@ -26,10 +26,20 @@ plausibility checks on the 50,000-person small seed, and
 remaining uncertainty about the historical production profile crash.
 
 Before updating a deployment, back up and drain workers, apply migrations
-through `0026_privacy_workflows`, then restart the API and workers together.
+through `0027_identity_batches`, then restart the API and workers together.
 Deletion revokes retained exports and historical source files; previously
 downloaded/delivered copies and backups cannot be recalled. Review the warnings
 in Admin and [Security and privacy](docs/SECURITY_PRIVACY.md) before approval.
+
+Bulk-load coordination now waits for the import batch, runs contact identity
+once, attaches gifts/events separately, refreshes planner statistics, and then
+builds traits/rollups. `kinship load-status --wait` defaults to four hours and
+distinguishes a still-running timeout from failure. See
+[load monitoring and recovery](docs/IMPORT_RECOVERY.md) and
+[full five-source verification](docs/FULL_LOAD_VERIFICATION.md).
+The 250k correctness check passed after interruption/recovery; the projected
+500k production load is approximately 55–90 minutes, so the under-60-minute
+production target is **not yet demonstrated**.
 
 ## Development
 

@@ -66,7 +66,7 @@ def _mapping(headers: list[str], record_type: str) -> dict:
         ):
             if header in headers:
                 columns[header] = {"enrichment": header, "data_type": data_type}
-    if record_type in {"gift", "enrichment"} and any(
+    if record_type in {"gift", "event", "enrichment"} and any(
         target == "contact_external_id" for target in columns.values()
     ):
         options["reference_source"] = "donor_crm"
@@ -80,6 +80,10 @@ def import_seed_files(files: Mapping[str, Path]) -> list[int]:
     upload_dir = Path(get_settings().upload_dir).resolve()
     upload_dir.mkdir(parents=True, exist_ok=True)
     import_ids: dict[str, int] = {}
+    # No runnable work is published until every member has been registered.
+    with Session(engine) as db:
+        batch_id = db.scalar(text("INSERT INTO identity_batches DEFAULT VALUES RETURNING id"))
+        db.commit()
     for filename, file in files.items():
         source_key, source_name, record_type = SEED_SOURCES[filename]
         path = Path(file).resolve()
@@ -131,13 +135,22 @@ def import_seed_files(files: Mapping[str, Path]) -> list[int]:
                    "path": str(destination), "digest": digest,
                    "record_type": record_type, "mapping": json.dumps(mapping),
                    "count": count}).scalar_one()
-            enqueue(db, "import.run", {"import_id": import_id},
-                    dedupe_key=f"import:{import_id}", max_attempts=1)
-            db.execute(text("UPDATE imports SET status='running' WHERE id=:id"),
-                       {"id": import_id})
+            db.execute(text("UPDATE imports SET status='running', identity_batch_id=:batch WHERE id=:id"),
+                       {"id": import_id, "batch": batch_id})
             db.commit()
             import_ids[filename] = import_id
             print(f"Queued {filename}: import {import_id}, {count:,} rows", flush=True)
+
+    with Session(engine) as db:
+        for import_id in import_ids.values():
+            db.execute(text("UPDATE imports SET identity_batch_id=:batch WHERE id=:id"),
+                       {"batch": batch_id, "id": import_id})
+            enqueue(db, "import.run", {"import_id": import_id},
+                    dedupe_key=f"import:{import_id}", max_attempts=1)
+        db.execute(text("UPDATE identity_batches SET phase='importing' WHERE id=:id"), {"id": batch_id})
+        enqueue(db, "identity.resolve_batch", {"batch_id": batch_id},
+                dedupe_key=f"identity:batch:{batch_id}")
+        db.commit()
 
     from app.load_status import run_load_status
 

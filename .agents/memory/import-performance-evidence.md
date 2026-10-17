@@ -26,3 +26,9 @@ Long benchmark infrastructure must outlive the shell tool's process tree, and re
 **Why:** During resolver verification, shell-launched background processes were killed at the tool timeout. A detached launch inherited a different PostgreSQL version through PATH than the cluster creator.
 
 **How to apply:** Use a persistent supervisor for multi-minute runs; verify server-version consistency and retained logs before interpreting a process termination as a workload failure. Always stop private servers explicitly after collecting results.
+
+Refresh planner statistics after bulk identity attachment, before starting traits.
+
+**Why:** Import-time statistics can correctly say every transaction profile ID is null, then become catastrophically wrong after attachment. A fresh 500-person pipeline selected many nested loops and ran for minutes despite fast contact resolution; post-attachment ANALYZE made complete traits/rollups finish in under a second.
+
+**How to apply:** Preserve the post-attachment statistics barrier. Performance acceptance must exercise the actual fresh import-to-traits transition, not only rerun queries after autovacuum has repaired statistics.

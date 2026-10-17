@@ -317,7 +317,6 @@ with Session(engine) as db:
     print("Full traits refresh job:", job.id)
 PY
 docker compose up -d --no-deps worker
-docker compose exec api python -m app.cli load-status --wait --timeout 7200
 docker compose exec -T db sh -c 'psql -U "$POSTGRES_USER" -d audience_hub -c "SELECT id,type,status,error FROM jobs WHERE dedupe_key='\''upgrade:traits:full'\'' ORDER BY id DESC LIMIT 1;"'
 docker compose exec -T api curl -fsS http://localhost:8000/readyz
 ```

@@ -40,8 +40,8 @@ def main():
     status.add_argument("--wait", action="store_true", help="Poll to completion; progress every 30 seconds.")
     status.add_argument("--import-id", type=int, action="append",
                         help="Monitor only these IDs (repeatable); default: all imports existing at invocation.")
-    status.add_argument("--timeout", type=float, default=7200,
-                        help="Maximum wait in seconds (default: 7200).")
+    status.add_argument("--timeout", type=float, default=14400,
+                        help="Maximum monitoring wait in seconds (default: 14400 / 4h); does not cancel work.")
     admin = commands.add_parser("create-admin")
     admin.add_argument("--email", required=True)
     reset = commands.add_parser("reset-demo", help="Erase dataset rows, preserving users and configuration.")

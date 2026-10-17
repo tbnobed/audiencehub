@@ -161,8 +161,17 @@ def test_worker_selects_bulk_only_when_import_queue_is_quiet(monkeypatch, import
     monkeypatch.setattr("app.identity.bulk.resolve_bulk", chosen("bulk"))
     monkeypatch.setattr("app.identity.resolver.resolve_batch", chosen("bounded"))
     monkeypatch.setattr("app.jobs.queue.enqueue", lambda *_args, **_kwargs: None)
-    run("identity.resolve_batch", {})
-    assert calls == ["bounded" if imports_active else "bulk", "commit", "commit"]
+    monkeypatch.setattr("app.identity.locking.acquire_resolver_lock", lambda db: None)
+    monkeypatch.setattr("app.identity.attachments.attach_transactions", lambda db, **kwargs: calls.append("attach"))
+    monkeypatch.setattr("app.identity.statistics.refresh_identity_statistics", lambda db: calls.append("analyze"))
+    from app.identity.locking import IdentityResolutionDeferred
+    if imports_active:
+        with pytest.raises(IdentityResolutionDeferred):
+            run("identity.resolve_batch", {})
+        assert calls == []
+    else:
+        run("identity.resolve_batch", {})
+        assert calls == ["bulk", "attach", "analyze", "commit"]
 
 
 def test_bulk_transitive_pending_and_existing_owner_closure():
@@ -288,6 +297,6 @@ def test_bulk_empty_call_probes_without_building_temporary_graph(monkeypatch):
     with Session(engine) as db:
         assert resolve_bulk(db) == {"records": 0, "profiles_created": 0, "merges": 0}
         assert len(statements) == 1
-        assert "ORDER BY id LIMIT 1" in statements[0]
+        assert "ORDER BY sr.id LIMIT 1" in statements[0]
         assert "CREATE TEMP" not in statements[0]
         db.rollback()

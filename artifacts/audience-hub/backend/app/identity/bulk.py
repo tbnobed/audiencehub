@@ -1,8 +1,9 @@
 """Set-based identity resolution for a quiescent import queue.
 
-The bounded resolver remains the cooperative path during active imports. This
-path performs one atomic refresh of pending records, with SQL component state
-and existing profile nodes; it never materializes records in Python.
+The job handler waits for the import barrier, then performs one atomic refresh
+of pending contact/consent/enrichment records, with SQL component state and
+existing profile nodes; it never materializes records in Python. Transactional
+gift/event rows are attached separately and never enter this graph.
 """
 
 from sqlalchemy import text
@@ -42,7 +43,9 @@ def resolve_bulk(db: Session, job_id: int | None = None, *, mode: str = "auto") 
     # on the worker's final empty call. Do not copy/join/count the whole source
     # table merely to discover that the graph is already drained.
     if _sql(db, """
-        SELECT id FROM source_records WHERE resolved_at IS NULL ORDER BY id LIMIT 1
+        SELECT sr.id FROM source_records sr LEFT JOIN imports i ON i.id=sr.last_import_id
+        WHERE sr.resolved_at IS NULL AND COALESCE(i.record_type,'contact') NOT IN ('gift','event')
+        ORDER BY sr.id LIMIT 1
     """).first() is None:
         return {"records": 0, "profiles_created": 0, "merges": 0}
     # A bounded per-operation budget avoids default 4 MB aggregate/hash spills;
@@ -55,7 +58,8 @@ def resolve_bulk(db: Session, job_id: int | None = None, *, mode: str = "auto") 
         CREATE TEMP TABLE ir_pending ON COMMIT DROP AS
         SELECT sr.*, s.key AS source_key
         FROM source_records sr JOIN sources s ON s.id=sr.source_id
-        WHERE sr.resolved_at IS NULL
+        LEFT JOIN imports i ON i.id=sr.last_import_id
+        WHERE sr.resolved_at IS NULL AND COALESCE(i.record_type,'contact') NOT IN ('gift','event')
     """)
     count = _sql(db, "SELECT count(*) FROM ir_pending").scalar_one()
     if not count:
@@ -216,23 +220,6 @@ def resolve_bulk(db: Session, job_id: int | None = None, *, mode: str = "auto") 
         UPDATE source_records sr SET profile_id=a.profile_id,resolved_at=now()
         FROM ir_assign a WHERE sr.id=a.id
     """ + (" AND sr.resolved_at IS NULL" if skip_unchanged else "") + """;
-        UPDATE gifts g SET profile_id=a.profile_id FROM ir_assign a JOIN ir_pending p ON p.id=a.id
-        JOIN imports i ON i.id=p.last_import_id
-        WHERE i.record_type='gift' AND g.source_id=p.source_id AND g.external_id=p.external_id
-          AND g.profile_id IS NULL;
-        UPDATE events e SET profile_id=links.profile_id FROM (
-          SELECT DISTINCT ON(p.source_id,k.message_id) p.source_id,k.message_id,a.profile_id
-          FROM ir_pending p JOIN ir_assign a ON a.id=p.id
-          CROSS JOIN LATERAL (VALUES(p.raw_hash),(p.external_id),(p.attributes->>'_event_message_id')) k(message_id)
-          ORDER BY p.source_id,k.message_id,p.id
-        ) links WHERE e.source_id=links.source_id AND e.message_id=links.message_id
-          AND e.profile_id IS NULL;
-        UPDATE events e SET profile_id=links.profile_id FROM (
-          SELECT DISTINCT ON(p.source_id,k.value) p.source_id,k.value,a.profile_id
-          FROM ir_edges k JOIN ir_pending p ON p.id=k.record_id JOIN ir_assign a ON a.id=p.id
-          WHERE k.kind='anonymous_id' ORDER BY p.source_id,k.value,a.profile_id
-        ) links WHERE e.source_id=links.source_id AND e.anonymous_id=links.value
-          AND e.profile_id IS NULL;
         INSERT INTO identifiers(type,value,profile_id)
         SELECT DISTINCT e.kind,e.value,a.profile_id FROM ir_edges e
         JOIN ir_assign a ON a.id=e.record_id WHERE e.kind<>'profile'
@@ -348,7 +335,9 @@ def _survivorship(db, *, skip_unchanged: bool):
     _sql(db, """
         CREATE TEMP TABLE ir_survivors ON COMMIT DROP AS
         SELECT sr.*,s.priority FROM source_records sr JOIN ir_affected a USING(profile_id)
-        JOIN sources s ON s.id=sr.source_id;
+        JOIN sources s ON s.id=sr.source_id
+        LEFT JOIN imports i ON i.id=sr.last_import_id
+        WHERE COALESCE(i.record_type,'contact') NOT IN ('gift','event');
         CREATE INDEX ON ir_survivors(profile_id,priority,updated_at DESC,id);
         ANALYZE ir_survivors;
         WITH emails AS (

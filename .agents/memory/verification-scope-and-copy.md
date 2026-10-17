@@ -7,7 +7,7 @@ Stop 500k performance measurements in this sandbox. The user will run remaining 
 
 **Why:** The user explicitly moved final timing to their server after unreliable sandbox measurements and quota failures.
 
-**How to apply:** Keep local correctness tests isolated. The specifically authorized exception is comparing resolver versions on a 250k contact fixture, three runs each with medians. Production-container benchmarks must use an isolated schema and never touch live data.
+**How to apply:** Keep local correctness tests isolated. The user now explicitly requires 250k-person acceptance with all five sources, gifts, resolution, attachment, traits and rollups. A contact-only pass is not full-load evidence. Report per-phase timings and a qualified 500k/16-core projection; the production target is under 60 minutes. Production-container benchmarks must use an isolated schema and never touch live data.
 
 Use “partners” in all user-facing copy.
 

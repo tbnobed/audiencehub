@@ -325,7 +325,7 @@ def _row_payload(
     if record_type == "event" and values.get("message_id"):
         attributes["_event_message_id"] = values["message_id"]
     contact_external_id = values.get("contact_external_id")
-    if record_type in {"gift", "enrichment"} and reference_source and contact_external_id:
+    if record_type in {"gift", "event", "enrichment"} and reference_source and contact_external_id:
         attributes["_identity_reference"] = {
             "contact_external_id": contact_external_id,
             "source_key": reference_source,
@@ -855,7 +855,7 @@ def _run_import(import_id: int, progress_callback=None, db: Session | None = Non
                             "status": "opted_out",
                             "captured_at": None,
                         }
-                item = _row_payload(record_type, values, options.get("reference_source"))
+                item = _row_payload(record_type, values, options.get("reference_source") or source_key)
                 item.update(record_type=record_type, values=values, line=line)
                 processed.append(item)
                 source_rows.append(item)
@@ -922,10 +922,15 @@ def _run_import(import_id: int, progress_callback=None, db: Session | None = Non
                "warning_count": warning_count, "warning_counts": json.dumps(warning_counts),
                "normalized": normalized_count, "deduplicated": deduplicated_count,
                "duration_ms": elapsed_ms, "error_path": error_path, "id": import_id})
-        if record_type in {"contact", "consent", "gift", "event"}:
+        if record_type in {"contact", "consent", "enrichment", "gift", "event"}:
             from app.jobs.queue import enqueue
 
-            enqueue(db, "identity.resolve_batch", {}, dedupe_key="identity")
+            batch_id = imported.get("identity_batch_id")
+            # Each standalone completion gets a durable wakeup; a running
+            # resolver must not swallow an import committed after its snapshot.
+            if not batch_id:
+                enqueue(db, "identity.resolve_batch", {"import_id": import_id},
+                        dedupe_key=f"identity:import:{import_id}")
         db.execute(text(f"DROP TABLE {stage}"))
         db.commit()
         return {"rows_total": seen, "rows_ok": accepted, "rows_rejected": rejected,

@@ -87,7 +87,7 @@ def test_empty_identifier_group_takes_no_bucket_locks():
     assert db.statement == ""
 
 
-def test_identity_handler_commits_underfull_groups_and_only_stops_at_empty(monkeypatch):
+def test_identity_handler_ignores_legacy_limit_and_runs_one_sql_pass(monkeypatch):
     from app.jobs.handlers import run
 
     calls = []
@@ -105,22 +105,27 @@ def test_identity_handler_commits_underfull_groups_and_only_stops_at_empty(monke
         def commit(self):
             calls.append("commit")
 
-    sizes = iter([2, 1, 0])
+        def scalar(self, *_args, **_kwargs):
+            return False
 
-    def resolve(_db, limit, job_id):
-        assert limit == 10_000
+    def resolve(_db, mode, job_id):
+        assert mode == "incremental"
         assert job_id == 42
-        size = next(sizes)
-        calls.append(size)
-        return {"records": size, "profiles_created": size, "merges": 0}
+        calls.append("resolve")
+        return {"records": 2, "profiles_created": 2, "merges": 0}
 
     monkeypatch.setattr("sqlalchemy.orm.Session", BatchSession)
-    monkeypatch.setattr("app.identity.resolver.resolve_batch", resolve)
+    monkeypatch.setattr("app.identity.bulk.resolve_bulk", resolve)
+    monkeypatch.setattr("app.identity.locking.acquire_resolver_lock", lambda db: None)
+    monkeypatch.setattr("app.identity.attachments.attach_transactions", lambda db, **kwargs: calls.append("attach"))
+    monkeypatch.setattr("app.identity.statistics.refresh_identity_statistics", lambda db: calls.append("analyze"))
+    monkeypatch.setattr("app.jobs.phase_progress.begin_phase", lambda *args: None)
+    monkeypatch.setattr("app.jobs.phase_progress.finish_phase", lambda *args: None)
     enqueued = []
     monkeypatch.setattr("app.jobs.queue.enqueue",
                         lambda db, kind, payload, **kw: enqueued.append((kind, payload, kw)))
     run("identity.resolve_batch", {"limit": 10_000}, job_id=42)
-    assert calls == [2, "commit", 1, "commit", 0, "commit", "commit"]
+    assert calls == ["resolve", "attach", "analyze", "commit"]
     assert enqueued == [("traits.recompute", {"mode": "full"},
                           {"dedupe_key": "traits:after-identity:42"})]
 
@@ -131,16 +136,18 @@ def test_large_connected_component_resumes_in_bounded_groups():
     with Session(engine) as db:
         source_id = db.execute(text("""
             INSERT INTO sources (key, name, kind, record_types, priority, is_active)
-            VALUES (:key, :key, 'csv', ARRAY['gift']::text[], 10, true) RETURNING id
+            VALUES (:key, :key, 'csv', ARRAY['contact']::text[], 10, true) RETURNING id
         """), {"key": prefix}).scalar_one()
         import_id = db.execute(text("""
             INSERT INTO imports (source_id, filename, record_type)
-            VALUES (:source_id, 'large.csv', 'gift') RETURNING id
+            VALUES (:source_id, 'large.csv', 'contact') RETURNING id
         """), {"source_id": source_id}).scalar_one()
         db.execute(text("""
             INSERT INTO source_records
-              (source_id, external_id, email_norm, raw_hash, last_import_id)
-            SELECT :source_id, :prefix || '-' || n, :email, 'row-' || n, :import_id
+              (source_id, external_id, email_norm, raw_hash, last_import_id, attributes)
+            SELECT :source_id, :prefix || '-' || n, :email, 'row-' || n, :import_id,
+              jsonb_build_object('_identity_reference',jsonb_build_object(
+                'source_key',CAST(:prefix AS text),'contact_external_id','cohort-owner'))
             FROM generate_series(1, 1001) n
         """), {"source_id": source_id, "prefix": prefix, "import_id": import_id,
                "email": f"{prefix}@example.org"})
@@ -613,6 +620,7 @@ def test_high_cardinality_identifier_is_auto_blocklisted():
 
 
 def test_gift_records_do_not_trigger_high_cardinality_for_donor_identifiers():
+    from app.identity.attachments import attach_transactions
     prefix = f"resolver_gift_cardinality_{uuid.uuid4().hex}"
     email = f"{prefix}@example.org"
     phone = "+12025550123"
@@ -637,13 +645,19 @@ def test_gift_records_do_not_trigger_high_cardinality_for_donor_identifiers():
             "phone": phone, "import_id": import_id,
         })
         db.execute(text("""
-            INSERT INTO gifts (source_id, external_id, amount)
-            SELECT :source_id, :prefix || '-' || n, 10
-            FROM generate_series(1, 26) n
+            INSERT INTO gifts (source_id, external_id, source_record_id, amount)
+            SELECT source_id, external_id, id, 10 FROM source_records
+            WHERE source_id=:source_id
         """), {"source_id": source_id, "prefix": prefix})
 
         result = resolve_batch(db, limit=100)
-        assert result == {"records": 26, "profiles_created": 1, "merges": 0}
+        assert result == {"records": 0, "profiles_created": 0, "merges": 0}
+        # Gifts cannot manufacture a donor. Attach them to a known contact
+        # identity and prove repeated transactions don't trigger cardinality.
+        profile = db.scalar(text("INSERT INTO profiles DEFAULT VALUES RETURNING id"))
+        db.execute(text("INSERT INTO identifiers(type,value,profile_id) VALUES('email',:email,:p)"),
+                   {"email": email, "p": profile})
+        attach_transactions(db)
         assert db.execute(text("""
             SELECT count(DISTINCT profile_id) FROM source_records WHERE source_id=:source_id
         """), {"source_id": source_id}).scalar_one() == 1

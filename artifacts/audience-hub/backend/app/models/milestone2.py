@@ -29,9 +29,19 @@ def identity_pk():
     return mapped_column(BigInteger, Identity(always=True), primary_key=True)
 
 
+class IdentityBatch(Base):
+    __tablename__ = "identity_batches"
+    id: Mapped[int] = identity_pk()
+    phase: Mapped[str] = mapped_column(Text, nullable=False, server_default="registering")
+    mode: Mapped[str] = mapped_column(Text, nullable=False, server_default="bulk")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class Import(Base):
     __tablename__ = "imports"
     id: Mapped[int] = identity_pk()
+    identity_batch_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("identity_batches.id"))
     source_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("sources.id"), nullable=False)
     filename: Mapped[str] = mapped_column(Text, nullable=False)
     file_path: Mapped[str | None] = mapped_column(Text)

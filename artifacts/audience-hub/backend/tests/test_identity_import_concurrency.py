@@ -77,7 +77,7 @@ def test_shared_batch_lock_defers_worker_and_releases_on_commit():
 
 
 @pytest.mark.parametrize("record_type", ["contact", "consent", "enrichment"])
-def test_running_import_without_batch_lock_does_not_defer_resolver(record_type, tmp_path):
+def test_running_import_without_batch_lock_defers_until_complete(record_type, tmp_path):
     with Session(engine) as db:
         source = Source(key=f"queue_{uuid.uuid4().hex}", name="Queue test", kind="csv",
                         record_types=[record_type])
@@ -96,7 +96,8 @@ def test_running_import_without_batch_lock_does_not_defer_resolver(record_type, 
         resolver_id = _resolver_job()
         run_job(resolver_id, "identity.resolve_batch", {})
         with Session(engine) as db:
-            assert db.get(Job, resolver_id).status == "succeeded"
+            assert db.get(Job, resolver_id).status == "queued"
+            assert db.get(Job, resolver_id).attempts == 0
     finally:
         with Session(engine) as db:
             queue.succeed(db, import_job_id)

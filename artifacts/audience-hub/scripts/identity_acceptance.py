@@ -22,6 +22,7 @@ import sqlite3
 import sys
 import tempfile
 from collections import Counter, defaultdict
+from itertools import groupby
 from pathlib import Path
 from typing import Any, TextIO
 
@@ -201,6 +202,8 @@ def _iter_ground_truth(path: Path, local: sqlite3.Connection) -> dict[str, Any]:
 
 def _sqlite_database(local: sqlite3.Connection) -> None:
     local.executescript("""
+        PRAGMA temp_store=FILE;
+        PRAGMA cache_size=-32768;
         CREATE TABLE truth (
             source_key TEXT NOT NULL,
             external_id TEXT NOT NULL,
@@ -446,16 +449,26 @@ def _split_pattern_counts(local: sqlite3.Connection) -> tuple[int, Counter[str]]
         FROM truth AS t JOIN actual AS a
           ON a.source_key=t.source_key AND a.external_id=t.external_id
         ORDER BY t.person_id, t.source_key, t.external_id
-    """).fetchall()
-    people: dict[str, dict[str, list[tuple]]] = defaultdict(lambda: defaultdict(list))
-    profiles: dict[str, set[int]] = defaultdict(set)
-    for person_id, household_id, source_key, external_id, profile_id, email, phone in rows:
-        people[person_id][source_key].append((external_id, profile_id, email, phone))
-        profiles[person_id].add(profile_id)
+    """)
     counts: Counter[str] = Counter()
-    split_person_ids = {person_id for person_id, ids in profiles.items() if len(ids) > 1}
-    for person_id in split_person_ids:
-        crm_records = people[person_id].get("donor_crm", [])
+    split_people = 0
+    for person_id, person_rows in groupby(rows, key=lambda row: row[0]):
+        # Consume only one person's ordered rows, not the full matched dataset.
+        profiles = set()
+        crm_records = []
+        esp_emails = set()
+        esp_present = False
+        for _, _, source_key, external_id, profile_id, email, phone in person_rows:
+            profiles.add(profile_id)
+            if source_key == "donor_crm" and not crm_records:
+                crm_records.append((external_id, profile_id, email, phone))
+            elif source_key == "esp":
+                esp_present = True
+                if email:
+                    esp_emails.add(email)
+        if len(profiles) <= 1:
+            continue
+        split_people += 1
         if not crm_records:
             counts["No active CRM record for split person; raw CRM evidence unavailable"] += 1
             continue
@@ -465,14 +478,10 @@ def _split_pattern_counts(local: sqlite3.Connection) -> tuple[int, Counter[str]]
             (crm_external_id,),
         ).fetchone()
         raw_email, raw_phone = raw_crm if raw_crm else (None, None)
-        esp_records = people[person_id].get("esp", [])
-        esp_emails = {
-            email for _external_id, _profile_id, email, _phone in esp_records if email
-        }
         counts[_split_pattern(
-            raw_email, raw_phone, crm_email, crm_phone, esp_emails, bool(esp_records)
+            raw_email, raw_phone, crm_email, crm_phone, esp_emails, esp_present
         )] += 1
-    return len(split_person_ids), counts
+    return split_people, counts
 
 
 def _false_merge_candidates(local: sqlite3.Connection) -> list[dict[str, Any]]:
@@ -482,21 +491,18 @@ def _false_merge_candidates(local: sqlite3.Connection) -> list[dict[str, Any]]:
         FROM truth AS t JOIN actual AS a
           ON a.source_key=t.source_key AND a.external_id=t.external_id
         ORDER BY a.profile_id, t.person_id
-    """).fetchall()
-    profiles: dict[int, dict[str, dict[str, set[str]]]] = defaultdict(
-        lambda: defaultdict(lambda: {"email": set(), "phone": set(), "household": set()})
-    )
-    for person_id, household_id, profile_id, email, phone in rows:
-        person = profiles[profile_id][person_id]
-        if email:
-            person["email"].add(email)
-        if phone:
-            person["phone"].add(phone)
-        if household_id:
-            person["household"].add(household_id)
-
+    """)
     cases = []
-    for profile_id, persons in profiles.items():
+    for profile_id, profile_rows in groupby(rows, key=lambda row: row[2]):
+        persons = defaultdict(lambda: {"email": set(), "phone": set(), "household": set()})
+        for person_id, household_id, _, email, phone in profile_rows:
+            person = persons[person_id]
+            if email:
+                person["email"].add(email)
+            if phone:
+                person["phone"].add(phone)
+            if household_id:
+                person["household"].add(household_id)
         if len(persons) < 2:
             continue
         household_ids = [
@@ -523,6 +529,90 @@ def _false_merge_candidates(local: sqlite3.Connection) -> list[dict[str, Any]]:
             "shared_identifiers": shared,
         })
     return cases
+
+
+def _pairwise_accuracy(local: sqlite3.Connection) -> dict[str, Any]:
+    """Record-pair metrics, weighted by unique (source, external_id) truth keys.
+
+    Strict recall includes ALL truth pairs, including missing/unattached records.
+    Precision is evaluable only for predicted pairs whose two labels are known;
+    unknown actual records and their profile pairs are disclosed separately.
+    Intentional household exemption matches _false_merge_candidates: every
+    represented person in that profile must share a household annotation.
+    """
+    local.executescript("""
+        DROP TABLE IF EXISTS temp.accuracy_matched;
+        CREATE TEMP TABLE accuracy_matched AS
+        SELECT t.person_id,t.household_id,a.profile_id
+        FROM truth t JOIN actual a USING(source_key,external_id);
+        CREATE INDEX accuracy_person_profile ON accuracy_matched(person_id,profile_id);
+        CREATE INDEX accuracy_profile_person ON accuracy_matched(profile_id,person_id);
+        DROP TABLE IF EXISTS temp.accuracy_cells;
+        CREATE TEMP TABLE accuracy_cells AS
+        SELECT person_id,profile_id,count(*) AS n FROM accuracy_matched GROUP BY 1,2;
+        CREATE INDEX accuracy_cells_profile ON accuracy_cells(profile_id);
+        DROP TABLE IF EXISTS temp.accuracy_profiles;
+        CREATE TEMP TABLE accuracy_profiles AS
+        SELECT profile_id,sum(n) AS n,count(*) AS people,
+               sum(n*(n-1)/2) AS true_pairs
+        FROM accuracy_cells GROUP BY profile_id;
+        CREATE UNIQUE INDEX accuracy_profiles_id ON accuracy_profiles(profile_id);
+    """)
+    scalar = lambda query: local.execute(query).fetchone()[0]
+    truth_pairs = scalar("""
+        SELECT coalesce(sum(n*(n-1)/2),0) FROM
+        (SELECT count(*) n FROM truth GROUP BY person_id)""")
+    true_positive = scalar("SELECT coalesce(sum(n*(n-1)/2),0) FROM accuracy_cells")
+    predicted = scalar("SELECT coalesce(sum(n*(n-1)/2),0) FROM accuracy_profiles")
+    household_pairs = scalar("""
+        SELECT coalesce(sum(p.n*(p.n-1)/2-p.true_pairs),0)
+        FROM accuracy_profiles p WHERE p.people>1 AND EXISTS (
+          SELECT 1 FROM accuracy_matched m
+          WHERE m.profile_id=p.profile_id AND m.household_id IS NOT NULL
+          GROUP BY m.household_id HAVING count(DISTINCT m.person_id)=p.people)
+    """)
+    actual_pairs = scalar("""
+        SELECT coalesce(sum(n*(n-1)/2),0) FROM
+        (SELECT count(*) n FROM actual GROUP BY profile_id)""")
+    result = {
+        "truth_records": scalar("SELECT count(*) FROM truth"),
+        "matched_records": scalar("SELECT count(*) FROM accuracy_matched"),
+        "unmatched_truth_records": scalar("""
+            SELECT count(*) FROM truth t WHERE NOT EXISTS
+            (SELECT 1 FROM actual a WHERE a.source_key=t.source_key
+             AND a.external_id=t.external_id)"""),
+        "unknown_actual_records": scalar("""
+            SELECT count(*) FROM actual a WHERE NOT EXISTS
+            (SELECT 1 FROM truth t WHERE t.source_key=a.source_key
+             AND t.external_id=a.external_id)"""),
+        "people_without_any_matched_record": scalar("""
+            SELECT count(*) FROM (SELECT DISTINCT person_id FROM truth
+            EXCEPT SELECT person_id FROM accuracy_cells)"""),
+        "multisource_profiles": scalar("""
+            SELECT count(*) FROM (SELECT profile_id FROM actual
+            GROUP BY profile_id HAVING count(DISTINCT source_key)>1)"""),
+        "truth_positive_pairs_all_records": truth_pairs,
+        "predicted_positive_pairs_known_labels": predicted,
+        "true_positive_pairs": true_positive,
+        "false_positive_pairs_strict": predicted - true_positive,
+        "false_negative_pairs_including_unmatched": truth_pairs - true_positive,
+        "intentional_household_cross_person_pairs": household_pairs,
+        "other_false_positive_pairs": predicted - true_positive - household_pairs,
+        "predicted_pairs_with_unknown_label": actual_pairs - predicted,
+        "precision_strict_known_labels": true_positive / predicted if predicted else None,
+        "recall_strict_all_truth": true_positive / truth_pairs if truth_pairs else None,
+        "precision_household_exempt_known_labels": (
+            (true_positive + household_pairs) / predicted if predicted else None),
+        "coverage_by_source": {
+            source: {"truth_records": total, "matched_records": matched,
+                     "unmatched_truth_records": total - matched}
+            for source, total, matched in local.execute("""
+                SELECT t.source_key,count(*),count(a.external_id) FROM truth t
+                LEFT JOIN actual a USING(source_key,external_id) GROUP BY t.source_key
+            """)
+        },
+    }
+    return result
 
 
 def _mask_identifier(kind: str, value: str) -> str:
@@ -843,7 +933,7 @@ def _print_identity_diagnostics(
 def _print_report(metadata: dict[str, Any], local: sqlite3.Connection,
                   report: dict[str, Any],
                   generator_stats: dict[str, Any] | None = None,
-                  loaded_csv_evidence: set[str] | None = None) -> None:
+                  loaded_csv_evidence: set[str] | None = None) -> dict[str, Any]:
     true_people = local.execute("SELECT count(DISTINCT person_id) FROM truth").fetchone()[0]
     truth_records = local.execute("SELECT count(*) FROM truth").fetchone()[0]
     matched_records = local.execute("""
@@ -918,6 +1008,32 @@ def _print_report(metadata: dict[str, Any], local: sqlite3.Connection,
         )
     """).fetchone()[0]
     print(f"True people split across >1 active profile: {split_people:,}")
+    print("Pairwise accuracy (unique source-record keys; missing truth records "
+          "remain in recall denominator; unknown labels excluded from precision):")
+    metrics = _pairwise_accuracy(local)
+    metrics.update({
+        "active_profiles": active, "true_people": true_people,
+        "profile_difference_fraction": abs(delta) / true_people if true_people else None,
+        "mixed_person_profiles": multi_profiles,
+        "intentional_household_profiles": intentional,
+        "other_mixed_person_profiles": max(0, multi_profiles - intentional),
+        "other_mixed_profile_fraction": (
+            max(0, multi_profiles - intentional) / active if active else None),
+        "expected_injected_invalid_rows": (
+            sum(item.get("messiness_injected", {}).get("unrecoverable_row", 0)
+                for item in generator_stats["files"].values()) if generator_stats else None),
+        "thresholds": {
+            "source": "docs/MILESTONES.md M3",
+            "absolute_profile_difference_fraction_max_inclusive": 0.02,
+            "other_mixed_profile_fraction_max_exclusive": 0.01,
+            "pairwise_threshold": None,
+        },
+    })
+    metrics["m3_accuracy_pass"] = bool(
+        true_people and active and abs(delta) / true_people <= 0.02
+        and max(0, multi_profiles - intentional) / active < 0.01)
+    for key, value in metrics.items():
+        print(f"  {key}: {value if value is not None else 'undefined (no eligible pairs)'}")
     _print_identity_diagnostics(local, report, loaded_csv_evidence or set())
     print(f"Total recorded profile merges: {report['merge_count']:,}")
     reasons = report["merge_reasons"].most_common(5)
@@ -1000,12 +1116,18 @@ def _print_report(metadata: dict[str, Any], local: sqlite3.Connection,
                   "imports of identical content)")
     print("Unsupported import categories are called out per injected type; the "
           "database has no structured rejection-category counts.")
+    print("M3 documented accuracy outcome: " +
+          ("PASS" if metrics["m3_accuracy_pass"] else "FAIL"))
+    print("Accuracy metrics JSON: " + json.dumps(metrics, sort_keys=True))
+    return metrics
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ground-truth", type=Path, default=DEFAULT_GROUND_TRUTH,
                         help=f"seed ground_truth.json (default: {DEFAULT_GROUND_TRUTH})")
+    parser.add_argument("--metrics-json", type=Path,
+                        help="Optional machine-readable metrics and documented M3 thresholds")
     parser.add_argument("--generator-stats", type=Path,
                         help="generator_stats.json (default: next to ground_truth.json)")
     args = parser.parse_args()
@@ -1028,10 +1150,15 @@ def main() -> int:
             false_merge_cases = _false_merge_candidates(local)
             _false_merge_database_evidence(engine, local, false_merge_cases)
             report["false_merge_cases"] = false_merge_cases
-            _print_report(metadata, local, report, generator_stats, loaded_csv_evidence)
+            metrics = _print_report(metadata, local, report, generator_stats, loaded_csv_evidence)
             local.close()
+        metrics_path = args.metrics_json
+        if metrics_path is None and os.environ.get("KINSHIP_BENCHMARK_ISOLATED_TESTS") == "1":
+            metrics_path = Path(tempfile.gettempdir()) / "identity-accuracy-metrics.json"
+        if metrics_path:
+            metrics_path.write_text(json.dumps(metrics, indent=2) + "\n")
         engine.dispose()
-        return 0
+        return 0 if metrics["m3_accuracy_pass"] else 2
     except Exception as exc:
         # Do not stringify connection errors: drivers sometimes include URLs.
         if isinstance(exc, (FileNotFoundError, ValueError)):

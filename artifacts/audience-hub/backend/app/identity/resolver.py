@@ -309,108 +309,10 @@ def _assign_record_references(
         """),
         {"record_ids": record_ids, "profile_ids": profile_ids},
     )
-    gift_record_ids = [
-        record_id for record_id in record_ids
-        if records_by_id[record_id].get("imported_record_type") == "gift"
-    ]
-    gift_record_ids.sort(key=lambda rid: (
-        records_by_id[rid]["source_id"], records_by_id[rid]["external_id"]
-    ))
-    if gift_record_ids:
-        # Drive this update from gift keys so PostgreSQL uses the existing
-        # (source_id, external_id) unique index instead of scanning gifts by
-        # source_record_id, which has no dedicated index.
-        db.execute(
-            text("""
-                UPDATE gifts g SET profile_id=gift_link.profile_id
-                FROM unnest(CAST(:source_ids AS bigint[]), CAST(:external_ids AS text[]),
-                            CAST(:profile_ids AS bigint[]))
-                     AS gift_link(source_id, external_id, profile_id)
-                CROSS JOIN LATERAL (
-                    SELECT candidate.ctid FROM gifts candidate
-                    WHERE candidate.source_id=gift_link.source_id
-                      AND candidate.external_id=gift_link.external_id
-                      AND candidate.profile_id IS NULL
-                    LIMIT 1
-                ) AS matching_gift
-                WHERE g.ctid=matching_gift.ctid
-            """),
-            {
-                "source_ids": [records_by_id[rid]["source_id"] for rid in gift_record_ids],
-                "external_ids": [records_by_id[rid]["external_id"] for rid in gift_record_ids],
-                "profile_ids": [record_profiles[rid] for rid in gift_record_ids],
-            },
-        )
-    event_links = []
-    for record_id, profile_id in record_profiles.items():
-        record = records_by_id[record_id]
-        event_links.extend((
-            (record["source_id"], record["raw_hash"], record_id, profile_id),
-            (record["source_id"], record["external_id"], record_id, profile_id),
-        ))
-        if (record.get("attributes") or {}).get("_event_message_id"):
-            event_links.append((record["source_id"], record["attributes"]["_event_message_id"], record_id, profile_id))
-    db.execute(
-        text("""
-            UPDATE events e SET profile_id=event_link.profile_id
-            FROM (
-                SELECT DISTINCT ON (source_id, message_id)
-                       source_id, message_id, profile_id
-                FROM unnest(CAST(:source_ids AS bigint[]), CAST(:message_ids AS text[]),
-                            CAST(:record_ids AS bigint[]), CAST(:profile_ids AS bigint[]))
-                     AS candidate(source_id, message_id, record_id, profile_id)
-                ORDER BY source_id, message_id, record_id
-            ) AS event_link
-            CROSS JOIN LATERAL (
-                SELECT candidate_event.tableoid, candidate_event.ctid
-                FROM events candidate_event
-                WHERE candidate_event.source_id=event_link.source_id
-                  AND candidate_event.message_id=event_link.message_id
-                  AND candidate_event.profile_id IS NULL
-            ) AS matching_event
-            WHERE e.tableoid=matching_event.tableoid AND e.ctid=matching_event.ctid
-        """),
-        {
-            "source_ids": [item[0] for item in event_links],
-            "message_ids": [item[1] for item in event_links],
-            "record_ids": [item[2] for item in event_links],
-            "profile_ids": [item[3] for item in event_links],
-        },
-    )
     _materialize_source_attributes_batch(
         db, [(records_by_id[record_id], profile_id)
              for record_id, profile_id in record_profiles.items()]
     )
-    anonymous_links = []
-    for record_id, profile_id in record_profiles.items():
-        record = records_by_id[record_id]
-        attrs = record.get("attributes") or {}
-        if isinstance(attrs, str):
-            attrs = json.loads(attrs)
-        anonymous_id = normalize_anonymous_id(attrs.get("anonymous_id"))
-        if anonymous_id and attrs.get("identify"):
-            anonymous_links.append((record["source_id"], anonymous_id, profile_id))
-    if anonymous_links:
-        db.execute(
-            text("""
-                UPDATE events e SET profile_id=anonymous_link.profile_id
-                FROM (
-                    SELECT DISTINCT ON (source_id, anonymous_id)
-                           source_id, anonymous_id, profile_id
-                    FROM unnest(CAST(:source_ids AS bigint[]), CAST(:anonymous_ids AS text[]),
-                                CAST(:profile_ids AS bigint[]))
-                         AS links(source_id, anonymous_id, profile_id)
-                    ORDER BY source_id, anonymous_id, profile_id
-                ) AS anonymous_link
-                WHERE e.source_id=anonymous_link.source_id
-                  AND e.anonymous_id=anonymous_link.anonymous_id AND e.profile_id IS NULL
-            """),
-            {
-                "source_ids": [item[0] for item in anonymous_links],
-                "anonymous_ids": [item[1] for item in anonymous_links],
-                "profile_ids": [item[2] for item in anonymous_links],
-            },
-        )
 
 
 def resolve_batch(db: Session, limit: int = BATCH_SIZE, job_id: int | None = None) -> dict[str, int]:
@@ -433,7 +335,9 @@ def resolve_batch(db: Session, limit: int = BATCH_SIZE, job_id: int | None = Non
             SELECT sr.*, s.key AS source_key, s.priority, i.record_type AS imported_record_type
             FROM source_records sr JOIN sources s ON s.id=sr.source_id
             LEFT JOIN imports i ON i.id=sr.last_import_id
-            WHERE sr.resolved_at IS NULL ORDER BY sr.id LIMIT :limit
+            WHERE sr.resolved_at IS NULL
+              AND COALESCE(i.record_type,'contact') NOT IN ('gift','event')
+            ORDER BY sr.id LIMIT :limit
         """),
         {"limit": COMPONENT_SCAN_SIZE},
     ).mappings().all()

@@ -115,6 +115,7 @@ from app.models.milestone2 import (  # noqa: E402,F401
     Gift,
     Identifier,
     IdentifierBlocklist,
+    IdentityBatch,
     Import,
     Profile,
     ProfileMerge,
