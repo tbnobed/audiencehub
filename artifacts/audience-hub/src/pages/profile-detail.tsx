@@ -16,6 +16,7 @@ import { displayValue, displayDate, displayAmount, displayNumber, displayJoined,
 import { ProfileSectionBoundary } from '@/components/ProfileSectionBoundary';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ConsentEditor } from '@/components/privacy/consent-editor';
+import { ActivityTimeline } from '@/components/profiles/activity-timeline';
 
 export default function ProfileDetail() {
   const { id } = useParams<{ id: string }>();
@@ -278,45 +279,7 @@ export default function ProfileDetail() {
 
           <TabsContent value="activity" className="m-0 h-full">
             <ProfileSectionBoundary {...boundary} section="Activity">{() =>
-            <Card className="h-full flex flex-col">
-              <div className="overflow-auto flex-1 p-0">
-                <Table>
-                  <TableHeader className="bg-muted/50 sticky top-0">
-                    <TableRow>
-                      <TableHead className="w-[180px]">Time</TableHead>
-                      <TableHead>Event Type</TableHead>
-                      <TableHead>Name</TableHead>
-                      <TableHead>Source</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {profile.events.length === 0 ? (
-                      <TableRow>
-                        <TableCell colSpan={4} className="text-center py-12 text-muted-foreground">
-                          No recent activity recorded.
-                        </TableCell>
-                      </TableRow>
-                    ) : (
-                      profile.events.map((event) => (
-                        <TableRow key={event.id}>
-                          <TableCell className="text-xs text-muted-foreground">
-                            {displayDate(event.occurred_at, 'MMM d, yyyy HH:mm:ss')}
-                          </TableCell>
-                          <TableCell>
-                            <Badge variant="outline" className="font-mono text-[10px] uppercase">{displayValue(event.type)}</Badge>
-                          </TableCell>
-                          <TableCell className="font-medium text-sm">{displayValue(event.name)}</TableCell>
-                          <TableCell>
-                            <Badge variant="secondary" className="font-mono text-[10px]">{displayValue(event.source_key)}</Badge>
-                            {event.properties && Object.keys(event.properties).length > 0 && <details className="mt-1 text-[10px]"><summary className="cursor-pointer text-primary">Properties</summary><pre className="mt-1 p-2 bg-ground border border-line rounded max-w-[300px] overflow-auto">{JSON.stringify(event.properties, null, 2)}</pre></details>}
-                          </TableCell>
-                        </TableRow>
-                      ))
-                    )}
-                  </TableBody>
-                </Table>
-              </div>
-            </Card>}</ProfileSectionBoundary>
+            <ActivityTimeline events={profile.events} />}</ProfileSectionBoundary>
           </TabsContent>
 
           <TabsContent value="identity" className="m-0 space-y-6">

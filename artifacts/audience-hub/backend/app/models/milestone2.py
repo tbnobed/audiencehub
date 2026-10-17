@@ -187,11 +187,18 @@ class Gift(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 
 
+class IngestionReceipt(Base):
+    __tablename__ = "ingestion_receipts"
+    source_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("sources.id"), primary_key=True)
+    message_hash: Mapped[str] = mapped_column(Text, primary_key=True)
+
+
 class Event(Base):
     __tablename__ = "events"
     __table_args__ = (
         UniqueConstraint("source_id", "message_id", "occurred_at", name="uq_events_source_message_time"),
         Index("ix_events_anonymous_id", "anonymous_id"),
+        Index("ix_events_source_id", "source_id", text("id DESC")),
         Index("ix_events_name_occurred", "name", "occurred_at"),
         {"postgresql_partition_by": "RANGE (occurred_at)"},
     )

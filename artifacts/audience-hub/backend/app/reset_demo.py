@@ -1,5 +1,6 @@
 """Explicit, transactional dataset reset; configuration and operators are retained."""
 import os
+import re
 
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
@@ -10,7 +11,7 @@ from sqlalchemy.exc import OperationalError
 # retained table must make the operation fail, not quietly destroy configuration.
 DATA_TABLES = (
     "audit_log", "client_errors", "scheduled_runs", "jobs", "imports", "import_batch_diagnostics", "identity_batches",
-    "profiles", "source_records",
+    "profiles", "source_records", "ingestion_receipts",
     "identifiers", "identifier_blocklist", "profile_merges", "gifts", "events",
     "consents", "suppressions", "enrichment_values", "profile_traits",
     "trait_snapshots", "trait_dirty_profiles", "segment_membership",
@@ -24,6 +25,34 @@ RETAINED_TABLES = (
     "users", "sources", "enrichment_attributes", "admin_settings",
 )
 KNOWN_TABLES = frozenset((*DATA_TABLES, *RETAINED_TABLES, "alembic_version"))
+
+
+def safe_query_preview(query):
+    """SQL structure only: pg_stat_activity may contain bound PII or credentials."""
+    query = re.sub(r"\$([A-Za-z_][A-Za-z_0-9]*|)\$.*?\$\1\$", "?", query or "", flags=re.S)
+    query = re.sub(r"\$(?:[A-Za-z_][A-Za-z_0-9]*|)\$.*$", "?", query, flags=re.S)
+    query = re.sub(r"/\*.*?(?:\*/|$)|--[^\n]*", " ", query, flags=re.S)
+    query = re.sub(r"'(?:''|\\.|[^'])*(?:'|$)|\"(?:\"\"|[^\"])*(?:\"|$)", "?", query, flags=re.S)
+    query = re.sub(r"\b\d+(?:\.\d+)?\b", "?", query)
+    return " ".join(query.split())[:120]
+
+
+def busy_sessions(engine):
+    with engine.connect() as conn:
+        rows = conn.execute(text("""
+            SELECT pid, application_name, query_start, query
+            FROM pg_stat_activity
+            WHERE datname=current_database() AND pid<>pg_backend_pid()
+              AND (state IS DISTINCT FROM 'idle' OR EXISTS (
+                  SELECT 1 FROM pg_locks l WHERE l.pid=pg_stat_activity.pid
+                    AND l.relation IS NOT NULL))
+            ORDER BY query_start NULLS LAST, pid
+        """)).all()
+    return "\n".join(
+        f"pid={row.pid} application_name={row.application_name!r} "
+        f"query_start={row.query_start} query={safe_query_preview(row.query)!r}"
+        for row in rows
+    ) or "No other busy sessions visible (check PostgreSQL monitoring permissions)."
 
 
 def reset_demo(engine: Engine, *, yes: bool = False, force: bool = False) -> None:
@@ -50,7 +79,8 @@ def reset_demo(engine: Engine, *, yes: bool = False, force: bool = False) -> Non
             )).scalar_one()
             if running:
                 raise RuntimeError(
-                    f"Refusing reset-demo: {running} running job(s). Stop workers and wait for jobs to finish."
+                    f"Refusing reset-demo: {running} running job(s). Stop workers and recover stale jobs.\n"
+                    + busy_sessions(engine)
                 )
 
             # Includes partition parents but not their children (TRUNCATE parent
@@ -76,7 +106,7 @@ def reset_demo(engine: Engine, *, yes: bool = False, force: bool = False) -> Non
         if getattr(exc.orig, "sqlstate", None) == "55P03":
             raise RuntimeError(
                 "Refusing reset-demo: a job or dataset table is busy. "
-                "Stop workers and other writers before retrying."
+                "Stop workers and other writers before retrying.\n" + busy_sessions(engine)
             ) from exc
         raise
     print("Dataset reset complete. Users, sources, source definitions and admin settings preserved.")

@@ -26,6 +26,7 @@ export type RecentImport = {
 };
 
 export type DataHealthResponse = {
+  privacy_segment_reviews: { id: number; segment_id: string; created_at: string; definition_changed: string }[];
   pending_count: number;
   merges_per_day: { day: string; count: number }[];
   blocklist_hits: number;
@@ -33,6 +34,14 @@ export type DataHealthResponse = {
   rejected_rows: number;
   recent_imports: RecentImport[];
 };
+
+export function useReviewPrivacySegment() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => fetchApi(`/api/data-health/privacy-segments/${id}/review`, { method: 'POST' }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['data-health'] }),
+  });
+}
 
 export function useDataHealth() {
   return useQuery({

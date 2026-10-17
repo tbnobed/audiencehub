@@ -4,6 +4,12 @@ from sqlalchemy import func, select, update, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 from app.models import Job, now
+from app.jobs import lifecycle
+
+
+def owned(job_id):
+    owner = lifecycle.current()
+    return (Job.started_at == owner.started_at) if owner and owner.job_id == job_id else text("true")
 
 
 def enqueue(db: Session, job_type: str, payload: dict | None = None, *,
@@ -65,7 +71,7 @@ def heartbeat(db: Session, job_id: int, progress: dict | None = None) -> bool:
     values = {"heartbeat_at": now()}
     if progress is not None:
         values["progress"] = progress
-    return bool(db.execute(update(Job).where(Job.id == job_id, Job.status == "running").values(**values)).rowcount)
+    return bool(db.execute(update(Job).where(Job.id == job_id, Job.status == "running", owned(job_id)).values(**values)).rowcount)
 
 
 def identity_import_running(db: Session) -> bool:
@@ -82,7 +88,7 @@ def identity_import_running(db: Session) -> bool:
 
 def defer(db: Session, job_id: int, seconds: int = 30) -> None:
     """Yield claimed work without spending its failure/retry budget."""
-    db.execute(update(Job).where(Job.id == job_id, Job.status == "running").values(
+    db.execute(update(Job).where(Job.id == job_id, Job.status == "running", owned(job_id)).values(
         status="queued", run_after=func.clock_timestamp() + timedelta(seconds=seconds),
         attempts=func.greatest(Job.attempts - 1, 0),
         started_at=None, heartbeat_at=None, finished_at=None,
@@ -90,12 +96,12 @@ def defer(db: Session, job_id: int, seconds: int = 30) -> None:
 
 
 def succeed(db: Session, job_id: int) -> None:
-    db.execute(update(Job).where(Job.id == job_id, Job.status == "running")
+    db.execute(update(Job).where(Job.id == job_id, Job.status == "running", owned(job_id))
                .values(status="succeeded", finished_at=now(), heartbeat_at=now()))
 
 
 def fail(db: Session, job_id: int, error: str) -> None:
-    job = db.get(Job, job_id, with_for_update=True)
+    job = db.scalar(select(Job).where(Job.id == job_id, owned(job_id)).with_for_update())
     if not job or job.status != "running":
         return
     # Error text must never contain raw payloads or PII.
@@ -111,11 +117,16 @@ def fail(db: Session, job_id: int, error: str) -> None:
 
 def requeue_stale(db: Session, stale_after: timedelta = timedelta(minutes=5),
                   job_ids: list[int] | None = None) -> int:
-    stmt = select(Job).where(Job.status == "running", Job.heartbeat_at < now() - stale_after)
+    stmt = select(Job).where(Job.status == "running",
+                             func.coalesce(Job.heartbeat_at, Job.started_at, Job.created_at) < now() - stale_after)
     if job_ids is not None:
         stmt = stmt.where(Job.id.in_(job_ids))
     jobs = db.scalars(stmt.with_for_update(skip_locked=True)).all()
     for job in jobs:
+        if job.started_at is not None:
+            name = lifecycle.application_name(job.id, job.started_at)
+            lifecycle.fence(db, name)
+            lifecycle.terminate_owned(db, name)
         job.heartbeat_at = None
         job.error = "Worker heartbeat expired"
         if job.attempts >= job.max_attempts:

@@ -6,6 +6,10 @@ class SegmentTraitsRefreshRequired(ValueError):
 
 
 def run(job_type: str, payload: dict, job_id: int | None = None) -> None:
+    if job_type == "ingestion.resolve":
+        from app.ingestion.jobs import run_resolution
+        run_resolution(int(payload["source_id"]), job_id=job_id)
+        return
     if job_type == "activation.run":
         from app.activations.service import run_activation
         run_activation(int(payload["run_id"]), job_id=job_id)

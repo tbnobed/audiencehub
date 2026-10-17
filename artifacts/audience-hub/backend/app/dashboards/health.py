@@ -2,6 +2,17 @@
 from sqlalchemy import text
 
 
+PRIVACY_REVIEWS = """
+    SELECT a.id, a.entity_id AS segment_id, a.at AS created_at,
+           a.details->>'definition_changed' AS definition_changed
+    FROM audit_log a
+    WHERE a.action='privacy.segment.review_required'
+      AND NOT EXISTS (SELECT 1 FROM audit_log reviewed
+        WHERE reviewed.action='data_health.privacy_segment.review'
+          AND reviewed.entity_id=a.id::text)
+"""
+
+
 def health_counts(db, role="admin"):
     from app.dashboards.cache import check_deadline
     check_deadline(db)
@@ -24,6 +35,8 @@ def health_counts(db, role="admin"):
         WHERE license_expires_at >= CURRENT_DATE
           AND license_expires_at <= CURRENT_DATE + 60) AS expiring_enrichment
     """)).mappings().one())
+    counts["privacy_segment_reviews"] = db.scalar(text(
+        "SELECT count(*) FROM (" + PRIVACY_REVIEWS + ") issues"))
     if role != "admin":
         counts["failed_jobs"] = 0
         counts["blocklist_reviews"] = 0
@@ -42,6 +55,8 @@ def attention(db, role, lapsing):
          "auto-blocklisted identifiers await approval.", "/data-health"),
         ("expiring_enrichment", "warning", "Enrichment licenses expiring",
          "enrichment values expire within 60 days.", "/data-health"),
+        ("privacy_segment_reviews", "warning", "Audience privacy changes need review",
+         "audience changes await review; audiences and activations remain running.", "/data-health"),
     )
     items = [{"severity": severity, "title": title,
               "explanation": f"{counts[key]:,} {explanation}", "href": href}

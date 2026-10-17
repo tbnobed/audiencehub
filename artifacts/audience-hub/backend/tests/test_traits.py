@@ -205,5 +205,7 @@ def test_dirty_worker_locks_before_selecting_dirty_rows(monkeypatch):
     monkeypatch.setattr("app.db.engine", object())
     monkeypatch.setattr("sqlalchemy.orm.Session", lambda _engine: recorder)
     handlers.run("traits.recompute", {"mode": "dirty"})
-    assert "pg_advisory_xact_lock" in recorder.statements[0]
-    assert "FOR UPDATE SKIP LOCKED" in recorder.statements[1]
+    assert "pg_advisory_xact_lock_shared" in recorder.statements[0]
+    assert "pg_advisory_xact_lock" in recorder.statements[1]
+    assert "audience-hub:trait-recompute" in recorder.statements[1]
+    assert "FOR UPDATE SKIP LOCKED" in recorder.statements[2]

@@ -38,9 +38,11 @@ def clean_test_jobs():
 
 def _resolver_job():
     with Session(engine) as db:
-        job = Job(type="identity.resolve_batch", payload={"concurrency_test": True}, status="running",
-                  attempts=1, max_attempts=1)
-        db.add(job)
+        job = queue.enqueue(db, "identity.resolve_batch",
+                            {"concurrency_test": True}, priority=-1000, max_attempts=1)
+        claimed = queue.claim(db)
+        assert claimed.id == job.id
+        assert claimed.started_at is not None
         db.commit()
         return job.id
 
@@ -87,9 +89,11 @@ def test_running_import_without_batch_lock_defers_until_complete(record_type, tm
                           file_path=str(tmp_path / "unused.csv"), record_type=record_type)
         db.add(imported)
         db.flush()
-        importing = Job(type="import.run", payload={"import_id": imported.id, "concurrency_test": True},
-                        status="running", attempts=1)
-        db.add(importing)
+        importing = queue.enqueue(db, "import.run",
+                                  {"import_id": imported.id, "concurrency_test": True},
+                                  priority=-2000)
+        assert queue.claim(db).id == importing.id
+        assert importing.started_at is not None
         db.commit()
         import_job_id = importing.id
     try:

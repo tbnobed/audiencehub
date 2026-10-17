@@ -1,11 +1,14 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { ArrowRight, Search, Users, RefreshCw } from 'lucide-react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useSearchParams } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
+import { useIsMobile } from '@/hooks/use-mobile';
+import { ProfilePreview } from '@/components/profiles/profile-preview';
 import { useProfiles } from '@/hooks/use-profiles';
 import { useSources } from '@/hooks/use-sources';
 
@@ -21,7 +24,8 @@ const date = (value: unknown) => value ? new Date(String(value)).toLocaleDateStr
 const currency = (value: unknown) => value == null ? '—' : new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(Number(value));
 
 export default function Profiles() {
-  const navigate = useNavigate();
+  const isMobile = useIsMobile();
+  const rowRefs = useRef(new Map<number, HTMLTableRowElement>());
   const [params, setParams] = useSearchParams();
   const [search, setSearch] = useState(params.get('search') || '');
   const [debounced, setDebounced] = useState(search);
@@ -51,6 +55,25 @@ export default function Profiles() {
     page, page_size: pageSize,
   });
   const { data: sourceData } = useSources();
+  const previewId = Number(params.get('preview')) || 0;
+  const from = `/profiles${params.toString() ? `?${params}` : ''}`;
+  const select = (id: number | null) => {
+    const next = new URLSearchParams(params);
+    if (id) next.set('preview', String(id)); else next.delete('preview');
+    setParams(next, { replace: true });
+  };
+  const closePreview = () => { const id = previewId; select(null); requestAnimationFrame(() => rowRefs.current.get(id)?.focus()); };
+  const onRowKey = (e: KeyboardEvent<HTMLTableRowElement>, index: number, id: number) => {
+    const items = data?.items || [];
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); select(previewId === id ? null : id); }
+    else if (e.key === 'Escape' && previewId) { e.preventDefault(); select(null); }
+    else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const target = items[index + (e.key === 'ArrowDown' ? 1 : -1)];
+      if (target) { rowRefs.current.get(target.id)?.focus(); if (previewId) select(target.id); }
+    }
+  };
+  const panelOpen = !!previewId && !isMobile;
 
   return <div className="max-w-[1680px] mx-auto space-y-4 pb-8 animate-in fade-in duration-300">
     <header className="flex justify-between items-end">
@@ -64,27 +87,39 @@ export default function Profiles() {
       <Select value={params.get('has_email') || 'all'} onValueChange={v => update('has_email', v)}><SelectTrigger data-testid="select-has-email" className="w-[140px] h-9 text-xs"><SelectValue placeholder="Email" /></SelectTrigger><SelectContent><SelectItem value="all">Any email</SelectItem><SelectItem value="true">Has email</SelectItem><SelectItem value="false">No email</SelectItem></SelectContent></Select>
       {(params.get('search') || params.get('source_id') || params.get('donor_status') || params.get('has_email')) && <Button variant="ghost" size="sm" onClick={() => { setSearch(''); setParams({}); }}>Clear filters</Button>}
     </div>
-    <div className="border border-line rounded-md bg-surface overflow-hidden">
+    <div className={`grid gap-3 items-start ${panelOpen ? 'md:grid-cols-[minmax(0,1fr)_300px] xl:grid-cols-[minmax(0,1fr)_360px]' : ''}`}>
+    <div className="border border-line rounded-md bg-surface overflow-hidden min-w-0">
       <div className="overflow-auto"><Table><TableHeader className="bg-surface-raised"><TableRow className="border-line hover:bg-transparent"><TableHead className="text-[11px]">Profile</TableHead><TableHead className="text-[11px]">Contact</TableHead><TableHead className="text-[11px]">Location</TableHead><TableHead className="text-[11px]">Donor status</TableHead><TableHead className="text-[11px] text-right">Lifetime giving</TableHead><TableHead className="text-[11px] text-right">Last gift</TableHead><TableHead className="text-[11px]">Sources</TableHead><TableHead className="w-8" /></TableRow></TableHeader><TableBody>
         {isLoading ? Array.from({ length: 9 }, (_, i) => <TableRow key={i} className="border-line">{Array.from({ length: 8 }, (_, j) => <TableCell key={j}><Skeleton className="h-4 w-full bg-surface-raised" /></TableCell>)}</TableRow>)
         : isError ? <TableRow><TableCell colSpan={8} className="h-44 text-center"><p className="text-danger text-sm">Unable to load profiles</p><p className="text-ink-muted text-xs mt-1">{error instanceof Error ? error.message : 'Please try again.'}</p><Button variant="outline" size="sm" className="mt-3" onClick={() => refetch()}><RefreshCw size={13} className="mr-2" /> Retry</Button></TableCell></TableRow>
         : !data?.items.length ? <TableRow><TableCell colSpan={8} className="h-44 text-center"><Users size={22} className="mx-auto text-ink-muted mb-2" /><p className="text-sm">No matching profiles</p><p className="text-xs text-ink-muted mt-1">Adjust the filters or import audience records.</p></TableCell></TableRow>
-        : data.items.map(p => {
+        : data.items.map((p, index) => {
           const traits = (p as typeof p & { traits?: Record<string, unknown> }).traits;
           const name = [p.first_name, p.last_name].filter(Boolean).join(' ') || 'Unnamed profile';
           const sourceKeys = Array.isArray(traits?.source_keys) ? traits.source_keys as string[] : [];
-          return <TableRow key={p.id} data-testid={`row-profile-${p.id}`} className="cursor-pointer border-line hover:bg-surface-raised text-xs" onClick={() => navigate(`/profiles/${p.id}`, { state: { from: `/profiles${params.toString() ? `?${params}` : ''}` } })}>
+          const selected = previewId === p.id;
+          return <TableRow key={p.id} ref={el => { if (el) rowRefs.current.set(p.id, el); else rowRefs.current.delete(p.id); }} tabIndex={0} aria-selected={selected} data-state={selected ? 'selected' : undefined} data-testid={`row-profile-${p.id}`} title="Enter to preview · arrows to move" className={`cursor-pointer border-line text-xs transition-colors outline-none focus-visible:bg-surface-raised focus-visible:shadow-[inset_2px_0_0_var(--signal)] ${selected ? 'bg-signal-soft shadow-[inset_2px_0_0_var(--signal)] hover:bg-signal-soft' : 'hover:bg-surface-raised'}`} onClick={() => select(selected ? null : p.id)} onKeyDown={e => onRowKey(e, index, p.id)}>
             <TableCell className="font-medium text-ink">{name}<span className="block text-[10px] font-mono text-ink-muted mt-0.5">#{p.id}</span></TableCell>
             <TableCell><span className="block text-ink-muted">{p.email || '—'}</span><span className="block text-ink-muted mt-0.5">{p.phone || ''}</span></TableCell>
             <TableCell className="text-ink-muted">{[p.city, p.region].filter(Boolean).join(', ') || '—'}</TableCell>
             <TableCell><span className={`inline-block px-2 py-0.5 rounded-sm border uppercase tracking-wide font-mono text-[10px] ${statusStyle[p.donor_status] || statusStyle.prospect}`}>{p.donor_status}</span></TableCell>
             <TableCell className="text-right font-mono tabular-nums">{currency(traits?.ltv_total)}</TableCell>
             <TableCell className="text-right text-ink-muted font-mono">{date(traits?.last_gift_date)}</TableCell>
-            <TableCell><div className="flex flex-wrap gap-1">{sourceKeys.length ? sourceKeys.slice(0, 3).map(s => <span key={s} className="text-[10px] font-mono px-1.5 py-0.5 border border-line rounded-sm text-ink-muted">{s}</span>) : <span className="text-ink-muted">—</span>}{sourceKeys.length > 3 && <span className="text-ink-muted">+{sourceKeys.length - 3}</span>}</div></TableCell><TableCell><ArrowRight size={13} className="text-ink-muted" /></TableCell>
+            <TableCell><div className="flex flex-wrap gap-1">{sourceKeys.length ? sourceKeys.slice(0, 3).map(s => <span key={s} className="text-[10px] font-mono px-1.5 py-0.5 border border-line rounded-sm text-ink-muted">{s}</span>) : <span className="text-ink-muted">—</span>}{sourceKeys.length > 3 && <span className="text-ink-muted">+{sourceKeys.length - 3}</span>}</div></TableCell><TableCell><ArrowRight size={13} className={`transition-transform ${selected ? 'text-signal translate-x-0.5' : 'text-ink-muted'}`} /></TableCell>
           </TableRow>;
         })}
       </TableBody></Table></div>
       {data && data.total > 0 && <footer className="border-t border-line px-4 py-2 flex justify-between items-center text-[11px] text-ink-muted font-mono"><span>Showing {(page - 1) * pageSize + 1}–{Math.min(page * pageSize, data.total)} of {data.total.toLocaleString()}</span><div className="flex gap-2"><Button data-testid="button-previous-profiles" size="sm" variant="outline" disabled={page <= 1} onClick={() => update('page', String(page - 1))}>Previous</Button><Button data-testid="button-next-profiles" size="sm" variant="outline" disabled={page * pageSize >= data.total} onClick={() => update('page', String(page + 1))}>Next</Button></div></footer>}
     </div>
+    {panelOpen && <aside aria-label="Profile preview" className="hidden md:flex flex-col sticky top-4 h-[calc(100dvh-7rem)] border border-line rounded-md bg-surface overflow-hidden animate-in fade-in slide-in-from-right-2 duration-200">
+      <ProfilePreview key={previewId} id={previewId} from={from} onClose={closePreview} />
+    </aside>}
+    </div>
+    <Sheet open={!!previewId && isMobile} onOpenChange={o => { if (!o) closePreview(); }}>
+      <SheetContent side="bottom" className="p-0 bg-surface border-line h-[85dvh] md:hidden [&>button]:hidden">
+        <SheetTitle className="sr-only">Profile preview</SheetTitle>
+        {!!previewId && <ProfilePreview key={previewId} id={previewId} from={from} onClose={closePreview} />}
+      </SheetContent>
+    </Sheet>
   </div>;
 }

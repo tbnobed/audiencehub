@@ -125,7 +125,7 @@ services:
       db: { condition: service_healthy }
       api: { condition: service_healthy }
     command: ["/app/scripts/start-worker.sh"]
-    stop_grace_period: 30m
+    stop_grace_period: 30s
     volumes:
       - appdata:/data
     networks: [internal]
@@ -191,13 +191,43 @@ session advisory scheduler leader lock. Other replicas continue processing
 jobs and can take over scheduling when that connection is released. The
 scheduled-run keys protect against duplicate daily/hourly jobs on failover.
 During shutdown the parent releases scheduler leadership immediately, then
-gives children up to `WORKER_STOP_GRACE_SECONDS` (default 1750 seconds) total
-to finish current jobs before force-killing them. This leaves a margin within
-Compose's 30-minute `stop_grace_period`. An interrupted job is **not** requeued
-on shutdown; it is retried only after `JOB_STALE_SECONDS` without a heartbeat.
-If changing Compose's stop period, adjust the worker grace deadline accordingly
-(the built-in maximum is 1790 seconds). Never validate recovery against the
-production database; use a migrated isolated test database.
+gives children up to `WORKER_STOP_GRACE_SECONDS` (default/maximum 20 seconds)
+to cancel their own SQL, terminate remaining owned sessions, and commit an
+immediate retry without consuming an attempt. Compose's `stop_grace_period`
+is 30 seconds, including a five-second forced-child reap margin. No new jobs
+are claimed after SIGTERM. If cleanup fails or the process is SIGKILLed, its
+running row is left for stale recovery rather than unsafely publishing retry.
+Never validate recovery against the production database.
+
+Worker helper/heartbeat SQL shares an attempt-specific application name
+`kinship-worker-<job-id>-<started-at-digest>`; API sessions use `kinship-api`,
+and worker control/scheduler sessions use `kinship-worker-<pid>`.
+Recovery serializes against connection registration, terminates only the exact
+attempt name in the current database/current role, waits for those backends to
+disappear, then requeues (or fails exhausted attempts). Old attempts cannot
+heartbeat or finalize replacement attempts. Legacy untagged sessions are never
+guessed at or killed; inspect them manually during the first rollout.
+
+`kinship jobs cancel --all-stale` invokes that same recovery using
+`JOB_STALE_SECONDS` (default 300). It does not cancel healthy work.
+`reset-demo` still refuses running jobs/busy tables and now reports session PID,
+application name, query start and a 120-character SQL preview with literals and
+comments redacted. Keep this operator output private.
+
+All app connections enable client/server TCP keepalives (30s idle, 10s interval,
+3 probes) and `IDLE_TRANSACTION_TIMEOUT_SECONDS` (default 120). These session
+settings apply with the app role without requiring superuser ALTER ROLE.
+Statement timeout defaults: API/maintenance/noop 60s
+(`API_STATEMENT_TIMEOUT_SECONDS`), import/identity/traits 7200s
+(`BULK_STATEMENT_TIMEOUT_SECONDS`), segment 600s
+(`SEGMENT_STATEMENT_TIMEOUT_SECONDS`), activation and deletion 900s
+(`ACTIVATION_STATEMENT_TIMEOUT_SECONDS`, `DELETION_STATEMENT_TIMEOUT_SECONDS`).
+All must be positive; narrower existing interactive deadlines remain in place.
+
+Run `python scripts/worker_shutdown_acceptance.py --image audience-hub:latest`
+after building the release image to verify real `docker stop` against a fresh
+isolated PostgreSQL container. It never uses the production Compose project,
+environment file, network or volumes, and removes its own containers on exit.
 
 `scripts/backup.sh` — loops forever: once a day at `BACKUP_HOUR` (default 02:00 container local time), runs `pg_dump -Fc` to `/backups/audience_hub-YYYYmmdd-HHMM.dump`, verifies with `pg_restore --list`, deletes dumps older than `BACKUP_KEEP_DAYS`, logs one line per run.
 

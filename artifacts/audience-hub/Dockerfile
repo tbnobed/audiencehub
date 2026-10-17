@@ -11,7 +11,9 @@ RUN npm ci --include=dev --bin-links=true --no-audit --no-fund --cache=/tmp/npm-
   || { cat /tmp/npm-cache/_logs/*-debug-0.log; exit 1; }
 RUN test "$(npm --version)" = "10.9.9" \
   && test -x node_modules/.bin/vite
-COPY index.html vite.config.ts tsconfig.json ./
+COPY index.html vite.config.ts vite.sdk.config.ts tsconfig.json ./
+COPY scripts/sdk-build.mjs ./scripts/sdk-build.mjs
+COPY sdk/ ./sdk/
 COPY src/ ./src/
 COPY public/ ./public/
 RUN PORT=5000 BASE_PATH=/ npm run build
@@ -31,6 +33,7 @@ COPY backend/ ./backend/
 # Replace the minimal package with the complete app and console entry point.
 RUN pip install --no-deps ./backend
 COPY --from=web /web/dist/public ./static
+COPY --from=web /web/dist/sdk ./static/sdk
 COPY scripts/ ./scripts/
 RUN chmod +x scripts/*.sh && mkdir -p /data/uploads /data/exports \
   && chown -R app:app /data /app

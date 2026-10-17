@@ -30,6 +30,12 @@ class Settings(BaseSettings):
     export_retention_days: int = 14
     worker_concurrency: int = 4
     job_stale_seconds: int = Field(default=300, ge=1)
+    api_statement_timeout_seconds: int = Field(default=60, ge=1)
+    bulk_statement_timeout_seconds: int = Field(default=7200, ge=1)
+    segment_statement_timeout_seconds: int = Field(default=600, ge=1)
+    activation_statement_timeout_seconds: int = Field(default=900, ge=1)
+    deletion_statement_timeout_seconds: int = Field(default=900, ge=1)
+    idle_transaction_timeout_seconds: int = Field(default=120, ge=1)
     ingest_cors_origins: str = ""
     log_level: str = "INFO"
 

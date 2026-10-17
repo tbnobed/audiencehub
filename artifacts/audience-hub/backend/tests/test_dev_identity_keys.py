@@ -58,6 +58,10 @@ else:
     sys.exit(74)
 """)
     shim.chmod(0o700)
+    npm = tmp_path / "npm"
+    npm.write_text("#!/bin/bash\n"
+                   '[[ "$#" == 2 && "$1" == run && "$2" == build:sdk ]] || exit 75\n')
+    npm.chmod(0o700)
     env = {"PATH": f"{tmp_path}:/usr/bin:/bin", "HOME": str(tmp_path),
            "DATABASE_URL": "postgresql://fixture/unused", "FIXTURE_MODE": mode,
            "UPLOAD_DIR": str(tmp_path / "uploads"), "EXPORT_DIR": str(tmp_path / "exports")}

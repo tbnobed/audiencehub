@@ -1,0 +1,20 @@
+While the 500k production load runs, work on these in order. Do not change the import, identity resolution or attachment pipeline until I send the production timings.
+
+1. Worker shutdown and orphaned queries. On the production server, stopping and replacing the worker container left its Postgres queries running for over an hour (a trait recompute plus two jobs waiting on its advisory lock), which blocked reset-demo. Fix:
+   - On SIGTERM, the worker stops claiming jobs, cancels its in-flight statements (pg_cancel_backend on its own connections) and marks its running jobs for retry before exiting. Set stop_grace_period in docker-compose.yml to match.
+   - Set application_name on every worker and API connection (for example kinship-worker-<pid>, kinship-api) so sessions are identifiable in pg_stat_activity.
+   - Enable TCP keepalives on connections and set idle_in_transaction_session_timeout for app roles, so a dead client's session is reaped.
+   - Give each job type a statement_timeout (long for bulk phases, short for interactive) instead of none.
+   - Stale-job recovery: when a job's heartbeat is stale, terminate any backend still running under that job's application_name before requeueing.
+   - Add "kinship jobs cancel --all-stale" to do this manually. Make reset-demo report which sessions are busy (pid, application_name, query start, first 120 characters) instead of a generic refusal.
+   Test: start a long job, docker stop the worker, and assert its backends are gone within the grace period and the job is requeued.
+
+2. M7 follow-ups:
+   - Rerun the complete backend suite once on the final code and report the total.
+   - Deletion's effect on segments: remove only the erased values or text, keep segments and activations running, audit it, and raise a Data Health issue for review (tests for multi-value rule, single-value rule, description redaction).
+   - Browser-verify activation and privacy screens as analyst and as viewer: viewers never download files or see unmasked identifiers; analysts cannot create destinations or approve deletions.
+   - Code-split the frontend by route so no initial chunk exceeds 500 kB.
+
+3. Confirm with commit IDs that the UI redesign work is merged (Overview layout with four headline KPIs and the Needs-attention panel, Profiles list with preview panel, profile detail layout, grouped sidebar with the custom Kinship icons, the segment builder layout). List anything not yet done and do it.
+
+4. Then Milestone 6 (web and app event ingestion and the JavaScript SDK) per docs/MILESTONES.md and docs/API.md.

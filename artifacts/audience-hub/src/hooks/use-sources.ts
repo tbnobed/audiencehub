@@ -9,6 +9,7 @@ export type Source = {
   priority: number;
   record_types: string[];
   is_active: boolean;
+  has_write_key?: boolean;
   settings: Record<string, any>;
 };
 
@@ -51,5 +52,43 @@ export function useDeleteSource() {
     mutationFn: (id: number) =>
       fetchApi(`/api/sources/${id}`, { method: 'DELETE' }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['sources'] }),
+  });
+}
+
+export type SourceEvent = {
+  id: number | string;
+  name?: string;
+  type?: string;
+  profile_id?: number | null;
+  occurred_at?: string;
+  received_at?: string;
+  timestamp_clamped?: boolean;
+};
+
+export function useSourceEvents(id: number, enabled: boolean) {
+  return useQuery<{ items: SourceEvent[]; next_cursor: number | null }>({
+    queryKey: ['sources', id, 'events'],
+    queryFn: ({ signal }) => fetchApi(`/api/sources/${id}/events?limit=50`, { signal, timeoutMs: 10000 }),
+    enabled,
+    refetchInterval: 3000,
+    retry: false,
+  });
+}
+
+export function useSDKManifest(enabled: boolean) {
+  return useQuery<{ sha256: string }>({
+    queryKey: ['sdk-manifest'],
+    enabled,
+    staleTime: Infinity,
+    retry: false,
+    queryFn: async ({ signal }) => {
+      const response = await fetch(`${import.meta.env.BASE_URL}sdk/manifest.json`, {
+        signal: AbortSignal.any([signal, AbortSignal.timeout(10000)]), cache: 'no-store', credentials: 'omit',
+      });
+      if (!response.ok) throw new Error(`SDK manifest unavailable (HTTP ${response.status}). Build the SDK and serve /sdk/manifest.json.`);
+      const manifest = await response.json();
+      if (manifest.file !== 'ah.js' || !/^[a-f0-9]{64}$/.test(manifest.sha256)) throw new Error('SDK manifest has an invalid content hash.');
+      return { sha256: manifest.sha256 };
+    },
   });
 }

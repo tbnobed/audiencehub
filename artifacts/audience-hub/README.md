@@ -26,10 +26,32 @@ plausibility checks on the 50,000-person small seed, and
 remaining uncertainty about the historical production profile crash.
 
 Before updating a deployment, back up and drain workers, apply migrations
-through `0027_identity_batches`, then restart the API and workers together.
+through `0028_event_ingestion`, then restart the API and workers together.
 Deletion revokes retained exports and historical source files; previously
 downloaded/delivered copies and backups cannot be recalled. Review the warnings
 in Admin and [Security and privacy](docs/SECURITY_PRIVACY.md) before approval.
+
+## M6 event ingestion and SDK
+
+Event API sources now support rotated write keys, `/v1/track`, `/v1/page`,
+`/v1/identify`, and `/v1/batch`. The SDK preserves anonymous history through
+identification, respects opt-out/GPC, and uses a content-hashed bundle URL.
+Source setup includes a once-only key/snippet and live metadata event tail.
+Configure explicit browser origins with `INGEST_CORS_ORIGINS`; production does
+not implicitly trust arbitrary origins. See [API and SDK](docs/API.md).
+`seed --events` sends through the real HTTP API rather than inserting directly.
+
+Worker shutdown now cancels attempt-owned SQL and retries interrupted work;
+Compose allows 30 seconds. Stale recovery terminates owned database sessions
+before requeueing. `kinship jobs cancel --all-stale` performs that recovery
+manually. See [deployment](docs/DEPLOYMENT.md) for the isolated Docker test.
+Deletion preserves running segment/activation configuration and raises audited
+Data Health review issues for affected audiences.
+See [UI integration evidence](docs/UI_MERGE_VERIFICATION.md) for merged commit
+IDs and the completed preview/timeline gaps.
+The [combined verification report](docs/M6_AND_FOLLOWUPS_VERIFICATION.md) records
+544 passing backend tests, the browser role/SDK checks, bundle sizes, and the
+remaining Docker-runtime acceptance limitation.
 
 Bulk-load coordination now waits for the import batch, runs contact identity
 once, attaches gifts/events separately, refreshes planner statistics, and then

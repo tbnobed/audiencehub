@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from sqlalchemy import BigInteger, Boolean, Date, DateTime, ForeignKey, Identity, Index, Integer, String, Text, func
+from sqlalchemy import BigInteger, Boolean, Date, DateTime, ForeignKey, Identity, Index, Integer, String, Text, func, text
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -85,6 +85,10 @@ class ScheduledRun(Base):
 
 class Source(Base):
     __tablename__ = "sources"
+    __table_args__ = (
+        Index("uq_sources_write_key_hash", "write_key_hash", unique=True,
+              postgresql_where=text("write_key_hash IS NOT NULL")),
+    )
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
     key: Mapped[str] = mapped_column(String, unique=True)
     name: Mapped[str] = mapped_column(String)
@@ -116,6 +120,7 @@ from app.models.milestone2 import (  # noqa: E402,F401
     Identifier,
     IdentifierBlocklist,
     IdentityBatch,
+    IngestionReceipt,
     Import,
     Profile,
     ProfileMerge,

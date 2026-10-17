@@ -67,6 +67,15 @@ Acceptance: all six templates return plausible counts on seeded data; preview un
 
 Acceptance: a static test page served in dev loads the SDK, tracks page views anonymously, then identifies, and the profile timeline shows the earlier anonymous events. Tests: auth, idempotency, batch limits, clamping, back-fill.
 
+M6 backend implementation: separate `app/ingestion` package and
+`ingestion.resolve` dispatch; migration `0028_event_ingestion` adds non-PII retry
+receipts and source/event indexes. Existing imports, resolver, and attachment
+algorithms remain unchanged. Focused tests cover write-key auth/rotation, CORS,
+size/depth limits, clamping, retry concurrency, scoped anonymous backfill, roles,
+pending/resolved deletion with every-table completeness, and a real HTTP seed
+sender. Full-suite and browser SDK acceptance are separate final checks; no
+production-scale ingestion performance claim is implied.
+
 ## M7: Activation, consent, deletion
 
 - Destinations (CSV, Google, Meta, webhook) with Fernet-encrypted secrets and SSRF guard.

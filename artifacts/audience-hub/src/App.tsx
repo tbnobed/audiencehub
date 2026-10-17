@@ -1,34 +1,38 @@
+import { lazy, Suspense } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { Toaster } from '@/components/ui/toaster';
 import { TooltipProvider } from '@/components/ui/tooltip';
-import NotFound from '@/pages/not-found';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { AuthProvider } from '@/hooks/use-auth';
 import { useAuth } from '@/hooks/use-auth';
 import { Layout } from '@/components/layout/layout';
 
-import Login from '@/pages/login';
-import Dashboard from '@/pages/dashboard';
-import Profiles from '@/pages/profiles';
-import ProfileDetail from '@/pages/profile-detail';
-import Segments from '@/pages/segments';
-import Activations from '@/pages/activations';
-import Imports from '@/pages/imports';
-import Sources from '@/pages/sources';
-import DataHealth from '@/pages/data-health';
-import Admin from '@/pages/admin';
-import System from '@/pages/system';
+const Login = lazy(() => import('@/pages/login'));
+const Dashboard = lazy(() => import('@/pages/dashboard'));
+const Profiles = lazy(() => import('@/pages/profiles'));
+const ProfileDetail = lazy(() => import('@/pages/profile-detail'));
+const Segments = lazy(() => import('@/pages/segments'));
+const Activations = lazy(() => import('@/pages/activations'));
+const Imports = lazy(() => import('@/pages/imports'));
+const Sources = lazy(() => import('@/pages/sources'));
+const DataHealth = lazy(() => import('@/pages/data-health'));
+const Admin = lazy(() => import('@/pages/admin'));
+const System = lazy(() => import('@/pages/system'));
+const NotFound = lazy(() => import('@/pages/not-found'));
+
+const routeLoading = <div role="status" className="p-8 text-muted-foreground">Loading page…</div>;
 
 const queryClient = new QueryClient();
 
 function Router() {
   const { user, isLoading } = useAuth();
   if (isLoading) return <div className="min-h-screen bg-background text-foreground p-8">Loading console…</div>;
-  if (!user) return <Login />;
+  if (!user) return <Suspense fallback={routeLoading}><Login /></Suspense>;
   return (
     <ErrorBoundary>
       <Layout>
+        <Suspense fallback={routeLoading}>
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/profiles" element={<Profiles />} />
@@ -48,6 +52,7 @@ function Router() {
           <Route path="/system" element={user.role === 'admin' ? <System /> : <Navigate to="/" />} />
           <Route path="*" element={<NotFound />} />
         </Routes>
+        </Suspense>
       </Layout>
     </ErrorBoundary>
   );

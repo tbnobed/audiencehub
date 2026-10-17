@@ -21,7 +21,8 @@ JSON everywhere. Errors use `{"error": {"code": "string", "message": "string", "
 |---|---|---|
 | GET / POST | `/api/sources` | viewer / admin |
 | GET / PATCH | `/api/sources/{id}` | viewer / admin |
-| POST | `/api/sources/{id}/rotate-key` | admin (returns the new write key once) |
+| POST | `/api/sources/{id}/write-key` | admin — event_api source with event records; generates/rotates key, `{write_key}` once, no-store |
+| GET | `/api/sources/{id}/events?limit=50&cursor=` | analyst — payload-free newest-first live tail `{items,next_cursor}`; numeric cursor |
 | POST | `/api/imports` (multipart: `source_id`, `record_type`, `file`) | analyst |
 | GET | `/api/imports/{id}/preview` | analyst — first 50 rows, detected headers, suggested mapping |
 | PUT | `/api/imports/{id}/mapping` | analyst — `{ "columns": { "Email Address": "email", "Gift Amt": "amount", "HH Income": {"enrichment": "hh_income_band", "data_type": "enum"} }, "options": {"date_format": "MM/DD/YYYY", "phone_region": "US"} }` |
@@ -109,6 +110,17 @@ Add a `trait_snapshots` table (month, donor_status, count, ltv_sum) populated on
 
 Authentication: `Authorization: Basic base64(<write_key>:)` (Segment-compatible) or `X-Write-Key` header. Keys are per event source; only the SHA-256 is stored.
 
+Admins rotate an event API source's key with `POST /api/sources/{id}/write-key`,
+returning `{write_key}` once with `Cache-Control: no-store`; old keys immediately
+stop authenticating. Source JSON exposes only `has_write_key`.
+For browser `sendBeacon`, `/v1/batch` also accepts `{write_key, batch}` in its JSON
+body; credentials in query strings are not supported. Never put a key in a URL.
+Analysts/admins may read `GET /api/sources/{id}/events?cursor=&limit=50`
+(`limit` 1–100), returning `{items,next_cursor}` ordered by descending numeric
+event ID. The cursor is exclusive. Tail entries contain `id,type,name,profile_id,
+occurred_at,received_at,timestamp_clamped`; arbitrary properties, contexts, user
+and anonymous identifiers are omitted.
+
 | Method | Path | Body |
 |---|---|---|
 | POST | `/v1/track` | `{ "anonymousId"?, "userId"?, "event": "Video Watched", "properties": {...}, "context": {...}, "timestamp"?, "messageId"? }` |
@@ -126,22 +138,80 @@ Rules:
 - CORS allowed only for origins in `INGEST_CORS_ORIGINS`.
 - IP addresses are truncated to /24 (IPv4) or /48 (IPv6) before storage.
 
+Valid duplicate messages count as accepted but create no additional events,
+contacts, or jobs. A source-scoped peppered message digest in
+`ingestion_receipts` provides retry idempotency across event partitions, missing
+timestamps, and write-key rotation. Clients must reuse message IDs when retrying.
+Invalid message entries receive indexed rejections; malformed bodies and oversized
+requests return 400/413; invalid keys 401, disallowed origins 403, exhausted key
+buckets 429. A batch must contain 1–500 entries. User IDs are limited to 200
+characters; anonymous/message IDs and event names to 512. Context/traits/properties
+must be objects with depth at most five; invalid supplied contact traits are rejected.
+
+Identify observations use existing contact `source_records`, the unchanged
+resolver, and existing identifiers. Anonymous identifiers are source-scoped;
+user IDs do not implicitly refer to another source's CRM external IDs—include
+email/phone to bridge an existing CRM partner. A dedicated `ingestion.resolve`
+job waits for the import/identity barrier and backfills anonymous history. Jobs
+carry source IDs only. Privacy locks serialize ingestion with deletion; deletion
+also erases pending identify observations and unlinked anonymous history and
+retains suppression tombstones for their user/anonymous aliases.
+
+The SDK bundle is built to `dist/sdk/ah.js` and served by the API from that
+directory (container `/app/static/sdk`). `/sdk/test.html` is development/test only;
+its inline script is authorized by a CSP content hash, not a general inline-script
+exception. Seed traffic uses real HTTP:
+`INGEST_WRITE_KEY=... python -m app.cli seed --profiles 100 --events --events-host http://127.0.0.1:8000`.
+Use a configured key rather than placing one on the CLI. `--load` still exercises
+the original CSV import path; `--events` is additive and uses generated reserved
+domain contacts, stable retry IDs, and page/track/identify/app traffic.
+
 ## JavaScript SDK (`/sdk/ah.js`)
 
-Tiny (< 5 KB minified), no dependencies, served by the API with a long cache header and a content hash in the query string.
+Tiny (< 5 KB minified), no dependencies, plain TypeScript compiled separately with Vite. `npm run build:sdk` writes `dist/sdk/ah.js`, `dist/sdk/manifest.json` and `dist/sdk/test.html`; `npm run build` includes that step. The manifest is `{file:"ah.js",sha256:"<actual bundle SHA-256>",url:"/sdk/ah.js?v=<same SHA-256>"}`. Serve it at `/sdk/manifest.json` with `Cache-Control: no-store`; snippet URLs use its actual content hash, not a fixed version. The generated acceptance HTML embeds the same hash. `npm run test:sdk` builds and runs the isolated JavaScript browser harness (no backend required). The API serves the hashed bundle with a long cache header. The Docker build includes all SDK build inputs and copies its outputs to `/app/static/sdk`; fresh development startup builds the SDK before starting FastAPI.
+
+Create a source with `kind: "event_api"` and `record_types: ["event"]`. Source reads expose only `has_write_key`, never the key. In Data Sources → SDK & live events, an admin can generate/rotate a key and copy the once-only snippet. Closing/dismissing it removes the displayed key. Analysts can read the live event tail; viewers cannot. Tail items are `{id,type,name,profile_id,occurred_at,received_at,timestamp_clamped}` and deliberately exclude payloads, identifiers and keys.
+
+The bootstrap **must run before inserting the async script**. Replace the configuration with the real public ingestion host and browser write key. The UI uses the current browser origin in development; production requires an explicitly entered host. Never use a server-only source key on a public page.
 
 ```html
 <script>
-  window.ahConfig = { writeKey: "wk_live_xxx", host: "https://audience.obtv.io" };
-</script>
-<script async src="https://audience.obtv.io/sdk/ah.js"></script>
-<script>
+  // Set these to the actual browser source key and deployed ingestion host.
+  window.ahConfig = { writeKey: "YOUR_BROWSER_WRITE_KEY", host: "YOUR_PUBLIC_INGESTION_HOST" };
+  window.ah = window.ah || { q: [] };
+  ["page", "track", "identify", "flush", "optOut"].forEach(function (method) {
+    if (!window.ah[method]) window.ah[method] = function () {
+      if (method === "optOut") window.ah.q = [["optOut"]];
+      else if (window.ah.q.length < 100) window.ah.q.push([method].concat(Array.prototype.slice.call(arguments)));
+    };
+  });
   ah.page();
   ah.track("Video Watched", { video_id: "abc", series: "Praise", percent: 75 });
   ah.identify("crm-12345", { email: "donor@example.com" });
+  // The source settings UI generates a direct URL with the actual build hash.
+  // For this portable example, look up the same generated manifest first.
+  var host = window.ahConfig.host.replace(/\/$/, "");
+  fetch(host + "/sdk/manifest.json", {cache: "no-store", credentials: "omit"})
+    .then(function (response) {
+      if (!response.ok) throw new Error("SDK manifest unavailable");
+      return response.json();
+    })
+    .then(function (manifest) {
+      if (manifest.file !== "ah.js" || !/^[a-f0-9]{64}$/.test(manifest.sha256))
+        throw new Error("SDK manifest content hash invalid");
+      var script = document.createElement("script");
+      script.async = true;
+      script.src = host + "/sdk/ah.js?v=" + manifest.sha256;
+      document.head.appendChild(script);
+    })
+    .catch(function (error) { console.error("Audience Hub SDK could not load", error); });
 </script>
 ```
 
 Behavior: generates and persists `anonymousId` in a first-party cookie (`ah_aid`, 1 year, `SameSite=Lax`) with `localStorage` fallback; queues calls made before load; batches and flushes every 2 s or 20 messages via `fetch` with `keepalive`, and `sendBeacon` on page hide; respects a global `ah.optOut()` that sets a cookie and stops all sends; does nothing if `navigator.globalPrivacyControl` is true unless the site sets `ahConfig.ignoreGPC` (default false).
+
+Normal fetch uses `X-Write-Key` with `credentials: "omit"`. Beacon sends `{write_key,batch}` in its JSON **body**, never in the URL (to avoid proxy log leakage). Configure `INGEST_CORS_ORIGINS` for the website origin. Queue capacity is 100 messages; batches are at most 20 messages / 60 KB to fit browser keepalive limits; events over 30 KB or nested properties/traits beyond depth 5 are rejected. Failed network, 429 and 5xx sends retry at most three attempts, keeping the original message IDs and timestamps for server idempotency; other HTTP errors are not retried. Only pending events are beaconed, never the batch owned by an active fetch. `ah.flush()` requests an immediate send. Opt-out persists as `ah_optout=1`, clears pending data and aborts the current client request (data already received by the server cannot be recalled).
+
+Development acceptance: visit `/sdk/test.html`, enter an event source browser write key, load the SDK and send an anonymous page/track event, then identify with a real user external ID. External IDs are source-scoped; include an email to exercise matching an existing CRM profile. Verify the event source tail receives the events and the profile timeline shows earlier anonymous events after resolution/back-fill. The page does not claim success solely because a client call was queued, and does not store the entered key. Existing `ah_optout` or browser GPC prevents sends; manually clear the first-party opt-out cookie and localStorage entry to repeat testing.
 
 Server-side senders (apps, Five9 integration, the streaming platform backend) call `/v1/batch` directly with a server write key.

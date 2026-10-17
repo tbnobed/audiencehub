@@ -35,6 +35,11 @@ def main():
         description="Audience Hub administration and deterministic synthetic CSV generation."
     )
     commands = parser.add_subparsers(dest="command", required=True)
+    jobs = commands.add_parser("jobs", help="Worker job recovery.")
+    job_commands = jobs.add_subparsers(dest="jobs_command", required=True)
+    cancel = job_commands.add_parser("cancel", help="Terminate stale owned SQL sessions and recover jobs.")
+    cancel.add_argument("--all-stale", action="store_true", required=True,
+                        help="Recover only jobs older than JOB_STALE_SECONDS; respects retry limits.")
     status = commands.add_parser(
         "load-status", help="Report a fixed selection of imports and dependent work (read-only).")
     status.add_argument("--wait", action="store_true", help="Poll to completion; progress every 30 seconds.")
@@ -65,12 +70,26 @@ def main():
     seed.add_argument("--profiles", type=int, default=50_000)
     seed.add_argument("--scale", choices=("small", "medium", "large"), default="small")
     seed.add_argument("--random-seed", type=int, default=20250308)
+    seed.add_argument("--events", action="store_true",
+                      help="Also send synthetic web/app traffic through the real API (INGEST_WRITE_KEY required).")
+    seed.add_argument("--events-host", default="http://127.0.0.1:8000",
+                      help="API origin for --events (HTTPS required outside localhost).")
     seed.add_argument("--output-dir", help="Output directory (default: UPLOAD_DIR/seed-data; UPLOAD_DIR defaults to /data/uploads).")
     seed.add_argument(
         "--load", action="store_true",
         help="After writing files, call app.importer.import_seed_files(files) if available.",
     )
     args = parser.parse_args()
+    if args.command == "jobs":
+        from datetime import timedelta
+        from app.config import get_settings
+        from app.db import engine
+        from app.jobs.queue import requeue_stale
+        with Session(engine) as db:
+            count = requeue_stale(db, timedelta(seconds=get_settings().job_stale_seconds))
+            db.commit()
+        print(f"Recovered {count} stale job(s); exhausted attempts remain failed.")
+        return
     if args.command == "load-status":
         from app.db import engine
         from app.load_status import run_load_status
@@ -124,6 +143,11 @@ def main():
                     ensure_templates(db)
                     db.commit()
                 print("Computed profile traits and backfilled 24 monthly snapshots.")
+            if args.events:
+                from app.ingestion.seed_events import send_events
+                sent = send_events(profiles=args.profiles, random_seed=args.random_seed, host=args.events_host,
+                                   contacts_path=result["files"].get("donor_crm_contacts.csv"))
+                print(f"Event API accepted {sent:,} synthetic messages.")
         except (ValueError, RuntimeError) as exc:
             raise SystemExit(str(exc)) from exc
         return

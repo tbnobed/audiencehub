@@ -86,7 +86,7 @@ def test_deletion_scrubs_metadata_without_broadening_audiences_or_touching_auth(
     request = service.create_deletion(db, "email", identifier, admins[0].id)
     service.approve_deletion(db, request["id"], admins[1].id)
     result = service.execute_deletion(db, request["id"])
-    assert result["audiences_frozen"] == 2
+    assert "audiences_frozen" not in result
     assert_all_tables_erased(db, [partner_id])
     assert metadata_match_counts(db, {("email", identifier)}) == {}
     assert not uploaded.exists() and not exported.exists()
@@ -94,11 +94,15 @@ def test_deletion_scrubs_metadata_without_broadening_audiences_or_touching_auth(
     assert db.scalar(text("SELECT snapshot_encrypted FROM activation_runs WHERE id=:id"), {"id": run}) is None
     for audience in (sid, dependent):
         row = db.execute(text("SELECT definition,status FROM segments WHERE id=:id"), {"id": audience}).one()
-        assert row == (FALSE_DEFINITION, "archived")
+        assert row.status == "active"
         validate_definition(db, row.definition)
-        assert db.execute(compile_definition(db, row.definition)).all() == []
-    assert db.scalar(text("SELECT count(*) FROM segment_membership WHERE segment_id=:id"), {"id": dependent}) == 0
-    assert not db.scalar(text("SELECT is_active FROM activations WHERE id=:id"), {"id": activation})
+        if audience == sid:
+            assert db.execute(compile_definition(db, row.definition)).all() == []
+    assert db.scalar(text("SELECT count(*) FROM segment_membership WHERE segment_id=:id"), {"id": dependent}) == 1
+    assert db.scalar(text("SELECT is_active FROM activations WHERE id=:id"), {"id": activation})
+    assert db.scalar(text("SELECT is_active FROM destinations WHERE id=:id"), {"id": destination})
+    issues = db.execute(text("SELECT details FROM audit_log WHERE action='privacy.segment.review_required'")).all()
+    assert len(issues) == 2 and identifier not in str(issues)
     assert db.scalar(text("SELECT secret_encrypted FROM destinations WHERE id=:id"), {"id": destination}) == encrypted_credentials
     assert db.scalar(text("SELECT email FROM users WHERE id=:id"), {"id": admins[0].id}) == identifier
     settings = db.scalar(text("SELECT settings FROM sources WHERE id=:id"), {"id": source.id})
@@ -164,3 +168,80 @@ def test_historical_snapshot_and_export_filename_are_checked_even_after_configur
     assert not snapshot_path.exists() and not named_path.exists()
     assert metadata_match_counts(db, {("email", identifier)}) == {}
     assert db.scalar(text("SELECT is_active FROM activations WHERE id=:id"), {"id": activation})
+
+
+@pytest.mark.parametrize("operator", ["in", "not_in"])
+def test_multi_value_rule_preserves_surviving_values_and_other_rules(db, operator):
+    from app.privacy.metadata import redact_definition
+    from app.segments.compiler import validate_definition
+    _, redact = redactor({("email", "erase@example.org")})
+    other = {"type": "profile", "field": "city", "operator": "eq", "value": "Boston"}
+    definition = {"version": 1, "root": {"op": "and", "rules": [
+        {"type": "profile", "field": "email", "operator": operator,
+         "value": ["erase@example.org", "keep@example.org"]}, other]}}
+    cleaned = redact_definition(definition, redact)
+    assert cleaned["root"]["rules"][0]["value"] == ["keep@example.org"]
+    assert cleaned["root"]["rules"][0]["operator"] == operator
+    assert cleaned["root"]["rules"][1] == other
+    validate_definition(db, cleaned)
+
+
+@pytest.mark.parametrize("operator,value", [
+    ("eq", "erase@example.org"), ("neq", "erase@example.org"),
+    ("in", ["erase@example.org"]), ("not_in", ["erase@example.org"]),
+])
+@pytest.mark.parametrize("negate", [False, True])
+def test_single_or_empty_rule_fails_closed_even_under_not(db, operator, value, negate):
+    from app.privacy.metadata import redact_definition
+    from app.segments.compiler import compile_definition
+    db.add(Profile(email="keep@example.org")); db.flush()
+    _, redact = redactor({("email", "erase@example.org")})
+    cleaned = redact_definition({"version": 1, "root": {"op": "and", "negate": negate,
+        "rules": [{"type": "profile", "field": "email", "operator": operator, "value": value}]}}, redact)
+    assert db.execute(compile_definition(db, cleaned)).all() == []
+
+
+def test_description_only_review_is_durable_and_reopens(db):
+    from types import SimpleNamespace
+    from app.privacy.metadata import redact_known_metadata
+    from app.dashboards.health import health_counts
+    from app.profiles.api import data_health, review_privacy_segment
+    admins, source, partner = people(db)
+    sid = db.scalar(text("""INSERT INTO segments(name,description,definition,status,refresh_schedule)
+      VALUES('Keep audience',:description,CAST(:definition AS jsonb),'active','daily') RETURNING id"""),
+      {"description": partner.email, "definition": json.dumps(FALSE_DEFINITION)})
+    for attempt in range(2):
+        if attempt:
+            db.execute(text("UPDATE segments SET description=:value WHERE id=:id"),
+                       {"value": partner.email, "id": sid})
+        redact_known_metadata(db, {("email", partner.email)})
+        row = db.execute(text("SELECT definition,status,refresh_schedule FROM segments WHERE id=:id"),
+                         {"id": sid}).one()
+        assert row == (FALSE_DEFINITION, "active", "daily")
+        assert health_counts(db)["privacy_segment_reviews"] == 1
+        issues = data_health(SimpleNamespace(role="viewer"), db)["privacy_segment_reviews"]
+        assert len(issues) == 1
+        assert partner.email not in json.dumps(issues, default=str)
+        review_privacy_segment(issues[0]["id"], admins[0], db)
+        assert health_counts(db)["privacy_segment_reviews"] == 0
+
+
+def test_privacy_review_role_gate(db):
+    from types import SimpleNamespace
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.auth.deps import current_user
+    from app.db import session_scope
+    from app.profiles.api import router
+    admins, source, partner = people(db)
+    service.audit(db, None, "privacy.segment.review_required", "segment", 1)
+    issue = db.scalar(text("SELECT id FROM audit_log WHERE action='privacy.segment.review_required'"))
+    app = FastAPI(); app.include_router(router)
+    app.dependency_overrides[session_scope] = lambda: db
+    actor = SimpleNamespace(id=admins[0].id, role="viewer")
+    app.dependency_overrides[current_user] = lambda: actor
+    client = TestClient(app)
+    assert client.post(f"/api/data-health/privacy-segments/{issue}/review").status_code == 403
+    actor.role = "analyst"
+    assert client.post(f"/api/data-health/privacy-segments/{issue}/review").status_code == 200
+    assert client.post("/api/data-health/privacy-segments/999999/review").status_code == 404

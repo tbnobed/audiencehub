@@ -41,7 +41,8 @@ def test_open_issues_and_review_lifecycle(db):
         SELECT :p,:s,'expiry-'||n,CURRENT_DATE+n FROM unnest(ARRAY[-1,0,60,61]) n"""),
         {"p": profile, "s": source})
     before = health_counts(db)
-    assert before == dict(failed_jobs=1, rejected_reports=1, blocklist_reviews=1, expiring_enrichment=2)
+    assert before == dict(failed_jobs=1, rejected_reports=1, blocklist_reviews=1, expiring_enrichment=2,
+                          privacy_segment_reviews=0)
     # Large unresolved populations are operational backlog, never issue objects.
     db.execute(text("""INSERT INTO source_records(source_id,external_id,raw_hash)
         SELECT :s,n::text,md5(n::text) FROM generate_series(1,500000) n"""), {"s": source})

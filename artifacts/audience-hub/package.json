@@ -5,11 +5,13 @@
   "type": "module",
   "scripts": {
     "dev": "vite --config vite.config.ts --host 0.0.0.0",
-    "build": "vite build --config vite.config.ts",
+    "build": "vite build --config vite.config.ts && npm run build:sdk",
+    "build:sdk": "node scripts/sdk-build.mjs",
+    "test:sdk": "npm run build:sdk && node --test scripts/sdk.test.mjs",
     "serve": "vite preview --config vite.config.ts --host 0.0.0.0",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "tsc -p tsconfig.json --noEmit",
-    "test": "node --test scripts/profile-frontend.test.cjs",
+    "test": "node --test scripts/profile-frontend.test.cjs && npm run test:sdk",
     "test:profiles": "node --test scripts/profile-frontend.test.cjs",
     "test:profiles:capture": "python scripts/profile-capture.py"
   },

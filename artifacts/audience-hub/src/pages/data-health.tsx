@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
-import { useDataHealth, useApproveBlocklist, useUnblockBlocklist } from '@/hooks/use-data-health';
+import { useDataHealth, useApproveBlocklist, useUnblockBlocklist, useReviewPrivacySegment } from '@/hooks/use-data-health';
 import { useAuth } from '@/hooks/use-auth';
 import { format } from 'date-fns';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
@@ -21,6 +21,7 @@ export default function DataHealth() {
   const unblockBlocklist = useUnblockBlocklist();
   const { user } = useAuth();
   const navigate = useNavigate();
+  const reviewPrivacy = useReviewPrivacySegment();
 
   const handleApprove = async (id: number) => {
     try {
@@ -68,6 +69,23 @@ export default function DataHealth() {
           Monitor identity resolution engine, data anomalies, and import quality.
         </p>
       </div>
+
+      {!!data.privacy_segment_reviews?.length && <Card>
+        <CardHeader>
+          <CardTitle>Audience privacy changes need review</CardTitle>
+          <CardDescription>Erased values or text were removed. Audiences and activations remain running. Review exclusions and NOT references: a smaller referenced audience can expand an exclusion audience.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {data.privacy_segment_reviews.map(issue => <div key={issue.id} className="flex items-center justify-between gap-3">
+            <Button variant="link" onClick={() => navigate(`/segments/${issue.segment_id}`)}>Audience #{issue.segment_id}</Button>
+            <span className="text-sm text-muted-foreground">{issue.definition_changed === 'true' ? 'Rules or dependencies changed' : 'Display text redacted'}</span>
+            {user?.role !== 'viewer' && <Button variant="outline" disabled={reviewPrivacy.isPending} onClick={async () => {
+              try { await reviewPrivacy.mutateAsync(issue.id); }
+              catch (e: any) { toast({ title: 'Review failed', description: e.message, variant: 'destructive' }); }
+            }}>Mark reviewed</Button>}
+          </div>)}
+        </CardContent>
+      </Card>}
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         <Card>

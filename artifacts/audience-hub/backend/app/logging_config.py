@@ -5,7 +5,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 from sqlalchemy.exc import DataError, IntegrityError, OperationalError, ProgrammingError
 
-SENSITIVE = re.compile(r"[\w.+-]+@[\w.-]+\.[a-z]{2,}|\+?\d[\d\s().-]{8,}\d", re.I)
+SENSITIVE = re.compile(r"wk_(?:live|test)_[A-Za-z0-9_-]+|[\w.+-]+@[\w.-]+\.[a-z]{2,}|\+?\d[\d\s().-]{8,}\d", re.I)
 
 SQLSTATE_MESSAGES = {
     "23502": "A required database field was missing",

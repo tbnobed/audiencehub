@@ -233,6 +233,8 @@ def trait_catalog(user: User = Depends(require_role("viewer"))):
 @router.get("/api/data-health")
 def data_health(user: User = Depends(require_role("viewer")),
                 db: Session = Depends(session_scope)):
+    from app.dashboards.health import PRIVACY_REVIEWS
+    privacy_reviews = _rows(db, PRIVACY_REVIEWS + " ORDER BY a.id DESC LIMIT 100")
     pending = db.execute(text(
         "SELECT count(*) FROM source_records WHERE resolved_at IS NULL"
     )).scalar_one()
@@ -280,7 +282,21 @@ def data_health(user: User = Depends(require_role("viewer")),
         "auto_blocklisted": auto_blocklisted,
         "rejected_rows": rejected_rows,
         "recent_imports": recent_imports,
+        "privacy_segment_reviews": privacy_reviews,
     }, mask_pii=user.role == "viewer")
+
+
+@router.post("/api/data-health/privacy-segments/{issue_id}/review")
+def review_privacy_segment(issue_id: int, user: User = Depends(require_role("analyst")),
+                           db: Session = Depends(session_scope)):
+    issue = db.scalar(text("""SELECT id FROM audit_log
+      WHERE id=:id AND action='privacy.segment.review_required'"""), {"id": issue_id})
+    if issue is None:
+        raise HTTPException(404, detail="Audience privacy review issue not found")
+    from app.privacy.service import audit
+    audit(db, user.id, "data_health.privacy_segment.review", "audit_log", issue_id)
+    db.commit()
+    return {"reviewed": True}
 
 
 def _get_blocklist_item(db: Session, blocklist_id: int) -> IdentifierBlocklist:

@@ -114,9 +114,9 @@ def test_child_finishes_job_before_claiming_next(monkeypatch):
     def claim(db):
         job_id = len([event for event in events if event[0] == "claim"]) + 1
         events.append(("claim", job_id))
-        return SimpleNamespace(id=job_id, type="noop", payload={})
+        return SimpleNamespace(id=job_id, type="noop", payload={}, started_at=None)
 
-    def run_job(job_id, job_type, payload):
+    def run_job(job_id, job_type, payload, **kwargs):
         events.append(("run", job_id))
         if job_id == 2:
             handlers[worker.signal.SIGTERM](None, None)

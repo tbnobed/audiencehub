@@ -87,12 +87,12 @@ def test_real_full_and_dirty_job_handlers(db, monkeypatch):
     monkeypatch.setattr(traits, "backfill_trait_snapshots", lambda session: original_backfill(session, as_of=pinned))
     db.execute(text("INSERT INTO trait_dirty_profiles(profile_id,dirtied_at) VALUES(2,clock_timestamp()-interval '11 minutes') ON CONFLICT DO NOTHING"))
     handlers.run("traits.recompute", {"mode": "full"})
-    assert calls == [{}]
+    assert calls == [{"job_id": None}]
     assert db.execute(text("SELECT count(*) FROM trait_dirty_profiles")).scalar_one() == 0
     assert db.execute(text("SELECT count(*) FROM profile_traits")).scalar_one() == 10
     db.execute(text("INSERT INTO trait_dirty_profiles(profile_id,dirtied_at) VALUES(2,clock_timestamp()-interval '11 minutes'),(3,clock_timestamp())"))
     handlers.run("traits.recompute", {"mode": "dirty"})
-    assert calls[-1] == {"profile_ids": [2]}
+    assert calls[-1] == {"profile_ids": [2], "job_id": None}
     assert db.execute(text("SELECT profile_id FROM trait_dirty_profiles")).scalars().all() == [3]
 
 

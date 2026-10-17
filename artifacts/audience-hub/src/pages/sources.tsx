@@ -11,9 +11,15 @@ import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
 import { useSources, useCreateSource, useUpdateSource, useDeleteSource, Source } from '@/hooks/use-sources';
 import { toast } from '@/hooks/use-toast';
+import { useAuth } from '@/hooks/use-auth';
+import { SourceEvents } from '@/components/source-events';
 
 export default function Sources() {
-  const { data, isLoading } = useSources();
+  const { data, isLoading, error } = useSources();
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
+  const canReadEvents = isAdmin || user?.role === 'analyst';
+  const [eventSource, setEventSource] = useState<Source | null>(null);
   const createSource = useCreateSource();
   const updateSource = useUpdateSource();
   const deleteSource = useDeleteSource();
@@ -30,7 +36,7 @@ export default function Sources() {
     settings: '{}',
   });
 
-  const sources = data?.items?.sort((a, b) => a.priority - b.priority) || [];
+  const sources = [...(data?.items || [])].sort((a, b) => a.priority - b.priority);
 
   const handleOpenForm = (source?: Source) => {
     if (source) {
@@ -49,7 +55,7 @@ export default function Sources() {
         name: '',
         key: '',
         kind: 'csv',
-        record_types: 'profiles',
+        record_types: 'contact',
         is_active: true,
         settings: '{\n  \n}',
       });
@@ -130,11 +136,12 @@ export default function Sources() {
             Manage ingest sources and priority ordering.
           </p>
         </div>
-        <Button onClick={() => handleOpenForm()}>
+        {isAdmin && <Button onClick={() => handleOpenForm()}>
           <Plus className="mr-2 h-4 w-4" /> Add Source
-        </Button>
+        </Button>}
       </div>
 
+      {error && <p role="alert" className="text-destructive">Unable to load sources: {error.message}</p>}
       <div className="border rounded-md bg-card">
         <Table>
           <TableHeader>
@@ -161,7 +168,7 @@ export default function Sources() {
                     <div className="flex flex-col items-center space-y-1">
                       <button 
                         onClick={() => handleMove(idx, 'up')}
-                        disabled={idx === 0}
+                        disabled={!isAdmin || idx === 0}
                         className="text-muted-foreground hover:text-foreground disabled:opacity-30"
                       >
                         <ArrowUp className="h-3 w-3" />
@@ -169,7 +176,7 @@ export default function Sources() {
                       <span className="text-xs font-mono">{source.priority}</span>
                       <button 
                         onClick={() => handleMove(idx, 'down')}
-                        disabled={idx === sources.length - 1}
+                        disabled={!isAdmin || idx === sources.length - 1}
                         className="text-muted-foreground hover:text-foreground disabled:opacity-30"
                       >
                         <ArrowDown className="h-3 w-3" />
@@ -215,12 +222,15 @@ export default function Sources() {
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end">
-                        <DropdownMenuItem onClick={() => handleOpenForm(source)}>
+                        {canReadEvents && source.kind === 'event_api' && <DropdownMenuItem onClick={() => setEventSource(source)}>
+                          <KeySquare className="mr-2 h-4 w-4" /> SDK & live events
+                        </DropdownMenuItem>}
+                        {isAdmin && <DropdownMenuItem onClick={() => handleOpenForm(source)}>
                           <Edit2 className="mr-2 h-4 w-4" /> Edit
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => handleDelete(source.id)} className="text-destructive focus:text-destructive">
+                        </DropdownMenuItem>}
+                        {isAdmin && <DropdownMenuItem onClick={() => handleDelete(source.id)} className="text-destructive focus:text-destructive">
                           <Trash2 className="mr-2 h-4 w-4" /> Delete
-                        </DropdownMenuItem>
+                        </DropdownMenuItem>}
                       </DropdownMenuContent>
                     </DropdownMenu>
                   </TableCell>
@@ -257,7 +267,7 @@ export default function Sources() {
                     id="key"
                     value={formData.key}
                     onChange={e => setFormData({ ...formData, key: e.target.value })}
-                    placeholder="e.g. main-csv"
+                    placeholder="e.g. main_csv"
                     className="font-mono text-sm"
                   />
                 </div>
@@ -271,9 +281,10 @@ export default function Sources() {
                   <Input
                     id="kind"
                     value={formData.kind}
-                    onChange={e => setFormData({ ...formData, kind: e.target.value })}
-                    placeholder="e.g. csv, s3, postgres"
+                    onChange={e => setFormData({ ...formData, kind: e.target.value, record_types: e.target.value === 'event_api' ? 'event' : formData.record_types })}
+                    placeholder="csv or event_api"
                   />
+                  <p className="text-xs text-muted-foreground">Use event_api for browser SDK events; event records are selected automatically.</p>
                 </div>
               )}
               <div className="space-y-2">
@@ -282,7 +293,7 @@ export default function Sources() {
                   id="record_types" 
                   value={formData.record_types} 
                   onChange={e => setFormData({ ...formData, record_types: e.target.value })} 
-                  placeholder="e.g. profiles, events" 
+                  placeholder="e.g. contact, gift, event"
                 />
               </div>
             </div>
@@ -311,6 +322,15 @@ export default function Sources() {
             <Button variant="outline" onClick={() => setIsFormOpen(false)}>Cancel</Button>
             <Button onClick={handleSave}>Save Source</Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={!!eventSource} onOpenChange={open => { if (!open) setEventSource(null); }}>
+        <DialogContent className="sm:max-w-3xl max-h-[90vh] overflow-auto">
+          <DialogHeader>
+            <DialogTitle>{eventSource?.name} · SDK & events</DialogTitle>
+            <DialogDescription>Install browser tracking and inspect received events.</DialogDescription>
+          </DialogHeader>
+          {eventSource && <SourceEvents key={eventSource.id} source={sources.find(s => s.id === eventSource.id) || eventSource} />}
         </DialogContent>
       </Dialog>
     </div>

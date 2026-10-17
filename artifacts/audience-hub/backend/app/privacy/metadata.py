@@ -16,6 +16,8 @@ FALSE_DEFINITION = {"version": 1, "root": {"op": "and", "rules": [
 ]}}
 # Deliberate scope: public configuration, operational text and free-form data.
 # Not users, sessions, write keys, credential subtrees, or encrypted/hash columns.
+# ingestion_receipts is deliberately absent: only source FK + peppered message
+# digest, no partner FK, raw identifiers, JSON, or free-form metadata.
 METADATA = {
     "segments": {"name", "description", "definition"},
     "activations": {"name", "field_mapping", "column_order"},
@@ -91,6 +93,32 @@ def redactor(aliases):
     return pattern, redact
 
 
+def redact_definition(definition, redact):
+    """Keep unaffected rules; never interpret replacement text as a predicate.
+
+    Empty/scalar affected predicates fail closed in their local boolean context:
+    id IS NULL normally, id IS NOT NULL beneath an odd number of NOT groups.
+    Both are valid single-rule DSL nodes, even at the depth/rule-count limit.
+    """
+    def visit(node, negated=False):
+        if "rules" in node:
+            result = copy.deepcopy(node)
+            polarity = negated ^ bool(node.get("negate"))
+            result["rules"] = [visit(child, polarity) for child in node["rules"]]
+            return result
+        if redact(node) == node:
+            return copy.deepcopy(node)
+        value = node.get("value")
+        if node.get("operator") in ("in", "not_in") and isinstance(value, list):
+            remaining = [item for item in value if redact(item) == item]
+            rest = {key: item for key, item in node.items() if key != "value"}
+            if remaining and redact(rest) == rest:
+                return {**copy.deepcopy(rest), "value": remaining}
+        return {"type": "profile", "field": "id",
+                "operator": "is_not_null" if negated else "is_null"}
+    return {**copy.deepcopy(definition), "root": visit(definition["root"])}
+
+
 def redact_known_metadata(db, aliases):
     """Caller commits. Returns aggregate counts only; does not erase profiles.
 
@@ -98,8 +126,8 @@ def redact_known_metadata(db, aliases):
     completed request, use repair_completed_request below, which verifies its
     stored HMAC before accepting an identifier supplied by an operator.
     """
-    from app.privacy.service import schema_inventory, remove_owned_file
-    from app.segments.service import graph_lock, references
+    from app.privacy.service import schema_inventory, remove_owned_file, audit
+    from app.segments.service import graph_lock, references, request_materialization
     from app.activations.security import decrypt
 
     pattern, redact = redactor(aliases)
@@ -129,7 +157,7 @@ def redact_known_metadata(db, aliases):
             touched.setdefault(table, set()).add(row_id)
             if table == "segments" and name == "definition":
                 changed_definitions.add(row_id)
-                new = copy.deepcopy(FALSE_DEFINITION)
+                new = redact_definition(old, redact)
             assignment = "CAST(:value AS jsonb)" if typ in ("json", "jsonb") else ":value"
             db.execute(text(f"UPDATE {quote(table)} SET {quote(name)}={assignment} "
                             "WHERE tableoid=:oid AND ctid=CAST(:ctid AS tid)"),
@@ -139,8 +167,8 @@ def redact_known_metadata(db, aliases):
             counts[key] = counts.get(key, 0) + 1
         rows.close()
 
-    # Replacing an exclusion's constant must never broaden a dependent audience.
-    # Freeze the transitive graph, including NOT references, to a valid false DSL.
+    # Dependencies remain intact and running. Refresh them and flag review:
+    # exclusions of a smaller audience can legitimately gain members.
     definitions = db.execute(text("SELECT id,definition FROM segments")).all() if changed_definitions else []
     while changed_definitions:
         dependents = {sid for sid, definition in definitions if isinstance(definition, dict)
@@ -150,24 +178,23 @@ def redact_known_metadata(db, aliases):
             break
         changed_definitions.update(additional)
     if changed_definitions:
-        db.execute(text("""UPDATE segments SET definition=CAST(:definition AS jsonb),
-          status='archived',refresh_schedule=NULL,last_count=0,updated_at=now() WHERE id=ANY(:ids)"""),
-          {"definition": json.dumps(FALSE_DEFINITION), "ids": sorted(changed_definitions)})
-        db.execute(text("DELETE FROM segment_membership WHERE segment_id=ANY(:ids)"),
+        db.execute(text("UPDATE segments SET updated_at=now() WHERE id=ANY(:ids)"),
                    {"ids": sorted(changed_definitions)})
-        counts["audiences_frozen"] = len(changed_definitions)
+        for segment_id in sorted(changed_definitions):
+            if db.scalar(text("SELECT status FROM segments WHERE id=:id"),
+                         {"id": segment_id}) != "archived":
+                request_materialization(db, segment_id)
     segment_ids = sorted(touched.get("segments", set()) | changed_definitions)
+    for segment_id in segment_ids:
+        # The immutable audit event is also the durable review issue. Only IDs
+        # and booleans, never old/new definitions, names or identifier values.
+        audit(db, None, "privacy.segment.review_required", "segment", segment_id,
+              {"definition_changed": segment_id in changed_definitions})
     destination_ids = sorted(touched.get("destinations", set()))
-    if destination_ids:
-        db.execute(text("UPDATE destinations SET is_active=false WHERE id=ANY(:ids)"), {"ids": destination_ids})
     activation_ids = set(touched.get("activations", set()))
     activation_ids.update(db.scalars(text("""SELECT id FROM activations
       WHERE segment_id=ANY(:segments) OR destination_id=ANY(:destinations)"""),
       {"segments": segment_ids, "destinations": destination_ids}))
-    if activation_ids:
-        db.execute(text("UPDATE activations SET is_active=false WHERE id=ANY(:ids)"),
-                   {"ids": sorted(activation_ids)})
-        counts["activations_paused"] = len(activation_ids)
     if touched.get("jobs"):
         db.execute(text("""UPDATE jobs SET status=CASE WHEN status IN ('queued','running')
           THEN 'cancelled' ELSE status END WHERE id=ANY(:ids)"""), {"ids": sorted(touched["jobs"])})

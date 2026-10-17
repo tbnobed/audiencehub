@@ -131,6 +131,11 @@ def matching_ids(db, kind, value):
         SELECT id FROM profiles WHERE {profile_col}=:value
         UNION SELECT profile_id FROM identifiers WHERE type=:kind AND value=:value
         UNION SELECT profile_id FROM source_records WHERE {column}=:value AND profile_id IS NOT NULL
+        UNION SELECT i.profile_id FROM source_records sr JOIN sources s ON s.id=sr.source_id
+          JOIN identifiers i ON
+            (i.type='user_id' AND i.value=s.key || ':' || (sr.attributes->>'user_id')) OR
+            (i.type='anonymous_id' AND i.value=sr.attributes->>'anonymous_id')
+          WHERE s.kind='event_api' AND sr.{column}=:value
       ), closure(id) AS (
         SELECT id FROM initial UNION
         SELECT CASE WHEN e.a=c.id THEN e.b ELSE e.a END FROM closure c
@@ -411,6 +416,8 @@ def execute_deletion(db, request_id):
         ) SELECT id FROM closure"""), {"ids": ids}))
     counts = counts_for(db, ids)
     tombstones = aliases(db, ids) | {(request["identifier_type"], value)}
+    from app.ingestion.privacy import erase_unresolved_and_aliases
+    tombstones |= erase_unresolved_and_aliases(db, ids, request["identifier_type"], value)
     for kind, value in tombstones:
         hashed = digest(value) if value is not None else request["identifier_value_hash"]
         db.execute(text("""INSERT INTO suppressions(type,value_hash,reason) VALUES(:kind,:hash,'deletion_request')

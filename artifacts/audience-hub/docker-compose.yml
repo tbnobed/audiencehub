@@ -47,7 +47,7 @@ services:
       db: {condition: service_healthy}
       api: {condition: service_healthy}
     command: ["/app/scripts/start-worker.sh"]
-    stop_grace_period: 30m
+    stop_grace_period: 30s
     volumes: [appdata:/data]
     networks: [internal]
   backup:

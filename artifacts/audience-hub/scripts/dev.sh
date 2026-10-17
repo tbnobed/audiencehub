@@ -3,6 +3,12 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 export APP_ENV="${APP_ENV:-development}"
 export AUTH_MODE="${AUTH_MODE:-dev}"
+if [ -z "${INGEST_CORS_ORIGINS:-}" ]; then
+  export INGEST_CORS_ORIGINS="http://localhost:${PORT:-5000}"
+  if [ -n "${REPLIT_DEV_DOMAIN:-}" ]; then
+    export INGEST_CORS_ORIGINS="$INGEST_CORS_ORIGINS,https://$REPLIT_DEV_DOMAIN"
+  fi
+fi
 export GMAIL_STYLE_DOMAINS="${GMAIL_STYLE_DOMAINS:-gmail.com,googlemail.com,gmail.test}"
 if [ "$APP_ENV" = production ]; then
   echo "scripts/dev.sh must not run in production" >&2
@@ -23,6 +29,9 @@ export EXPORT_DIR="${EXPORT_DIR:-$PWD/.data/exports}"
 # The seed CLI writes to $UPLOAD_DIR/seed-data, including when installed.
 mkdir -p "$UPLOAD_DIR/seed-data" "$EXPORT_DIR"
 export PYTHONPATH="$PWD/backend"
+# Static SDK files are served by FastAPI, not Vite's frontend transform.
+# Build before starting either process so a fresh checkout supports /sdk/*.
+npm run build:sdk
 cd backend
 python3 -m alembic upgrade head
 python3 -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000 &

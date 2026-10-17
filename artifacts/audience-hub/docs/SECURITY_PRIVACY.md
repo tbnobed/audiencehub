@@ -112,13 +112,22 @@ This system holds donor PII and giving history. Treat it as the most sensitive d
   identifiers. Formatted canonical phone numbers are supported. This is not
   fuzzy recognition of arbitrary names, unqualified numeric IDs, encoded blobs,
   or identifiers that were never associated with the erased identity.
-- A definition containing an erased identifier is replaced with a valid,
-  provably empty DSL and archived. Transitive dependent audiences, including
-  exclusions/negations, are also frozen empty to prevent accidental expansion.
-  Affected activations are paused; their metadata, old encrypted run snapshots,
-  and stored export filenames are checked, with affected exports revoked.
-  Reactivation requires deliberate configuration review. Unrelated partner
-  records and clean activation configurations are preserved.
+- Deletion preserves audience status, schedules, unaffected rules, dependencies,
+  and activation/destination enabled state. Multi-value `in`/`not_in` rules lose
+  only values containing the erased identifier. A scalar or emptied rule becomes
+  a fail-closed predicate (`id IS NULL`, or `id IS NOT NULL` inside an odd number
+  of negated groups); no redaction placeholder is evaluated as a comparison.
+  This also prevents a scalar `neq` or `NOT` rule from becoming match-all.
+  Other branches remain usable. Affected audiences and dependents are queued
+  for refresh. Removing an exclusion-list value or reducing a referenced audience
+  can expand negative audiences; dependencies are deliberately not rewritten or
+  frozen. Review these semantics after deletion.
+  Each affected audience receives an immutable, identifier-free audit event,
+  which doubles as a durable Data Health issue (no new table/migration).
+  Analysts/admins can acknowledge individual issues; viewers can only read them.
+  New deletions create new issues even after prior review. Description-only
+  redaction does not change rules or membership. Historical encrypted snapshots
+  and export paths are still checked and affected exports revoked.
 - Authentication users/sessions, write-key hashes, credential subtrees (including
   authorization headers), and destination encrypted credentials are deliberately
   excluded. These are account/credential records, not audience metadata. No

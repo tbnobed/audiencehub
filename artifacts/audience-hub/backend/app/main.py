@@ -25,6 +25,7 @@ from app.client_errors import router as client_errors_router
 from app.segments.api import router as segments_router
 from app.activations.api import router as activations_router
 from app.privacy.api import router as privacy_router
+from app.ingestion.api import router as ingestion_router
 
 
 @asynccontextmanager
@@ -45,6 +46,7 @@ app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None
 app.include_router(segments_router)
 app.include_router(activations_router)
 app.include_router(privacy_router)
+app.include_router(ingestion_router)
 app.include_router(dev.router)
 app.include_router(oidc.router)
 app.include_router(sources_router)
@@ -77,9 +79,10 @@ async def secure_headers(request: Request, call_next):
             return JSONResponse({"error": {"code": "csrf_failed", "message": "Invalid CSRF token"}},
                                 status_code=403, headers={"X-Content-Type-Options": "nosniff"})
     response = await call_next(request)
-    response.headers["Content-Security-Policy"] = (
-        "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
-        "script-src 'self'; connect-src 'self'; frame-ancestors 'none'")
+    if "Content-Security-Policy" not in response.headers:
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
+            "script-src 'self'; connect-src 'self'; frame-ancestors 'none'")
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "same-origin"
     if settings.app_env == "production":
@@ -199,6 +202,32 @@ def retry_job(job_id: int, user: User = Depends(require_role("admin")),
                     entity_type="job", entity_id=str(job.id), details={}))
     db.commit()
     return job_json(job)
+
+
+@app.get("/sdk/{filename}")
+def sdk_asset(filename: str):
+    if filename not in {"ah.js", "test.html", "manifest.json"}:
+        raise HTTPException(404)
+    if filename == "test.html" and settings.app_env == "production":
+        raise HTTPException(404)
+    roots = (Path("/app/static/sdk"), Path(__file__).resolve().parents[2] / "dist" / "sdk")
+    for root in roots:
+        file = root / filename
+        if file.is_file():
+            headers = {"Cache-Control": "public, max-age=31536000, immutable"
+                       if filename == "ah.js" else "no-cache"}
+            if filename == "test.html":
+                import base64
+                import hashlib
+                import re
+                scripts = re.findall(r"<script>(.*?)</script>", file.read_text(), re.S)
+                hashes = " ".join("'sha256-" + base64.b64encode(hashlib.sha256(s.encode()).digest()).decode() + "'"
+                                  for s in scripts)
+                headers["Content-Security-Policy"] = (
+                    "default-src 'self'; style-src 'self' 'unsafe-inline'; "
+                    f"script-src 'self' {hashes}; connect-src 'self'; frame-ancestors 'none'")
+            return FileResponse(file, headers=headers)
+    raise HTTPException(404, "SDK assets are not built")
 
 
 static = Path("/app/static")

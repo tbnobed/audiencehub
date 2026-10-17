@@ -10,13 +10,13 @@ A dense, dark operations console in the style of a broadcast NOC. It is a workin
 - Fonts bundled via `@fontsource`: Inter for UI (13 px base, 12 px in tables), JetBrains Mono for IDs, counts, JSON, and code.
 - Tabular numbers everywhere (`font-variant-numeric: tabular-nums`). Large numbers abbreviated in KPI tiles (`1.24M`), full in tables with thousands separators.
 - Compact spacing: 8 px grid, table row height 32 px, no oversized cards or hero sections.
-- Icons from `lucide-react`.
+- Custom Kinship icons for primary navigation; `lucide-react` for supporting controls.
 - Minimum width 1280 px is fine; this is a desktop tool. Pages must still not break at 1024 px.
 - Keyboard: `/` focuses global search, `g` then `d/p/s/a/i` jumps to Dashboards/Profiles/Segments/Activations/Imports, `Esc` closes drawers.
 
 ## Layout
 
-- Left sidebar (collapsible to icons): Dashboards, Profiles, Segments, Activations, Imports, Sources, Admin (admin only), System (admin only).
+- Left sidebar (collapsible to icons), grouped into Insights / Operate / Settings, with role-filtered links and a Data Health open-issues badge.
 - Top bar: global profile search (typeahead showing name, masked email, donor status), job activity indicator (spinner with count of running jobs; click opens a drawer listing them with progress bars), environment badge (`DEV` in amber when `APP_ENV != production`), user menu with role shown.
 - Main area uses tabs within pages rather than deep navigation.
 - Toasts bottom-right for job completions and errors.
@@ -26,7 +26,7 @@ A dense, dark operations console in the style of a broadcast NOC. It is a workin
 ### Dashboards
 Tabs: Overview, Giving, Retention, Engagement, Sources, Data Health. Date range picker (presets: 30 d, 90 d, 12 m, YTD, last FY, custom; fiscal year start month configurable in admin settings) applies to all tabs.
 
-- **Overview:** KPI tile row (value, delta vs prior period with arrow and color, sparkline). Below: monthly giving bar chart with 12 m trailing line, donor status stacked area over time, top 5 campaigns table.
+- **Overview:** Four headline KPIs (Giving, Active partners, Partner retention, Average gift), each with independent loading/error states. Separate audience statistics, giving and retention views, and a severity-ranked Needs-attention panel. See `OVERVIEW_API.md` for the implemented layout and endpoints.
 - **Giving:** amount and count by month, new vs returning donors, by channel (bar), by fund (horizontal bar), top appeal codes table with response counts and totals, gift size distribution histogram (buckets $1–24, 25–49, 50–99, 100–249, 250–499, 500–999, 1k–4.9k, 5k+).
 - **Retention:** retention rate by year (line), cohort heatmap table (first-gift year rows × year columns, cells show %), donor status distribution now vs 12 months ago.
 - **Engagement:** events per day by source (line), top event names (table), viewer-to-donor conversion count per month.
@@ -37,6 +37,7 @@ Every chart has a small "table" toggle to show the underlying numbers and a CSV 
 
 ### Profiles
 - Search bar plus filters (donor status, source, has email, consent). Results table: name, email (masked for viewer), phone (masked), city/state, donor status badge, LTV, last gift date, sources (small chips).
+- Selecting a row opens an API-backed preview beside the table (a bottom drawer on mobile). Selection is retained in `?preview=`, alongside search/filter/page state. Enter/Space selects, arrows move between rows, Escape closes. Preview includes loading/retry states and an explicit Open full profile link; all contact values retain the API's role masking.
 - Profile detail (full page, with back navigation that keeps list state):
   - Header: name, profile ID (mono, copyable), donor status badge, RFM score, LTV, last gift, sources.
   - Tabs: **Overview** (traits grid with descriptions on hover, consent per channel with source and date, segments this profile is in), **Gifts** (table), **Activity** (event timeline, newest first, grouped by day, collapsible JSON properties), **Identity** (identifiers, source records with priority and raw attributes, merge history), **Enrichment** (by vendor with license expiry date; expired values not shown).

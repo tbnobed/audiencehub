@@ -1,6 +1,7 @@
 """Progress must be readable from the jobs table while imports stay uncommitted."""
 
 from types import SimpleNamespace
+from datetime import datetime, timezone
 
 from app import worker
 from app.imports import api
@@ -45,6 +46,9 @@ def test_worker_commits_each_validation_and_writing_progress(monkeypatch):
         def commit(self):
             operations.append(("commit",))
 
+        def connection(self):
+            return self
+
     monkeypatch.setattr(worker, "Session", lambda engine: Db())
 
     def heartbeat(db, job_id, progress=None):
@@ -63,7 +67,8 @@ def test_worker_commits_each_validation_and_writing_progress(monkeypatch):
                            "message": "Writing 400k / 5.36M"})
 
     monkeypatch.setattr("app.imports.service.run_import", run_import)
-    worker.run_job(91, "import.run", {"import_id": 42})
+    worker.run_job(91, "import.run", {"import_id": 42},
+                   started_at=datetime.now(timezone.utc))
     assert operations == [
         ("heartbeat", 91, {"done": 1_200_000, "total": 5_360_000,
                            "message": "Validating 1.2M / 5.36M"}),

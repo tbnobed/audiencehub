@@ -69,6 +69,7 @@ def source_json(source: Source) -> dict:
         "vendor": source.vendor,
         "license_expires_at": source.license_expires_at.isoformat() if source.license_expires_at else None,
         "settings": source.settings, "is_active": source.is_active,
+        "has_write_key": bool(source.write_key_hash),
     }
 
 
@@ -121,10 +122,47 @@ def update_source(source_id: int, data: SourceUpdate,
 def delete_source(source_id: int, user: User = Depends(require_role("admin")),
                   db: Session = Depends(session_scope)):
     source = get_source(db, source_id)
-    for table in ("imports", "source_records", "gifts", "events", "enrichment_values"):
+    for table in ("imports", "source_records", "gifts", "events", "enrichment_values", "ingestion_receipts"):
         count = db.scalar(text(f"SELECT EXISTS(SELECT 1 FROM {table} WHERE source_id = :id)"), {"id": source_id})
         if count:
             raise HTTPException(409, "Source has data; deactivate it instead of deleting its history")
     db.delete(source)
     db.commit()
     return {"ok": True}
+
+
+@router.post("/{source_id}/write-key")
+def rotate_write_key(source_id: int, user: User = Depends(require_role("admin")),
+                     db: Session = Depends(session_scope)):
+    import hashlib
+    import secrets
+    from app.models import AuditLog
+    source = get_source(db, source_id)
+    if source.kind != "event_api" or "event" not in source.record_types:
+        raise HTTPException(422, "Write keys require an event API source with event records")
+    key = "wk_live_" + secrets.token_urlsafe(32)
+    source.write_key_hash = hashlib.sha256(key.encode()).hexdigest()
+    db.add(AuditLog(user_id=user.id, actor_type="user", action="source.rotate_write_key",
+                   entity_type="source", entity_id=str(source.id), details={}))
+    db.commit()
+    from fastapi.responses import JSONResponse
+    return JSONResponse({"write_key": key}, headers={"Cache-Control": "no-store"})
+
+
+@router.get("/{source_id}/events")
+def event_tail(source_id: int, cursor: int | None = None, limit: int = 50,
+               user: User = Depends(require_role("analyst")), db: Session = Depends(session_scope)):
+    from app.models import Event
+    get_source(db, source_id)
+    if not 1 <= limit <= 100 or (cursor is not None and cursor < 1):
+        raise HTTPException(422, "Invalid event cursor or limit")
+    stmt = select(Event).where(Event.source_id == source_id).order_by(Event.id.desc()).limit(limit + 1)
+    if cursor:
+        stmt = stmt.where(Event.id < cursor)
+    events = db.scalars(stmt).all()
+    # Tail is intentionally payload-free for every role: event properties,
+    # URL/query strings and anonymous IDs can contain contact data.
+    items = [{"id": e.id, "type": e.type, "name": e.name, "profile_id": e.profile_id,
+              "occurred_at": e.occurred_at.isoformat(), "received_at": e.received_at.isoformat(),
+              "timestamp_clamped": bool(e.context.get("timestamp_clamped"))} for e in events[:limit]]
+    return {"items": items, "next_cursor": items[-1]["id"] if len(events) > limit else None}

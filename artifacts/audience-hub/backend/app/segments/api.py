@@ -62,15 +62,21 @@ def checked(db, definition, as_of):
 
 
 def timed(db, fn):
+    previous = db.scalar(text("SHOW statement_timeout"))
     try:
         db.execute(text("SET LOCAL statement_timeout='10s'"))
         result = fn()
-        db.execute(text("SET LOCAL statement_timeout=0"))
+        db.execute(text("SELECT set_config('statement_timeout', :previous, true)"),
+                   {"previous": previous})
         return result
     except DBAPIError as exc:
         db.rollback()
         if getattr(exc.orig, "sqlstate", None) == "57014":
             raise HTTPException(408, "Partner audience query timed out. Try a narrower window.") from exc
+        raise
+    except BaseException:
+        db.execute(text("SELECT set_config('statement_timeout', :previous, true)"),
+                   {"previous": previous})
         raise
 
 
