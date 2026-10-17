@@ -1,0 +1,118 @@
+obtv-admin@audiencehub:~/audiencehub/artifacts/audience-hub$ git pull && docker compose up -d --build
+remote: Enumerating objects: 99, done.
+remote: Counting objects: 100% (99/99), done.
+remote: Compressing objects: 100% (22/22), done.
+remote: Total 57 (delta 35), reused 57 (delta 35), pack-reused 0 (from 0)
+Unpacking objects: 100% (57/57), 62.40 KiB | 1.39 MiB/s, done.
+From https://github.com/tbnobed/audiencehub
+   01a0e66..39dccd8  main       -> origin/main
+Updating 01a0e66..39dccd8
+Fast-forward
+ .agents/memory/import-performance-evidence.md                                                    |   8 +-
+ .agents/memory/verification-scope-and-copy.md                                                    |   2 +-
+ artifacts/audience-hub/README.md                                                                 |  12 +-
+ artifacts/audience-hub/backend/alembic/versions/0027_identity_batches.py                         |  25 ++++
+ artifacts/audience-hub/backend/app/cli.py                                                        |   4 +-
+ artifacts/audience-hub/backend/app/identity/attachments.py                                       |  86 +++++++++++++
+ artifacts/audience-hub/backend/app/identity/bulk.py                                              |  35 ++----
+ artifacts/audience-hub/backend/app/identity/resolver.py                                          | 102 +---------------
+ artifacts/audience-hub/backend/app/identity/statistics.py                                        |  20 +++
+ artifacts/audience-hub/backend/app/importer.py                                                   |  23 +++-
+ artifacts/audience-hub/backend/app/imports/service.py                                            |  13 +-
+ artifacts/audience-hub/backend/app/jobs/handlers.py                                              | 114 ++++++++++++++----
+ artifacts/audience-hub/backend/app/jobs/phase_progress.py                                        |  84 +++++++++++++
+ artifacts/audience-hub/backend/app/load_status.py                                                | 238 ++++++++++++++++++++++++++----------
+ artifacts/audience-hub/backend/app/models/__init__.py                                            |   1 +
+ artifacts/audience-hub/backend/app/models/milestone2.py                                          |  10 ++
+ artifacts/audience-hub/backend/app/reset_demo.py                                                 |   2 +-
+ artifacts/audience-hub/backend/app/traits/engine.py                                              |   5 +-
+ artifacts/audience-hub/backend/tests/test_attachment_statistics_pg.py                            | 113 +++++++++++++++++
+ artifacts/audience-hub/backend/tests/test_identity_batch_contract.py                             | 179 +++++++++++++++++++++++++++
+ artifacts/audience-hub/backend/tests/test_identity_bulk.py                                       |  15 ++-
+ artifacts/audience-hub/backend/tests/test_identity_import_concurrency.py                         |   5 +-
+ artifacts/audience-hub/backend/tests/test_identity_resolver.py                                   |  48 +++++---
+ artifacts/audience-hub/backend/tests/test_identity_statistics_pg.py                              | 110 +++++++++++++++++
+ artifacts/audience-hub/backend/tests/test_load_status.py                                         | 251 ++++++++++++++++++++++++++++++++++++--
+ artifacts/audience-hub/backend/tests/test_privacy_pg.py                                          |   3 +-
+ artifacts/audience-hub/backend/tests/test_readiness.py                                           |   4 +-
+ artifacts/audience-hub/backend/tests/test_settings.py                                            |   2 +-
+ artifacts/audience-hub/backend/tests/test_transaction_attachment_pg.py                           | 314 +++++++++++++++++++++++++++++++++++++++++++++++
+ artifacts/audience-hub/docs/DEPLOYMENT.md                                                        |   1 -
+ artifacts/audience-hub/docs/FULL_LOAD_VERIFICATION.md                                            | 469 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ artifacts/audience-hub/docs/IMPORT_RECOVERY.md                                                   |  80 ++++++++++--
+ artifacts/audience-hub/scripts/full_load_acceptance.py                                           | 345 ++++++++++++++++++++++++++++++++++++++++++++++++++++
+ artifacts/audience-hub/scripts/full_load_recovery.py                                             | 337 +++++++++++++++++++++++++++++++++++++++++++++++++++
+ artifacts/audience-hub/scripts/identity_acceptance.py                                            | 191 ++++++++++++++++++++++++-----
+ artifacts/audience-hub/scripts/test_full_load_recovery.py                                        |  45 +++++++
+ artifacts/audience-hub/scripts/test_identity_accuracy_streaming.py                               |  91 ++++++++++++++
+ attached_assets/Pasted-Database-totals-profiles-88392-merges-0-gifts-5360521-t_1792204834818.txt | 104 ++++++++++++++++
+ 38 files changed, 3188 insertions(+), 303 deletions(-)
+ create mode 100644 artifacts/audience-hub/backend/alembic/versions/0027_identity_batches.py
+ create mode 100644 artifacts/audience-hub/backend/app/identity/attachments.py
+ create mode 100644 artifacts/audience-hub/backend/app/identity/statistics.py
+ create mode 100644 artifacts/audience-hub/backend/app/jobs/phase_progress.py
+ create mode 100644 artifacts/audience-hub/backend/tests/test_attachment_statistics_pg.py
+ create mode 100644 artifacts/audience-hub/backend/tests/test_identity_batch_contract.py
+ create mode 100644 artifacts/audience-hub/backend/tests/test_identity_statistics_pg.py
+ create mode 100644 artifacts/audience-hub/backend/tests/test_transaction_attachment_pg.py
+ create mode 100644 artifacts/audience-hub/docs/FULL_LOAD_VERIFICATION.md
+ create mode 100644 artifacts/audience-hub/scripts/full_load_acceptance.py
+ create mode 100644 artifacts/audience-hub/scripts/full_load_recovery.py
+ create mode 100644 artifacts/audience-hub/scripts/test_full_load_recovery.py
+ create mode 100644 artifacts/audience-hub/scripts/test_identity_accuracy_streaming.py
+ create mode 100644 attached_assets/Pasted-Database-totals-profiles-88392-merges-0-gifts-5360521-t_1792204834818.txt
+[+] Building 10.0s (33/33) FINISHED
+ => [internal] load local bake definitions                                                                                                                                 0.0s
+ => => reading from stdin 555B                                                                                                                                             0.0s
+ => [internal] load build definition from Dockerfile                                                                                                                       0.0s
+ => => transferring dockerfile: 1.78kB                                                                                                                                     0.0s
+ => [internal] load metadata for docker.io/library/python:3.12-slim-bookworm                                                                                               0.4s
+ => [internal] load metadata for docker.io/library/node:20.20.2-bookworm-slim                                                                                              0.4s
+ => [internal] load .dockerignore                                                                                                                                          0.0s
+ => => transferring context: 229B                                                                                                                                          0.0s
+ => [internal] load build context                                                                                                                                          0.0s
+ => => transferring context: 479.19kB                                                                                                                                      0.0s
+ => [stage-1  1/13] FROM docker.io/library/python:3.12-slim-bookworm@sha256:34386ef0cb081344d7ec1c103ba398e6e9f64e9ab3a1509accc92a4e24a07258                               0.0s
+ => => resolve docker.io/library/python:3.12-slim-bookworm@sha256:34386ef0cb081344d7ec1c103ba398e6e9f64e9ab3a1509accc92a4e24a07258                                         0.0s
+ => [web  1/12] FROM docker.io/library/node:20.20.2-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0                                  0.0s
+ => => resolve docker.io/library/node:20.20.2-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0                                        0.0s
+ => CACHED [stage-1  2/13] RUN apt-get update && apt-get install -y --no-install-recommends libpq5 tini curl   && rm -rf /var/lib/apt/lists/*                              0.0s
+ => CACHED [stage-1  3/13] RUN useradd --create-home --uid 10001 app                                                                                                       0.0s
+ => CACHED [stage-1  4/13] WORKDIR /app                                                                                                                                    0.0s
+ => CACHED [stage-1  5/13] COPY backend/pyproject.toml ./backend/                                                                                                          0.0s
+ => CACHED [stage-1  6/13] COPY backend/app/__init__.py ./backend/app/                                                                                                     0.0s
+ => CACHED [stage-1  7/13] RUN pip install --upgrade pip && pip install ./backend                                                                                          0.0s
+ => [stage-1  8/13] COPY backend/ ./backend/                                                                                                                               0.1s
+ => CACHED [web  2/12] WORKDIR /web                                                                                                                                        0.0s
+ => CACHED [web  3/12] RUN npm install --global npm@10.9.9 --no-audit --no-fund   && node --version && npm --version                                                       0.0s
+ => CACHED [web  4/12] COPY package.json package-lock.json ./                                                                                                              0.0s
+ => CACHED [web  5/12] COPY scripts/check-package-lock.cjs ./scripts/check-package-lock.cjs                                                                                0.0s
+ => CACHED [web  6/12] RUN node scripts/check-package-lock.cjs                                                                                                             0.0s
+ => CACHED [web  7/12] RUN npm ci --include=dev --bin-links=true --no-audit --no-fund --cache=/tmp/npm-cache   || { cat /tmp/npm-cache/_logs/*-debug-0.log; exit 1; }      0.0s
+ => CACHED [web  8/12] RUN test "$(npm --version)" = "10.9.9"   && test -x node_modules/.bin/vite                                                                          0.0s
+ => CACHED [web  9/12] COPY index.html vite.config.ts tsconfig.json ./                                                                                                     0.0s
+ => CACHED [web 10/12] COPY src/ ./src/                                                                                                                                    0.0s
+ => CACHED [web 11/12] COPY public/ ./public/                                                                                                                              0.0s
+ => CACHED [web 12/12] RUN PORT=5000 BASE_PATH=/ npm run build                                                                                                             0.0s
+ => [stage-1  9/13] RUN pip install --no-deps ./backend                                                                                                                    6.3s
+ => [stage-1 10/13] COPY --from=web /web/dist/public ./static                                                                                                              0.1s
+ => [stage-1 11/13] COPY scripts/ ./scripts/                                                                                                                               0.1s
+ => [stage-1 12/13] RUN chmod +x scripts/*.sh && mkdir -p /data/uploads /data/exports   && chown -R app:app /data /app                                                     1.1s
+ => [stage-1 13/13] WORKDIR /app/backend                                                                                                                                   0.1s
+ => exporting to image                                                                                                                                                     1.2s
+ => => exporting layers                                                                                                                                                    0.5s
+ => => exporting manifest sha256:219401a64431fe2ed1154b1a3db3176441b44c8d9834c596cf2cca57dfd186cc                                                                          0.0s
+ => => exporting config sha256:ca32bb0bd06b101e0fd8bd97caba4a64a4cd8a03d884f5f2f5d9dac2122480c7                                                                            0.0s
+ => => exporting attestation manifest sha256:0a83b35e158859e100a34993253a456399f44550f2b9ff32aff8da3329fb94d4                                                              0.0s
+ => => exporting manifest list sha256:cc97db5eec3b29feb47df66d560cf13eac5378e2597583b2b74c0303b0201161                                                                     0.0s
+ => => naming to docker.io/library/audience-hub:latest                                                                                                                     0.0s
+ => => unpacking to docker.io/library/audience-hub:latest                                                                                                                  0.6s
+ => resolving provenance for metadata file                                                                                                                                 0.0s
+[+] up 4/5
+ ✔ Image audience-hub:latest       Built                                                                                                                                   10.1s
+ ✔ Container audience-hub-backup-1 Running                                                                                                                                  0.0s
+ ✔ Container audience-hub-db-1     Running                                                                                                                                  0.0s
+ ✔ Container audience-hub-api-1    Recreated                                                                                                                                0.8s
+ ⠧ Container audience-hub-worker-1 Recreate                                                                                                                               298.7s
+^C
+obtv-admin@audiencehub:~/audiencehub/artifacts/audience-hub$
