@@ -1,0 +1,20 @@
+obtv-admin@audiencehub:~/audiencehub/artifacts/audience-hub$ docker compose ps -a
+NAME                                 IMAGE                                                                     COMMAND                  SERVICE   CREATED             STATUS                 PORTS
+0f2c002c39fa_audience-hub-worker-1   audience-hub:latest                                                       "/usr/bin/tini -- /a…"   worker    6 minutes ago       Created   
+audience-hub-api-1                   audience-hub:latest                                                       "/usr/bin/tini -- /a…"   api       6 minutes ago       Created   
+audience-hub-backup-1                postgres:16                                                               "/bin/bash /backup.sh"   backup    3 weeks ago         Up 3 weeks             5432/tcp
+audience-hub-db-1                    postgres:16                                                               "docker-entrypoint.s…"   db        3 weeks ago         Up 3 weeks (healthy)   5432/tcp
+audience-hub-worker-1                sha256:6c319cb9945818ad07daa1e759cedae0dff0d7209b2a3058334a0b82fc3c6647   "/usr/bin/tini -- /a…"   worker    About an hour ago   Up 48 minutes          8000/tcp
+obtv-admin@audiencehub:~/audiencehub/artifacts/audience-hub$ docker compose ps -a
+docker compose logs --tail=100 worker api
+NAME                                 IMAGE                                                                     COMMAND                  SERVICE   CREATED             STATUS                 PORTS
+0f2c002c39fa_audience-hub-worker-1   audience-hub:latest                                                       "/usr/bin/tini -- /a…"   worker    7 minutes ago       Created   
+audience-hub-api-1                   audience-hub:latest                                                       "/usr/bin/tini -- /a…"   api       7 minutes ago       Created   
+audience-hub-backup-1                postgres:16                                                               "/bin/bash /backup.sh"   backup    3 weeks ago         Up 3 weeks             5432/tcp
+audience-hub-db-1                    postgres:16                                                               "docker-entrypoint.s…"   db        3 weeks ago         Up 3 weeks (healthy)   5432/tcp
+audience-hub-worker-1                sha256:6c319cb9945818ad07daa1e759cedae0dff0d7209b2a3058334a0b82fc3c6647   "/usr/bin/tini -- /a…"   worker    About an hour ago   Up 48 minutes          8000/tcp
+obtv-admin@audiencehub:~/audiencehub/artifacts/audience-hub$ docker compose up -d
+[+] up 2/3
+ ✔ Container audience-hub-backup-1 Running                                                                                                                                  0.0s
+ ✔ Container audience-hub-db-1     Running                                                                                                                                  0.0s
+ ⠦ Container audience-hub-worker-1 Stopping                                                                                                                                92.7s
