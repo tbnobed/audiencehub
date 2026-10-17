@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom';
-import { ArrowRight, BarChart3 } from 'lucide-react';
+import { ArrowRight, BarChart3, Info } from 'lucide-react';
 import { Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { useOverviewCard, type DeltaMetric, type KpiMetric } from '@/hooks/use-dashboards';
+import { useOverviewCard, type DeltaMetric, type KpiMetric, type RetentionWindow } from '@/hooks/use-dashboards';
 import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
 import { millionsTick } from '@/lib/date-range';
@@ -17,10 +17,71 @@ const monthShort = (iso: string) => new Date(`${iso.slice(0, 10)}T12:00:00`).toL
 const monthLong = (iso: string) => new Date(`${iso.slice(0, 10)}T12:00:00`).toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
 const dayLabel = (iso: string) => new Date(`${iso.slice(0, 10)}T12:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 
-function Panel({ title, meta, children, className }: { title: string; meta?: React.ReactNode; children: React.ReactNode; className?: string }) {
-  return <section className={cn('min-w-0 rounded-lg border border-line bg-surface', className)} aria-label={title}>
-    <header className="flex items-center justify-between gap-3 px-4 pt-3.5 pb-2">
-      <h2 className="kin-heading text-ink">{title}</h2>
+const monthFull = (iso: string) => new Date(`${iso.slice(0, 10)}T12:00:00`).toLocaleDateString('en-US', { month: 'long' });
+const isoAddDays = (iso: string, n: number) => { const d = new Date(`${iso}T12:00:00Z`); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+/** Mirrors backend month_shift: shift by whole months, clamping the day to the target month's length. */
+const isoShiftMonths = (iso: string, offset: number) => {
+  const [y, m, d] = iso.split('-').map(Number);
+  const idx = y * 12 + (m - 1) + offset;
+  const ty = Math.floor(idx / 12), tm = idx - ty * 12;
+  const last = new Date(Date.UTC(ty, tm + 1, 0)).getUTCDate();
+  return `${String(ty).padStart(4, '0')}-${String(tm + 1).padStart(2, '0')}-${String(Math.min(d, last)).padStart(2, '0')}`;
+};
+export const todayIso = (now = new Date()) => `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+/** Status traits are only computed for today; a range ending earlier is historical. */
+export const isHistorical = (to: string, today = todayIso()) => !!to && to < today;
+
+/** Retention is anchored to the period end: trailing 12 months versus the 12 months before them. */
+/** Fallback when the server omits retention_yoy.window; same algorithm as backend retention_window(). */
+export function retentionWindows(to: string): RetentionWindow {
+  const boundary = isoShiftMonths(to, -12);
+  return { from: isoAddDays(boundary, 1), to, prior_from: isoAddDays(isoShiftMonths(to, -24), 1), prior_to: boundary };
+}
+export function retentionDefinition(to: string, server?: RetentionWindow) {
+  const w = server ?? retentionWindows(to);
+  return `Of partners who gave ${dayLabel(w.prior_from)} – ${dayLabel(w.prior_to)} (the 12 months before the period's last 12), the share who gave again ${dayLabel(w.from)} – ${dayLabel(w.to)}.`;
+}
+
+type MonthRow = OverviewMonth & { key: string; label: string; fullLabel: string; aggregated: boolean; years: number };
+type OverviewMonth = { month: string; from: string; to: string; prior_from: string; prior_to: string; amount: number; prior_amount: number; gifts: number };
+/** Ranges longer than 12 months are folded into calendar months across years so each bar is a distinct month. */
+export function chartMonths(rows: OverviewMonth[]): MonthRow[] {
+  if (rows.length <= 12) return rows.map(r => ({ ...r, key: r.month, label: monthShort(r.month), fullLabel: monthFull(r.month), aggregated: false, years: 1 }));
+  const byMonth = new Map<string, MonthRow>();
+  for (const r of rows) {
+    const mm = r.month.slice(5, 7);
+    const cur = byMonth.get(mm);
+    if (!cur) byMonth.set(mm, { ...r, key: mm, label: monthShort(r.month), fullLabel: monthFull(r.month), aggregated: true, years: 1 });
+    else Object.assign(cur, { amount: cur.amount + r.amount, prior_amount: cur.prior_amount + r.prior_amount, gifts: cur.gifts + r.gifts, to: r.to, prior_to: r.prior_to, years: cur.years + 1 });
+  }
+  return [...byMonth.values()].sort((a, b) => a.key.localeCompare(b.key));
+}
+/** Takeaway share is computed from exactly the totals the chart displays. */
+export function givingTakeaway(months: MonthRow[]) {
+  const total = months.reduce((s, m) => s + m.amount, 0);
+  if (months.length <= 2 || total <= 0) return null;
+  const top = [...months].sort((a, b) => b.amount - a.amount).slice(0, 2).filter(m => m.amount > 0).sort((a, b) => a.key.localeCompare(b.key));
+  if (top.length < 2 || top[0].fullLabel === top[1].fullLabel) return null;
+  const share = 100 * (top[0].amount + top[1].amount) / total;
+  const names = top[0].aggregated ? `${top[0].fullLabel} and ${top[1].fullLabel}` : `${monthLong(top[0].month)} and ${monthLong(top[1].month)}`;
+  return `${names} brought in ${share.toFixed(1)}% of giving${top[0].aggregated ? ', summed across all years in this range' : ' in this period'}.`;
+}
+
+function InfoTip({ text, id }: { text: string; id: string }) {
+  return <span className="relative inline-flex group">
+    <button type="button" aria-describedby={id} data-testid={`info-${id}`} className="text-ink-muted hover:text-ink focus-visible:text-ink outline-none rounded focus-visible:ring-2 focus-visible:ring-ring"><Info size={12} strokeWidth={1.75} /><span className="sr-only">Definition</span></button>
+    <span role="tooltip" id={id} className="pointer-events-none absolute left-0 top-5 z-20 w-64 rounded-md border border-line bg-surface-raised px-2.5 py-2 text-[11px] normal-case tracking-normal leading-4 text-ink opacity-0 translate-y-0.5 transition duration-150 group-hover:opacity-100 group-hover:translate-y-0 group-focus-within:opacity-100 group-focus-within:translate-y-0 shadow-md">{text}</span>
+  </span>;
+}
+
+export function AsOfToday() {
+  return <span data-testid="text-as-of-today" className="rounded bg-surface-raised px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-ink-muted" title="Status traits are computed for today, not for the end of the selected range">As of today</span>;
+}
+
+export function Panel({ title, subtitle, meta, children, className, testId }: { title: string; subtitle?: string; meta?: React.ReactNode; children: React.ReactNode; className?: string; testId?: string }) {
+  return <section className={cn('min-w-0 rounded-lg border border-line bg-surface', className)} aria-label={title} data-testid={testId}>
+    <header className="flex items-start justify-between gap-3 px-4 pt-3.5 pb-2">
+      <div className="min-w-0"><h2 className="kin-heading text-ink">{title}</h2>{subtitle && <p className="text-xs text-ink-muted mt-0.5">{subtitle}</p>}</div>
       {meta && <div className="text-xs text-ink-muted shrink-0">{meta}</div>}
     </header>
     {children}
@@ -49,10 +110,10 @@ function Sparkline({ points, negative, format }: { points: KpiMetric['sparkline'
   </div>;
 }
 
-function KpiTile({ label, m, value, note, format }: { label: string; m: KpiMetric; value: string; note: string; format: (n: number) => string }) {
+function KpiTile({ label, m, value, note, format, info }: { label: string; m: KpiMetric; value: string; note: string; format: (n: number) => string; info?: string }) {
   return <div className="min-w-0 rounded-lg border border-line bg-surface p-4 flex flex-col gap-3" data-testid={`kpi-${label.toLowerCase().replace(/\W+/g, '-')}`}>
     <div className="flex items-center justify-between gap-2">
-      <span className="text-[11px] font-medium uppercase tracking-[.08em] text-ink-muted truncate">{label}</span>
+      <span className="flex items-center gap-1.5 min-w-0"><span className="text-[11px] font-medium uppercase tracking-[.08em] text-ink-muted truncate">{label}</span>{info && <InfoTip id={`def-${label.toLowerCase().replace(/\W+/g, '-')}`} text={info} />}</span>
       <DeltaChip m={m} />
     </div>
     <div className="font-mono tabular-nums text-[30px] leading-9 font-medium tracking-tight text-ink truncate">{value}</div>
@@ -61,7 +122,8 @@ function KpiTile({ label, m, value, note, format }: { label: string; m: KpiMetri
   </div>;
 }
 
-function monthDelta(m: DeltaMetric) {
+function monthDelta(m: { change: number | null }) {
+  if (m.change === null) return 'Current status · as of today';
   if (m.change === 0) return 'No change this month';
   return `${m.change > 0 ? '▲' : '▼'} ${nf.format(Math.abs(m.change))} this month`;
 }
@@ -95,11 +157,12 @@ function OverviewKpis({ from, to, periodNoun }: RangeProps & { periodNoun: strin
   if (!query.data || query.isError) return <Panel title="Key metrics"><CardState query={query} label="key metrics and audience stats" /></Panel>;
   const { kpis, stats } = query.data;
   const ret = kpis.retention_yoy;
+  const historical = isHistorical(to);
   const strip = [
     { label: 'Profiles', value: nf.format(stats.profiles.value), sub: 'Current active profiles', cls: 'text-ink-muted' },
-    { label: 'Recurring partners', value: nf.format(stats.recurring_partners.value), sub: monthDelta(stats.recurring_partners), cls: stats.recurring_partners.change > 0 ? 'text-ok' : stats.recurring_partners.change < 0 ? 'text-danger' : 'text-ink-muted' },
+    { label: historical ? 'Recurring · as of today' : 'Recurring partners', value: nf.format(stats.recurring_partners.value), sub: monthDelta(stats.recurring_partners), cls: (stats.recurring_partners.change ?? 0) > 0 ? 'text-ok' : (stats.recurring_partners.change ?? 0) < 0 ? 'text-danger' : 'text-ink-muted' },
     { label: 'Email opted in', value: nf.format(stats.email_opted_in.value), sub: `${stats.email_opted_in.percentage.toFixed(1)}% of profiles`, cls: 'text-ink-muted' },
-    { label: 'Lapsing', value: nf.format(stats.lapsing.value), sub: monthDelta(stats.lapsing), cls: stats.lapsing.change !== 0 ? 'text-warn' : 'text-ink-muted' },
+    { label: historical ? 'Lapsing · as of today' : 'Lapsing', value: nf.format(stats.lapsing.value), sub: monthDelta(stats.lapsing), cls: (stats.lapsing.change ?? 0) !== 0 ? 'text-warn' : 'text-ink-muted' },
   ];
 
   return <div className="space-y-3">
@@ -107,7 +170,8 @@ function OverviewKpis({ from, to, periodNoun }: RangeProps & { periodNoun: strin
       <KpiTile label="Giving" m={kpis.giving} value={money(kpis.giving.value)} format={money} note={`${money(kpis.giving.prior)} the prior ${periodNoun}`} />
       <KpiTile label="Active partners" m={kpis.active_partners} value={nf.format(kpis.active_partners.value)} format={n => nf.format(n)} note="Gave at least once in this period" />
       <KpiTile label="Partner retention" m={ret} value={ret.denominator === 0 ? '—' : `${ret.value.toFixed(1)}%`} format={n => `${n.toFixed(1)}%`}
-        note={ret.denominator === 0 ? 'No prior-year partners to measure' : `${nf.format(ret.retained)} of ${nf.format(ret.denominator)} last-year partners gave again`} />
+        info={retentionDefinition(to, ret.window)}
+        note={ret.denominator === 0 ? 'No partners in the prior 12 months to measure' : `${nf.format(ret.retained)} of ${nf.format(ret.denominator)} prior-12-month partners gave again`} />
       <KpiTile label="Average gift" m={kpis.average_gift} value={money(kpis.average_gift.value)} format={money} note={`${money(kpis.average_gift.prior)} the prior ${periodNoun}`} />
     </div>
 
@@ -125,20 +189,18 @@ function MonthlyGiving({ from, to, canImport, onWiden }: GivingProps) {
   const query = useOverviewCard('giving-by-month', from, to);
   if (!query.data || query.isError) return <Panel title="Giving by month" className="xl:col-span-2"><CardState query={query} label="giving by month" /></Panel>;
   const data = query.data.giving_by_month;
-  const months = data.monthly_giving.map(r => ({ ...r, label: monthShort(r.month), holiday: ['11', '12'].includes(r.month.slice(5, 7)) }));
+  const months = chartMonths(data.monthly_giving).map(r => ({ ...r, holiday: ['11', '12'].includes(r.key.length === 2 ? r.key : r.month.slice(5, 7)) }));
+  const aggregated = months.some(m => m.aggregated);
   const hasMonthly = months.some(m => m.amount > 0 || m.prior_amount > 0);
   const maxY = Math.max(...months.map(m => Math.max(m.amount, m.prior_amount)), 0);
-  const top2 = [...months].sort((a, b) => b.amount - a.amount).slice(0, 2).filter(m => m.amount > 0).sort((a, b) => a.month.localeCompare(b.month));
-  const takeaway = data.top_two_month_share != null && top2.length === 2 && months.length > 2
-    ? `${top2[0].label} and ${top2[1].label} brought in ${data.top_two_month_share.toFixed(1)}% of giving in this period.`
-    : null;
+  const takeaway = givingTakeaway(months);
   return <Panel title="Giving by month" className="xl:col-span-2" meta={hasMonthly && <span className="flex items-center gap-3">
         <span className="flex items-center gap-1.5"><i className="h-2 w-2 rounded-sm bg-signal" />This period</span>
         <span className="flex items-center gap-1.5"><i className="h-2 w-2 rounded-sm" style={{ background: 'color-mix(in srgb, var(--line-strong) 55%, transparent)' }} />Prior period</span>
       </span>}>
         {!hasMonthly ? <EmptyLine text="No giving recorded in this range or the prior one." action={canImport ? <Link to="/imports" className="text-signal hover:underline">Import gifts</Link> : <button type="button" onClick={onWiden} className="text-signal hover:underline">Try the last 12 months</button>} />
           : <div className="px-4 pb-4">
-            {takeaway && <p className="text-xs text-ink-muted -mt-1 mb-3">{takeaway}</p>}
+            {(takeaway || aggregated) && <p data-testid="text-giving-takeaway" className="text-xs text-ink-muted -mt-1 mb-3">{takeaway ?? 'Calendar months summed across all years in this range.'}</p>}
             <div className="h-[240px]">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={months} margin={{ top: 4, right: 4, left: 0, bottom: 0 }} barGap={2} barCategoryGap="22%">
@@ -146,10 +208,10 @@ function MonthlyGiving({ from, to, canImport, onWiden }: GivingProps) {
                   <XAxis dataKey="label" tick={{ fill: 'var(--ink-muted)', fontSize: 11 }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
                   <YAxis tickFormatter={millionsTick(maxY)} tick={{ fill: 'var(--ink-muted)', fontSize: 11, fontFamily: 'var(--app-font-mono)' }} tickLine={false} axisLine={false} width={44} />
                   <Tooltip cursor={{ fill: 'var(--surface-raised)' }} contentStyle={{ background: 'var(--surface-raised)', color: 'var(--ink)', border: '1px solid var(--line)', borderRadius: 6, fontSize: 12 }}
-                    labelFormatter={(_, p) => { const r = p?.[0]?.payload as typeof months[number] | undefined; return r ? `${dayLabel(r.from)} – ${dayLabel(r.to)} · ${nf.format(r.gifts)} gifts` : ''; }}
-                    formatter={(v, name, item) => { const r = item.payload as typeof months[number]; return [`$${Number(v).toLocaleString('en-US', { maximumFractionDigits: 2 })}`, name === 'amount' ? 'This period' : `Prior (${dayLabel(r.prior_from)} – ${dayLabel(r.prior_to)})`] as [string, string]; }} />
+                    labelFormatter={(_, p) => { const r = p?.[0]?.payload as typeof months[number] | undefined; return r ? (r.aggregated ? `${r.fullLabel} · ${r.years} years · ${nf.format(r.gifts)} gifts` : `${dayLabel(r.from)} – ${dayLabel(r.to)} · ${nf.format(r.gifts)} gifts`) : ''; }}
+                    formatter={(v, name, item) => { const r = item.payload as typeof months[number]; return [`$${Number(v).toLocaleString('en-US', { maximumFractionDigits: 2 })}`, name === 'amount' ? 'This period' : r.aggregated ? 'Prior period' : `Prior (${dayLabel(r.prior_from)} – ${dayLabel(r.prior_to)})`] as [string, string]; }} />
                   <Bar dataKey="amount" radius={[2, 2, 0, 0]} maxBarSize={22}>
-                    {months.map(m => <Cell key={m.month} fill={m.holiday ? 'color-mix(in srgb, var(--signal) 55%, var(--surface))' : 'var(--signal)'} />)}
+                    {months.map(m => <Cell key={m.key} fill={m.holiday ? 'color-mix(in srgb, var(--signal) 55%, var(--surface))' : 'var(--signal)'} />)}
                   </Bar>
                   <Bar dataKey="prior_amount" fill="color-mix(in srgb, var(--line-strong) 55%, transparent)" radius={[2, 2, 0, 0]} maxBarSize={22} />
                 </BarChart>
@@ -165,7 +227,7 @@ function Attention({ from, to }: RangeProps) {
   const ranks = { error: 0, warning: 1, notice: 2, healthy: 3 };
   const attentionItems = [...query.data.attention].sort((a, b) => ranks[a.severity] - ranks[b.severity]);
   const sev = { error: { c: 'var(--danger)', t: 'Error' }, warning: { c: 'var(--warn)', t: 'Warning' }, notice: { c: 'var(--signal)', t: 'Notice' }, healthy: { c: 'var(--ok)', t: 'Healthy' } } as const;
-  return <Panel title="Needs attention">
+  return <Panel title="Needs attention" meta={isHistorical(to) ? <AsOfToday /> : undefined}>
         {!attentionItems.length ? <EmptyLine text="Nothing needs attention right now." />
           : <ul className="px-2 pb-2">
             {attentionItems.slice(0, 5).map((a, i) => <li key={i} className="flex gap-3 rounded-md px-2 py-2.5 border-t border-line first:border-t-0">
@@ -216,9 +278,9 @@ function PartnerStatus({ from, to }: RangeProps) {
   if (!query.data || query.isError) return <Panel title="Partner status"><CardState query={query} label="partner status" /></Panel>;
   const data = query.data;
   const statusColor: Record<string, string> = { active: 'var(--signal)', new: 'var(--ok)', reactivated: 'var(--kin-chart-4)', lapsing: 'var(--warn)', lapsed: 'var(--line-strong)' };
-  return <Panel title="Partner status" meta={`${nf.format(data.partner_status.givers)} givers`}>
+  return <Panel title="Partner status" meta={<span className="flex items-center gap-2">{isHistorical(to) && <AsOfToday />}<span>{nf.format(data.partner_status.givers)} givers</span></span>}>
         <div className="px-4 pb-4">
-          {data.partner_status.givers === 0 ? <p className="text-xs text-ink-muted py-1">No partners have given through this date.</p> : <>
+          {data.partner_status.givers === 0 ? <p className="text-xs text-ink-muted py-1">No partners have given yet.</p> : <>
             <div className="flex h-2.5 rounded-full overflow-hidden gap-[2px]" role="img" aria-label={data.partner_status.statuses.map(s => `${s.status} ${s.share.toFixed(1)}%`).join(', ')}>
               {data.partner_status.statuses.filter(s => s.count > 0).map(s => <div key={s.status} style={{ flexGrow: s.count, background: statusColor[s.status] ?? 'var(--kin-chart-5)' }} />)}
             </div>
@@ -232,14 +294,14 @@ function PartnerStatus({ from, to }: RangeProps) {
             </ul>
           </>}
           <div className="mt-3 pt-3 border-t border-line flex items-center justify-between text-[13px]">
-            <span className="text-ink-muted">Prospects who have never given</span>
+            <span className="text-ink-muted">Prospects who have never given{isHistorical(to) ? ' (today)' : ''}</span>
             <span className="font-mono tabular-nums text-ink">{nf.format(data.partner_status.prospects)}</span>
           </div>
         </div>
       </Panel>;
 }
 
-function SectionError({ error, retry, fetching }: { error: Error; retry: () => void; fetching: boolean }) {
+export function SectionError({ error, retry, fetching }: { error: Error; retry: () => void; fetching: boolean }) {
   return <div role="alert" className="text-xs font-sans text-danger whitespace-normal">
     <span>{error.message}</span>{' '}
     <button type="button" disabled={fetching} onClick={retry} className="text-signal underline disabled:opacity-50">{fetching ? 'Retrying…' : 'Retry'}</button>
@@ -255,7 +317,7 @@ function fixLabel(href: string, title: string) {
   return 'Open';
 }
 
-function EmptyLine({ text, action }: { text: string; action?: React.ReactNode }) {
+export function EmptyLine({ text, action }: { text: string; action?: React.ReactNode }) {
   return <div className="flex items-center gap-2 px-4 pb-4 text-xs text-ink-muted">
     <BarChart3 size={16} strokeWidth={1.75} className="shrink-0" />
     <span>{text}</span>{action && <span className="ml-auto shrink-0">{action}</span>}

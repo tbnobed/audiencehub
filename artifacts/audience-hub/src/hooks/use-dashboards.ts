@@ -13,14 +13,20 @@ export type DashboardPayload = {
 export type SparkPoint = { month: string; value: number };
 export type DeltaMetric = { value: number; prior: number; change: number; change_pct: number | null; delta_label: string | null };
 export type KpiMetric = DeltaMetric & { sparkline: SparkPoint[] };
-export type RetentionKpi = KpiMetric & { denominator: number; retained: number; prior_denominator: number };
+export type CurrentStatusMetric = { value: number; prior: number | null; change: number | null; change_pct: number | null; as_of?: string; basis?: string; label?: string };
+/** Server retention window: prior = (end-24m, end-12m], trailing = (end-12m, end], month shifts clamp to month end. */
+export type RetentionWindow = { from: string; to: string; prior_from: string; prior_to: string };
+export type RetentionKpi = KpiMetric & {
+  denominator: number; retained: number; prior_denominator: number;
+  window?: RetentionWindow; prior_window?: RetentionWindow; definition?: string;
+};
 export type OverviewPayload = {
   kpis: { giving: KpiMetric; active_partners: KpiMetric; retention_yoy: RetentionKpi; average_gift: KpiMetric };
   stats: {
     profiles: { value: number };
-    recurring_partners: DeltaMetric;
+    recurring_partners: CurrentStatusMetric;
     email_opted_in: { value: number; percentage: number };
-    lapsing: DeltaMetric;
+    lapsing: CurrentStatusMetric;
   };
   monthly_giving: { month: string; from: string; to: string; prior_from: string; prior_to: string; amount: number; prior_amount: number; gifts: number }[];
   top_two_month_share: number | null;

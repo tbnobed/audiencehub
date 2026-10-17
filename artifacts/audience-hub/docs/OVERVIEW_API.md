@@ -22,8 +22,8 @@ through MVCC, without waiting on `TRUNCATE`/DDL.
 
 - `dashboard_daily(day, source_id, fund, campaign, channel, gift_count,
   gift_amount, donor_count, new_donor_count)` also separates active/inactive
-  populations so Overview excludes deleted/merged/unresolved profiles while
-  Giving retains its all-gift totals.
+  populations. Overview and Giving both exclude deleted/merged/unresolved
+  profiles; appeal and gift-size rollups use this same resolved population.
 - `dashboard_kpis(as_of, key, value)` holds population, authoritative opted-in
   count, current trait status/recurring/lapsing aggregates, precomputed diagnostic
   charts, annual retention/cohorts, and the published generation.
@@ -47,6 +47,10 @@ API workers. Entries expire after 60 seconds or when traits publishes a new
 generation. Existing entries are returned immediately; background work uses a
 PostgreSQL advisory lock to coalesce refreshes and retains stale data if a refresh
 fails. There is no process-local or filesystem payload cache.
+Cache digests include a contract version, so deployment cannot reuse payloads
+computed with the former retention/status semantics. Exceptions are not cached.
+Current-trait cards are overlaid from the small published KPIs on every response,
+so stale date-series responses cannot disagree with Needs attention after refresh.
 
 Cold builds read only rollups in a repeatable-read snapshot. Publication checks
 the current generation under a nonblocking shared refresh lock; obsolete builds
@@ -64,18 +68,29 @@ Prior means the immediately preceding equal-length period.
 
 - `kpis`: `giving`, `active_partners`, `retention_yoy`, `average_gift`, each with
   numeric `value`, `prior`, `change`, nullable `change_pct`, `delta_label`, and
-  exactly twelve `{month,value}` sparkline points. Retention intersects donors
-  in the selected range and the same calendar dates one year earlier (leap-day
-  clamping), and includes `denominator`, `retained`, `prior_denominator`.
+   exactly twelve `{month,value}` sparkline points. Retention intersects partners
+   in `(range.to - 24 calendar months, range.to - 12 calendar months]` with
+   `(range.to - 12 calendar months, range.to]`, independently of `range.from`.
+   Month subtraction clamps leap days. It includes `denominator`, `retained`,
+   `prior_denominator`, `definition`, `window`, and `prior_window`.
+   Each window has inclusive `from`, `to`, `prior_from`, `prior_to` dates:
+   `window` is anchored at `range.to`, `prior_window` at `range.prior_to`.
 - `stats`: profiles, email opted-in/percentage, recurring partners, lapsing.
-  Historical recurring/status comparisons are derived from published temporal
-  membership facts, not today's status substituted for historical end dates.
+   Lapsing and recurring use current published `profile_traits` aggregates,
+   independent of the selected gift range. They include `basis:
+   "current_profile_traits"`, `as_of` (the publication date), and `label:
+   "as of today"`. Prior/change fields are null because these are not historical
+   comparisons. The same lapsing aggregate drives Partner status and attention.
 - `monthly_giving`: `{month,from,to,prior_from,prior_to,amount,prior_amount,gifts}`;
   prior buckets partition the prior range by elapsed days. Missing months are
-  zero. `top_two_month_share` is null if giving is zero.
+   zero. `top_two_months` contains up to two distinct `{month,name,amount}` calendar
+   months, summed across years from these exact plotted amounts, ordered by amount
+   descending with calendar month as tie-breaker. `top_two_month_share` uses their
+   sum divided by the plotted total, and is null if giving is zero.
 - `campaigns`: top five `{campaign,share,gifts,average_gift,amount}`;
   `campaigns_href`; `partner_status`: `{givers,statuses,prospects}`, with ordered
-  exclusive active/new/reactivated/lapsing/lapsed statuses.
+   exclusive active/new/reactivated/lapsing/lapsed statuses, plus the current-trait
+   `basis`, `as_of`, and `label` metadata described above.
 - `attention`: role-safe actionable issues and lapsing partners.
 
 Progressive card routes preserve these nested field types:
@@ -83,7 +98,7 @@ Progressive card routes preserve these nested field types:
 | Route suffix | Response |
 |---|---|
 | `/overview/kpis` | `{range, kpis, stats}` |
-| `/overview/giving-by-month` | `{range, giving_by_month: {monthly_giving, top_two_month_share}}` |
+| `/overview/giving-by-month` | `{range, giving_by_month: {monthly_giving, top_two_month_share, top_two_months}}` |
 | `/overview/needs-attention` | `{attention}` |
 | `/overview/campaigns` | `{top_campaigns: {campaigns, campaigns_href}}` |
 | `/overview/partner-status` | `{partner_status}` |
@@ -91,7 +106,28 @@ Progressive card routes preserve these nested field types:
 The legacy `/overview/primary`, `/overview/email`, `/overview/attention`, all six
 dashboard tabs, and `/{dashboard}/{chart}/csv` remain available.
 
+Sources charts (`profiles_by_source`, `overlap_matrix`, `identifier_coverage`)
+are all-time published diagnostics, never filtered by the gift date range.
+Retention status snapshots remain historical published `trait_snapshots`, not
+current-trait card data.
+
+Data Health `rejected_rows_by_import` is now **one row per currently unreviewed
+completed/failed import report**, all-time and independent of gift dates.
+Existing `day`, `source`, `record_type`, `rejected` fields remain; `import_id` and
+`filename` identify each report. The same SQL source drives the Overview report
+count and the `rejected_reports` list on `/api/data-health`. Reviewed reports disappear;
+changed rejected-row totals reopen them immediately, without waiting for shared
+cache expiry. Viewer responses omit actionable rejected reports, matching the
+Overview role restriction. CSV uses the same live report source for analysts.
+
+After deploying these changes, run the normal offline `traits.recompute` job to
+republish the resolved-population giving/diagnostic aggregates. There is no
+request-time raw-data fallback.
+
 ## Reproducible scale evidence
+
+The scale timings below predate the production-review arithmetic changes; they
+are historical evidence, not a fresh performance claim for the revised code.
 
 Run without a browser or application database:
 

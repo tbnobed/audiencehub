@@ -233,7 +233,7 @@ def trait_catalog(user: User = Depends(require_role("viewer"))):
 @router.get("/api/data-health")
 def data_health(user: User = Depends(require_role("viewer")),
                 db: Session = Depends(session_scope)):
-    from app.dashboards.health import PRIVACY_REVIEWS
+    from app.dashboards.health import PRIVACY_REVIEWS, rejected_reports
     privacy_reviews = _rows(db, PRIVACY_REVIEWS + " ORDER BY a.id DESC LIMIT 100")
     pending = db.execute(text(
         "SELECT count(*) FROM source_records WHERE resolved_at IS NULL"
@@ -281,6 +281,7 @@ def data_health(user: User = Depends(require_role("viewer")),
         "blocklist_hits": blocklist_hits,
         "auto_blocklisted": auto_blocklisted,
         "rejected_rows": rejected_rows,
+        "rejected_reports": rejected_reports(db) if user.role != "viewer" else [],
         "recent_imports": recent_imports,
         "privacy_segment_reviews": privacy_reviews,
     }, mask_pii=user.role == "viewer")

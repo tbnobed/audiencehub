@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { parseRangeParams, rangeDays, validateCustomRange, withRangeParams, type Preset } from '@/lib/date-range';
-import { OverviewSkeleton, OverviewView } from '@/components/dashboard/overview';
-import { Activity, ArrowDownRight, ArrowUpRight, Download, RefreshCw, Table2 } from 'lucide-react';
+import { AsOfToday, EmptyLine, isHistorical, OverviewSkeleton, OverviewView, Panel } from '@/components/dashboard/overview';
+import { ArrowDownRight, ArrowUpRight, Download, RefreshCw, Table2 } from 'lucide-react';
 import { Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { useAuth } from '@/hooks/use-auth';
 import { useDashboard, useDashboardSettings, dashboardCsvUrl, type ChartRow, type DashboardName, type DashboardPayload } from '@/hooks/use-dashboards';
@@ -10,11 +10,11 @@ import DataHealth from '@/pages/data-health';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 
-type Spec = { key: string; title: string; subtitle: string; label: string; value: string; secondary?: string; kind?: 'line' | 'table' | 'heatmap' | 'bars' };
+type Spec = { asOfToday?: boolean; key: string; title: string; subtitle: string; label: string; value: string; secondary?: string; kind?: 'line' | 'table' | 'heatmap' | 'bars' };
 const specs: Record<DashboardName, Spec[]> = {
   overview: [
     { key: 'monthly_giving', title: 'Giving volume', subtitle: 'Monthly gift amount and count', label: 'month', value: 'amount', kind: 'bars' },
-    { key: 'donor_status', title: 'Partner composition', subtitle: 'Current computed partner status', label: 'status', value: 'profiles' },
+    { asOfToday: true, key: 'donor_status', title: 'Partner composition', subtitle: 'Current computed partner status', label: 'status', value: 'profiles' },
     { key: 'top_campaigns', title: 'Top campaigns', subtitle: 'Ranked by giving in selected period', label: 'campaign', value: 'amount', kind: 'table' },
   ],
   giving: [
@@ -54,6 +54,14 @@ const tabs: { id: DashboardName; label: string }[] = [
   { id: 'overview', label: 'Overview' }, { id: 'giving', label: 'Giving' }, { id: 'retention', label: 'Retention' },
   { id: 'engagement', label: 'Engagement' }, { id: 'sources', label: 'Sources' }, { id: 'data-health', label: 'Data Health' },
 ];
+const descriptions: Record<DashboardName, string> = {
+  overview: 'Giving, partners and engagement across every source.',
+  giving: 'Where gifts came from, which funds they supported and how large they were.',
+  retention: 'Whether partners keep giving year over year, by first-gift cohort.',
+  engagement: 'Tracked interactions and how often they lead to a first gift.',
+  sources: 'Profile coverage and overlap per source. Counts are all-time and ignore the date range.',
+  'data-health': 'Resolution backlog, merges, rejected rows and blocklist review.',
+};
 const palette = Array.from({ length: 8 }, (_, index) => `var(--kin-chart-${index + 1})`);
 const dateLabel = (v: string | number | null) => typeof v === 'string' && /^\d{4}-\d\d-\d\d/.test(v)
   ? new Date(`${v.slice(0, 10)}T12:00:00`).toLocaleDateString(undefined, { month: 'short', year: '2-digit', day: v.endsWith('-01') ? undefined : 'numeric' })
@@ -64,7 +72,7 @@ const full = (v: string | number | null, key?: string) => v == null ? '—' : ty
   : dateLabel(v);
 const money = (n: number) => `$${compact(n)}`;
 
-function ChartPanel({ spec, rows, dashboard, from, to, canExport }: { spec: Spec; rows: ChartRow[]; dashboard: DashboardName; from: string; to: string; canExport: boolean }) {
+function ChartPanel({ spec, rows, dashboard, from, to, canExport, historical, undated }: { historical: boolean; undated: boolean; spec: Spec; rows: ChartRow[]; dashboard: DashboardName; from: string; to: string; canExport: boolean }) {
   const [table, setTable] = useState(false);
   const keys = rows[0] ? Object.keys(rows[0]) : [spec.label, spec.value];
   const isCurrency = ['amount', 'ltv_sum', 'giving_12m_sum'].includes(spec.value);
@@ -82,20 +90,15 @@ function ChartPanel({ spec, rows, dashboard, from, to, canExport }: { spec: Spec
   const heatYears = Array.from(new Set(rows.map(r => Number(r.years_after_first)))).sort((a, b) => a - b);
   const sources = Array.from(new Set(rows.flatMap(r => [String(r.source_a), String(r.source_b)]))).sort();
 
-  return <section className="min-w-0 rounded-md border border-line bg-surface flex flex-col" data-testid={`chart-${spec.key}`}>
-    <div className="px-4 py-3 border-b border-line flex items-start justify-between gap-3">
-      <div className="min-w-0">
-        <h3 className="kin-heading text-ink">{spec.title}</h3>
-        <p className="text-[11px] text-ink-muted mt-0.5">{spec.subtitle}</p>
-      </div>
-      <div className="flex items-center gap-1 shrink-0">
-        <button type="button" data-testid={`toggle-table-${spec.key}`} aria-label={`${table ? 'Show chart' : 'Show table'} for ${spec.title}`} aria-pressed={table} onClick={() => setTable(!table)} className={`p-1.5 rounded border transition-colors ${table ? 'border-signal text-signal bg-signal-soft' : 'border-transparent text-ink-muted hover:text-ink hover:bg-surface-raised'}`}><Table2 size={15} /></button>
-        {canExport && <a data-testid={`download-${spec.key}`} href={dashboardCsvUrl(dashboard, spec.key, from, to)} title={`Download ${spec.title} CSV`} aria-label={`Download ${spec.title} CSV`} className="p-1.5 rounded text-ink-muted hover:text-signal hover:bg-surface-raised"><Download size={15} /></a>}
-      </div>
-    </div>
-    <div className="p-4 min-h-[230px] flex-1">
-      {!rows.length ? <div className="h-[200px] flex flex-col items-center justify-center text-center"><Activity size={20} className="text-ink-muted mb-2" /><p className="text-xs text-ink-muted">No records in this range.</p><p className="text-[11px] text-ink-muted mt-1">Try a longer date range or import source data.</p></div>
-      : table || spec.kind === 'table' ? <div className="overflow-auto max-h-[260px]">
+  const actions = <div className="flex items-center gap-1 shrink-0">
+        {spec.asOfToday && historical && <AsOfToday />}
+        <button type="button" data-testid={`toggle-table-${spec.key}`} aria-label={`${table ? 'Show chart' : 'Show table'} for ${spec.title}`} aria-pressed={table} onClick={() => setTable(!table)} className={`p-1.5 rounded border transition-colors ${table ? 'border-signal text-signal bg-signal-soft' : 'border-transparent text-ink-muted hover:text-ink hover:bg-surface-raised'}`}><Table2 size={14} /></button>
+        {canExport && <a data-testid={`download-${spec.key}`} href={dashboardCsvUrl(dashboard, spec.key, from, to)} title={`Download ${spec.title} CSV`} aria-label={`Download ${spec.title} CSV`} className="p-1.5 rounded text-ink-muted hover:text-signal hover:bg-surface-raised transition-colors"><Download size={14} /></a>}
+      </div>;
+  if (!rows.length) return <Panel testId={`chart-${spec.key}`} title={spec.title} subtitle={spec.subtitle} meta={actions}><EmptyLine text={undated ? 'No records from this source yet.' : 'No records in this range.'} /></Panel>;
+  return <Panel testId={`chart-${spec.key}`} title={spec.title} subtitle={spec.subtitle} meta={actions} className="flex flex-col">
+    <div className="px-4 pb-3 flex-1">
+      {table || spec.kind === 'table' ? <div className="overflow-auto max-h-[260px]">
           <table className="w-full text-xs tabular-nums">
             <thead className="sticky top-0 bg-surface-raised text-ink-muted"><tr>{keys.map(k => <th key={k} className={`px-2 py-2 font-medium whitespace-nowrap ${typeof rows[0][k] === 'number' ? 'text-right' : 'text-left'}`}>{k.replaceAll('_', ' ').replace('donor', 'partner')}</th>)}</tr></thead>
             <tbody>{rows.map((row, i) => <tr key={i} className="border-t border-line hover:bg-surface-raised">{keys.map(k => <td key={k} className={`px-2 py-2 whitespace-nowrap ${typeof row[k] === 'number' ? 'text-right font-mono text-ink' : 'text-ink-muted'}`}>{full(row[k], k)}</td>)}</tr>)}</tbody>
@@ -117,21 +120,21 @@ function ChartPanel({ spec, rows, dashboard, from, to, canExport }: { spec: Spec
           </ResponsiveContainer>
         </div>}
     </div>
-    <div className="border-t border-line px-4 py-2 text-[10px] uppercase tracking-wider text-ink-muted font-mono">{rows.length.toLocaleString()} {rows.length === 1 ? 'record' : 'records'} · {table ? 'table view' : 'source data'}</div>
-  </section>;
+    <div className="border-t border-line px-4 py-2 text-[10px] uppercase tracking-wider text-ink-muted font-mono">{rows.length.toLocaleString()} {rows.length === 1 ? 'row' : 'rows'}{undated ? ' · all time, not date-bound' : ''}</div>
+  </Panel>;
 }
 
 function Kpis({ data, dashboard }: { data: DashboardPayload; dashboard: DashboardName }) {
   const labels: Record<string, string> = { active_profiles: 'Active profiles', donors: 'All-time partners', active_donors_12m: 'Active partners · 12m', giving_12m: 'Giving · 12m', avg_gift: 'Average gift · 12m', recurring_donors: 'Recurring partners', new_donors: 'New partners', returning_donors: 'Returning partners', email_opted_in: 'Email opted in', pending_resolution_count: 'Pending resolution', blocklist_review_count: 'Awaiting review', expiring_enrichment_count: 'Expiring enrichment' };
   const entries = Object.entries(data.metrics);
   if (!entries.length) return null;
-  return <div className={`grid gap-2 ${dashboard === 'overview' ? 'grid-cols-2 lg:grid-cols-4 xl:grid-cols-7' : 'grid-cols-1 sm:grid-cols-3'}`}>
+  return <div className={`grid gap-2 ${dashboard === 'overview' ? 'grid-cols-2 lg:grid-cols-4 xl:grid-cols-7' : 'grid-cols-2 lg:grid-cols-4'}`}>
     {entries.map(([key, metric]) => {
       const cash = key === 'giving_12m' || key === 'avg_gift';
       const positive = (metric.change ?? 0) >= 0;
-      return <div key={key} data-testid={`metric-${key}`} className="bg-surface border border-line rounded-md px-3 py-3 min-w-0">
-        <p className="text-[10px] text-ink-muted uppercase tracking-[.09em] whitespace-nowrap truncate">{labels[key] || key.replaceAll('_', ' ')}</p>
-        <div className="font-mono tabular-nums text-[28px] leading-8 font-semibold tracking-tight text-ink mt-2">{cash ? money(metric.value) : compact(metric.value)}</div>
+      return <div key={key} data-testid={`metric-${key}`} className="bg-surface border border-line rounded-lg p-4 min-w-0">
+        <p className="text-[11px] font-medium text-ink-muted uppercase tracking-[.08em] whitespace-nowrap truncate">{labels[key] || key.replaceAll('_', ' ')}</p>
+        <div className="font-mono tabular-nums text-[26px] leading-8 font-medium tracking-tight text-ink mt-2">{cash ? money(metric.value) : compact(metric.value)}</div>
         <div className="mt-2 flex items-center gap-1 text-[10px] font-mono tabular-nums">
           {metric.change_pct != null ? <span className={`inline-flex items-center ${positive ? 'text-ok' : 'text-danger'}`}>{positive ? <ArrowUpRight size={13} /> : <ArrowDownRight size={13} />}{Math.abs(metric.change_pct).toFixed(1)}%</span> : <span className="text-ink-muted">—</span>}
           <span className="text-ink-muted">vs prior</span>
@@ -176,7 +179,7 @@ export default function Dashboard() {
   const canImport = user?.role === 'analyst' || user?.role === 'admin';
   return <div className="max-w-[1680px] mx-auto space-y-4 pb-8 animate-in fade-in duration-300">
     <header className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
-      <div><h1 className="kin-title text-ink">{activeTab.label}</h1><p className="text-[13px] text-ink-muted mt-1">{tab === 'overview' ? 'Giving, partners and engagement across every source.' : 'Unified audience signals, giving, and data operations.'}</p></div>
+      <div><h1 className="kin-title text-ink">{activeTab.label}</h1><p className="text-[13px] text-ink-muted mt-1">{descriptions[tab]}</p></div>
       <div className="flex flex-col items-start lg:items-end gap-1.5 text-xs">
         <div role="group" aria-label="Date range" className="inline-flex flex-wrap rounded-md border border-line bg-surface p-0.5">
           {([['30d', '30 d'], ['90d', '90 d'], ['12m', '12 m'], ['ytd', 'YTD'], ['fy', 'Last FY'], ['custom', 'Custom…']] as const).map(([id, label]) => <button key={id} type="button" data-testid={`preset-${id}`} aria-pressed={activePreset === id} disabled={!settings.data} onClick={() => selectPreset(id)} className={`px-2.5 py-1 rounded text-xs transition-colors disabled:opacity-40 disabled:cursor-not-allowed outline-none focus-visible:ring-2 focus-visible:ring-ring ${activePreset === id ? 'bg-signal-soft text-signal font-medium' : 'text-ink-muted hover:text-ink'}`}>{label}</button>)}
@@ -189,7 +192,7 @@ export default function Dashboard() {
           {preset !== 'custom' && <button type="button" onClick={() => setCustomOpen(false)} className="px-2 py-1 text-ink-muted hover:text-ink">Cancel</button>}
           <span id="range-error" role="status" className="basis-full text-danger text-[11px] lg:text-right min-h-0">{draftDirty && draftError ? draftError : ''}</span>
         </form>}
-        <p data-testid="dashboard-period" className="text-ink-muted">{settings.data && parsed.range ? <>{fmtDay(from)} – {fmtDay(to)} · compared with the prior {periodNoun}</> : settings.isError ? 'Dashboard date settings are unavailable.' : 'Loading dashboard date settings…'}</p>
+        <p data-testid="dashboard-period" className="text-ink-muted">{tab === 'sources' ? 'Source coverage is all-time; the date range does not apply.' : settings.data && parsed.range ? <>{fmtDay(from)} – {fmtDay(to)} · compared with the prior {periodNoun}</> : settings.isError ? 'Dashboard date settings are unavailable.' : 'Loading dashboard date settings…'}</p>
       </div>
     </header>
     {settings.isError && <div role="alert" className="border border-danger/30 bg-danger/5 rounded-md px-4 py-3 text-xs text-ink"><span>Dashboard date settings are unavailable.</span><Button variant="outline" size="sm" className="ml-3 h-7" disabled={settings.isFetching} onClick={() => settings.refetch()}><RefreshCw size={12} className="mr-1.5" /> Retry</Button><span className="ml-2 text-ink-muted">{settings.error instanceof Error ? settings.error.message : 'The request could not be completed.'}</span></div>}
@@ -199,12 +202,12 @@ export default function Dashboard() {
     {query.isFetching && query.data && <p role="status" className="text-xs text-ink-muted">Refreshing dashboard data…</p>}
     {!settings.data && settings.isError ? <div role="alert" className="border border-danger/30 bg-danger/5 rounded-md p-8 text-center text-sm text-ink">Dashboard cannot be displayed without date settings. Retry above.</div>
       : tab === 'overview' ? (settings.data && parsed.range ? <OverviewView from={from} to={to} canImport={canImport} onWiden={() => selectPreset('12m')} periodNoun={periodNoun} /> : <OverviewSkeleton />)
-      : query.isPending ? <><div className="grid grid-cols-2 lg:grid-cols-4 gap-2">{Array.from({ length: 4 }, (_, i) => <Skeleton key={i} className="h-24 bg-surface-raised" />)}</div><div className="grid grid-cols-1 xl:grid-cols-2 gap-3">{Array.from({ length: 4 }, (_, i) => <Skeleton key={i} className="h-[295px] bg-surface-raised" />)}</div></>
+      : query.isPending ? <><div className="grid grid-cols-2 lg:grid-cols-4 gap-2">{Array.from({ length: 4 }, (_, i) => <Skeleton key={i} className="h-24 bg-surface-raised" />)}</div><div className="grid grid-cols-1 xl:grid-cols-2 gap-3">{Array.from({ length: 4 }, (_, i) => <Skeleton key={i} className="h-[220px] bg-surface-raised" />)}</div></>
       : <>
       {query.isError && <div role="alert" className="border border-danger/30 bg-danger/5 rounded-md p-5 text-center"><p className="text-ink font-medium">{query.data ? 'Dashboard could not be refreshed; showing previously loaded data' : 'Dashboard data is unavailable'}</p><p className="text-ink-muted text-xs mt-1">{query.error instanceof Error ? query.error.message : 'The request could not be completed.'}</p><Button variant="outline" size="sm" className="mt-4" disabled={query.isFetching} onClick={() => query.refetch()}><RefreshCw size={13} className="mr-2" /> Retry</Button></div>}
       {query.data && <>
         <Kpis data={query.data} dashboard={tab} />
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">{specs[tab].map(spec => <div key={spec.key}><ChartPanel spec={spec} rows={query.data!.charts[spec.key] || []} dashboard={tab} from={from} to={to} canExport={canImport} /></div>)}</div>
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-3 items-start">{specs[tab].map(spec => <div key={spec.key}><ChartPanel historical={isHistorical(to)} undated={tab === 'sources'} spec={spec} rows={query.data!.charts[spec.key] || []} dashboard={tab} from={from} to={to} canExport={canImport} /></div>)}</div>
         {tab === 'data-health' && <div className="border-t border-line pt-5 mt-5"><div className="text-[10px] uppercase tracking-widest text-signal font-mono mb-2">Operational controls</div><DataHealth /></div>}
       </>}
       </>}

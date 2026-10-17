@@ -1,5 +1,5 @@
-"""Live, resolved-profile overview aggregates. See docs/OVERVIEW_API.md."""
-from calendar import monthrange
+"""Published, resolved-profile overview aggregates. See docs/OVERVIEW_API.md."""
+from calendar import monthrange, month_name
 from datetime import date, timedelta
 
 from sqlalchemy import text
@@ -14,6 +14,14 @@ def rows(db, sql, params=None):
 def month_shift(day, offset):
     year, month = divmod(day.year * 12 + day.month - 1 + offset, 12)
     return date(year, month + 1, min(day.day, monthrange(year, month + 1)[1]))
+
+
+def retention_window(end):
+    """Adjacent calendar-year windows, (end - 24m, end - 12m], (end - 12m, end]."""
+    boundary = month_shift(end, -12)
+    return {"from": (boundary + timedelta(days=1)).isoformat(), "to": end.isoformat(),
+            "prior_from": (month_shift(end, -24) + timedelta(days=1)).isoformat(),
+            "prior_to": boundary.isoformat()}
 
 
 def delta(value, prior):
@@ -34,21 +42,25 @@ def overview_facts(db, windows, cutoffs):
     """
     params, columns, totals = {}, [], []
     for i, (start, end) in enumerate(windows):
+        bounds = retention_window(end)
         params.update({f"s{i}": start, f"e{i}": end,
-                       f"ys{i}": month_shift(start, -12), f"ye{i}": month_shift(end, -12)})
+                       f"rs{i}": date.fromisoformat(bounds["from"]),
+                       f"ys{i}": date.fromisoformat(bounds["prior_from"]),
+                       f"ye{i}": date.fromisoformat(bounds["prior_to"])})
         current = f"gift_date BETWEEN :s{i} AND :e{i}"
         previous = f"gift_date BETWEEN :ys{i} AND :ye{i}"
         columns.extend([
             f"sum(0) FILTER(WHERE {current}) AS amount{i}",
             f"sum(gift_count) FILTER(WHERE {current}) AS gifts{i}",
             f"bool_or({previous}) AS base{i}",
+            f"bool_or(gift_date BETWEEN :rs{i} AND :e{i}) AS recent{i}",
         ])
         totals.extend([
             f"COALESCE(sum(amount{i}),0) AS amount{i}",
             f"COALESCE(sum(gifts{i}),0) AS gifts{i}",
             f"COALESCE(sum(weight) FILTER(WHERE gifts{i}>0),0) AS partners{i}",
             f"COALESCE(sum(weight) FILTER(WHERE base{i}),0) AS base{i}",
-            f"COALESCE(sum(weight) FILTER(WHERE base{i} AND gifts{i}>0),0) AS retained{i}",
+            f"COALESCE(sum(weight) FILTER(WHERE base{i} AND recent{i}),0) AS retained{i}",
         ])
     for i, end in enumerate(cutoffs):
         params[f"cut{i}"] = end
@@ -109,7 +121,7 @@ def overview_facts(db, windows, cutoffs):
 
 
 def build_overview(db, start, end, prior_start, prior_end, *, include_email=True):
-    from app.dashboards.api import _email_opted_in_count
+    from app.dashboards.api import _email_opted_in_count, _kpi
     windows = [(start, end), (prior_start, prior_end)]
     windows += [(m, min(month_shift(m, 1)-timedelta(days=1), end))
                 for m in (month_shift(end.replace(day=1), offset) for offset in range(-11, 1))]
@@ -148,7 +160,11 @@ def build_overview(db, start, end, prior_start, prior_end, *, include_email=True
         for k in keys:
             kpis[k]["sparkline"].append({"month": m.isoformat(), "value": values[k]})
     kpis["retention_yoy"].update(denominator=current["retention_base"], retained=current["retained"],
-                                prior_denominator=prior["retention_base"])
+                                prior_denominator=prior["retention_base"],
+                                window=retention_window(end),
+                                prior_window=retention_window(prior_end),
+                                definition="Of partners who gave in the preceding 12 months, the share "
+                                           "who also gave in the trailing 12 months ending on the range end.")
     paired = []
     cursor = start
     while cursor <= end:
@@ -165,9 +181,10 @@ def build_overview(db, start, end, prior_start, prior_end, *, include_email=True
                        "amount": float(amounts["amount"]), "prior_amount": float(amounts["prior_amount"]),
                        "gifts": int(amounts["gifts"])})
         cursor = stop + timedelta(days=1)
-    counts = {r["status"]: r["count"] for r in statuses(db, end)}
-    last_month = end.replace(day=1)-timedelta(days=1)
-    old_counts = {r["status"]: r["count"] for r in statuses(db, last_month)}
+    # Status cards are current traits, never reconstructed at the selected range end.
+    counts = {r["status"]: r["count"] for r in _kpi(db, "partner_status")}
+    counts["prospect"] = counts.get("prospect", profiles-sum(counts.values()))
+    traits_as_of = rows(db, "SELECT as_of FROM dashboard_kpis WHERE key='partner_status'")[0]["as_of"].isoformat()
     opted = _email_opted_in_count(db) if include_email else None
     givers = sum(v for k, v in counts.items() if k != "prospect")
     status = [{"status": k, "count": counts.get(k, 0),
@@ -181,16 +198,17 @@ def build_overview(db, start, end, prior_start, prior_end, *, include_email=True
     for c in campaigns:
         c.update(amount=float(c["amount"]), average_gift=float(c["average_gift"]))
         c["share"] = 100*c["amount"]/current["giving"] if current["giving"] else 0
+    def current_only(value):
+        return {"value": value, "prior": None, "change": None, "change_pct": None, "delta_label": "—"}
+    status_meta = {"basis": "current_profile_traits", "as_of": traits_as_of, "label": "as of today"}
     stats = {"profiles": {"value": profiles},
-             "recurring_partners": delta(recurring(db, end), recurring(db, last_month)),
-             "lapsing": delta(counts.get("lapsing", 0), old_counts.get("lapsing", 0))}
+             "recurring_partners": {**current_only(int(_kpi(db, "recurring_partners"))), **status_meta},
+             "lapsing": {**current_only(int(_kpi(db, "lapsing"))), **status_meta}}
     if include_email:
         stats["email_opted_in"] = {"value": opted, "percentage": 100*opted/profiles if profiles else 0}
     rolling = period(db, end-timedelta(days=364), end)
     prior_rolling = period(db, prior_end-timedelta(days=364), prior_end)
     prior_givers = sum(r["count"] for r in statuses(db, prior_end) if r["status"] != "prospect")
-    def current_only(value):
-        return {"value": value, "prior": None, "change": None, "change_pct": None, "delta_label": "—"}
     metrics = dict(kpis)
     metrics.update(active_profiles=current_only(profiles), donors=delta(givers, prior_givers),
                    active_donors_12m=delta(rolling["active_partners"], prior_rolling["active_partners"]),
@@ -198,6 +216,14 @@ def build_overview(db, start, end, prior_start, prior_end, *, include_email=True
                    avg_gift=kpis["average_gift"], recurring_donors=stats["recurring_partners"])
     if include_email:
         metrics["email_opted_in"] = current_only(opted)
+    # Distinct calendar months across all years, using exactly the plotted totals.
+    calendar_totals = {}
+    for bucket in paired:
+        month = int(bucket["month"][5:7])
+        calendar_totals[month] = calendar_totals.get(month, 0) + bucket["amount"]
+    top_months = [{"month": m, "name": month_name[m], "amount": amount}
+                  for m, amount in sorted(calendar_totals.items(), key=lambda x: (-x[1], x[0]))[:2]]
+    chart_total = sum(bucket["amount"] for bucket in paired)
     return {"range": {"from": start.isoformat(), "to": end.isoformat(),
                       "prior_from": prior_start.isoformat(), "prior_to": prior_end.isoformat()},
             "metrics": metrics,
@@ -206,11 +232,43 @@ def build_overview(db, start, end, prior_start, prior_end, *, include_email=True
                                        + [{"status": "prospect", "profiles": counts.get("prospect", 0)}],
                        "top_campaigns": campaigns},
             "overview": {"kpis": kpis, "stats": stats, "monthly_giving": paired,
-                         "top_two_month_share": 100*sum(sorted((x["amount"] for x in paired), reverse=True)[:2])/current["giving"] if current["giving"] else None,
+                          "top_two_month_share": 100*sum(x["amount"] for x in top_months)/chart_total if chart_total else None,
+                          "top_two_months": top_months,
                          "campaigns": campaigns, "campaigns_href": "/?tab=giving",
-                         "partner_status": {"givers": givers, "statuses": status,
+                          "partner_status": {"givers": givers, "statuses": status, **status_meta,
                                             "prospects": counts.get("prospect", 0)},
                          "attention": []}}
+
+
+def current_status_cards(db, payload):
+    """Keep current-trait cards consistent even while date charts use SWR.
+
+    Only tiny published KPIs are read here; never scan live traits/gifts to
+    refresh a request. One statement sees one complete published generation.
+    """
+    published = {r["key"]: r for r in rows(db, """
+      SELECT key,value,as_of FROM dashboard_kpis
+      WHERE key IN ('partner_status','lapsing','recurring_partners','profiles')
+    """)}
+    counts = {r["status"]: r["count"] for r in published["partner_status"]["value"]}
+    profiles = int(published["profiles"]["value"])
+    prospects = counts.get("prospect", profiles-sum(counts.values()))
+    givers = sum(v for k, v in counts.items() if k != "prospect")
+    meta = {"basis": "current_profile_traits", "label": "as of today",
+            "as_of": published["partner_status"]["as_of"].isoformat()}
+    status = [{"status": key, "count": counts.get(key, 0),
+               "share": 100*counts.get(key, 0)/givers if givers else 0}
+              for key in ("active", "new", "reactivated", "lapsing", "lapsed")]
+    overview = payload["overview"]
+    overview["partner_status"] = {"givers": givers, "statuses": status, "prospects": prospects, **meta}
+    for key in ("lapsing", "recurring_partners"):
+        overview["stats"][key] = {
+            "value": int(published[key]["value"]), "prior": None, "change": None,
+            "change_pct": None, "delta_label": "—", **meta}
+    payload["charts"]["donor_status"] = [{"status": r["status"], "profiles": r["count"]} for r in status]
+    payload["charts"]["donor_status"].append({"status": "prospect", "profiles": prospects})
+    payload["metrics"]["recurring_donors"] = overview["stats"]["recurring_partners"]
+    return payload
 
 
 def health_counts(db, role="admin"):

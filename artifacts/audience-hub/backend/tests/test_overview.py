@@ -9,6 +9,7 @@ from test_consent_ingestion_pg import db
 from app.dashboards import api
 from app.dashboards.overview import delta, month_shift
 from app.dashboards.rollups import refresh_dashboard_rollups
+from app.traits.engine import recompute_traits
 
 
 def test_delta_and_leap_dates():
@@ -48,7 +49,7 @@ def test_resolved_population_giving_and_period_contract(db):
         db.execute(text("""INSERT INTO gifts(source_id,external_id,profile_id,amount,gift_date,campaign)
              VALUES (:source,:external,:pid,:amount,'2025-03-15','Spring')"""),
                    {"source": source, "external": str(i), "pid": pid, "amount": 10 if pid == ids[0] else 10000})
-    refresh_dashboard_rollups(db)
+    recompute_traits(db, as_of=date(2025, 3, 20))
     db.commit()
     result = api._dashboard("overview", date(2025, 3, 10), date(2025, 3, 20), db)
     o = result["overview"]
@@ -82,11 +83,11 @@ def test_retention_exclusive_statuses_and_role_safe_shell(db):
         for n, day in enumerate(history):
             db.execute(text("""INSERT INTO gifts(source_id,external_id,profile_id,amount,gift_date)
                 VALUES (:s,:x,:p,10,:day)"""), {"s": source, "x": f"{index}-{n}", "p": pid, "day": date.fromisoformat(day)})
-    refresh_dashboard_rollups(db)
+    recompute_traits(db, as_of=date(2025, 6, 30))
     db.commit()
     result = api._dashboard("overview", date(2025, 6, 1), date(2025, 6, 30), db)["overview"]
-    assert result["kpis"]["retention_yoy"]["value"] == 100
-    assert result["kpis"]["retention_yoy"]["denominator"] == 1
+    assert result["kpis"]["retention_yoy"]["value"] == 50
+    assert result["kpis"]["retention_yoy"]["denominator"] == 2
     assert result["kpis"]["active_partners"]["value"] == 3
     assert [r["count"] for r in result["partner_status"]["statuses"]] == [1, 1, 1, 1, 1]
     assert result["partner_status"]["prospects"] == 1

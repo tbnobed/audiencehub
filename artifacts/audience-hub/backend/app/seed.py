@@ -20,6 +20,7 @@ from typing import Any
 import phonenumbers
 from faker import Faker
 
+from app.seed_giving import CAMPAIGNS, generate_giving
 
 SCALE_DENSITY = {"small": 0.5, "medium": 1.0, "large": 2.0}
 CSV_FILES = (
@@ -30,8 +31,6 @@ CSV_FILES = (
     "zeta_enrichment.csv",
 )
 FUNDS = ("General", "Missions", "Building", "Media")
-CAMPAIGNS = ("Annual Appeal", "Spring Outreach", "Year-End Giving", "Community")
-APPEALS = ("YE24", "SPRING24", "ANNUAL25", "DIGITAL", "DIRECT_MAIL")
 INTERESTS = ("missions", "community", "education", "media", "youth", "outreach")
 
 
@@ -103,20 +102,6 @@ def _gmail_variant(email: str, rng: random.Random) -> str:
         local += "+" + rng.choice(("esp", "newsletter", "family", "2025"))
     result = f"{local}@{domain}"
     return rng.choice((result, result.upper(), f" {result} "))
-
-
-def _sample_gift_date(rng: random.Random) -> date:
-    months = [month for _year in range(5) for month in range(1, 13)]
-    weights = [2.7 if month in (11, 12) else 1.0 for month in months]
-    selected = rng.choices(months, weights=weights, k=1)[0]
-    year = rng.randint(2020, 2024)
-    if selected == 2:
-        day = rng.randint(1, 28)
-    elif selected in (4, 6, 9, 11):
-        day = rng.randint(1, 30)
-    else:
-        day = rng.randint(1, 31)
-    return date(year, selected, day)
 
 
 def _record_truth(records: dict[str, dict[str, str | None]], source: str,
@@ -300,55 +285,43 @@ def generate_seed(profiles: int = 50_000, scale: str = "small",
     ))
     gift_rng = random.Random(random_seed ^ 0xBEEF)
     duplicated_gift = False
+    gift_numbers: dict[int, int] = {}
     try:
-        for person_index, person in enumerate(people):
-            recurring = gift_rng.random() < 0.15
-            recurring_plan = f"plan-{person_index + 1:08d}" if recurring else ""
-            gift_number = 0
-            dates = []
-            if recurring:
-                for year in range(2020, 2025):
-                    for month in range(1, 13):
-                        if year == 2024 and month > 12:
-                            continue
-                        day = min(gift_rng.randint(1, 28), 28)
-                        dates.append((date(year, month, day), True))
-            for _ in range(max(0, int(gift_rng.expovariate(1 / (2.2 * density))))):
-                dates.append((_sample_gift_date(gift_rng), False))
-            if person_index == 0 and not dates:
-                dates.append((date(2024, 12, 15), False))
-            for gift_date, is_recurring in dates:
-                gift_number += 1
-                amount = min(25000.0, max(5.0, gift_rng.lognormvariate(3.75, 0.85)))
-                gift_id = f"gift-{person_index + 1:08d}-{gift_number:03d}"
-                formatted_date = _mixed_date(gift_date, gift_rng)
-                if "/" in formatted_date or "," in formatted_date:
-                    _mark_messiness(injected, CSV_FILES[1], "mixed_date_format")
-                row = {
-                    "external_id": gift_id,
-                    "contact_external_id": person["external_id"],
-                    "email": person["email"],
-                    "phone": person["phone"],
-                    "amount": f"{amount:.2f}",
-                    "currency": "USD",
-                    "gift_date": formatted_date,
-                    "fund": gift_rng.choice(FUNDS),
-                    "campaign": gift_rng.choice(CAMPAIGNS),
-                    "appeal_code": gift_rng.choice(APPEALS),
-                    "channel": gift_rng.choice(("online", "mail", "phone", "event", "other")),
-                    "payment_method": gift_rng.choice(("card", "ach", "check", "cash")),
-                    "is_recurring": str(is_recurring).lower(),
-                    "recurring_plan_id": recurring_plan if is_recurring else "",
-                }
+        for gift in generate_giving(profiles, density, random_seed):
+            person_index = gift.person_index
+            person = people[person_index]
+            gift_numbers[person_index] = gift_numbers.get(person_index, 0) + 1
+            gift_id = f"gift-{person_index + 1:08d}-{gift_numbers[person_index]:03d}"
+            formatted_date = _mixed_date(gift.gift_date, gift_rng)
+            if "/" in formatted_date or "," in formatted_date:
+                _mark_messiness(injected, CSV_FILES[1], "mixed_date_format")
+            row = {
+                "external_id": gift_id,
+                "contact_external_id": person["external_id"],
+                "email": person["email"],
+                "phone": person["phone"],
+                "amount": f"{gift.amount:.2f}",
+                "currency": "USD",
+                "gift_date": formatted_date,
+                "fund": gift_rng.choice(FUNDS),
+                "campaign": gift.campaign,
+                "appeal_code": f"{gift.campaign.upper().replace(' ', '_')}_{gift.gift_date.year}",
+                "channel": gift.channel,
+                "payment_method": ("check" if gift.channel == "mail" else
+                                   gift_rng.choice(("card", "ach"))),
+                "is_recurring": str(gift.recurring).lower(),
+                "recurring_plan_id": (f"plan-{person_index + 1:08d}-{gift.gift_date.year}"
+                                      if gift.recurring else ""),
+            }
+            gifts_writer.writerow(row)
+            _record_truth(records, "giving_platform", gift_id, person["person_id"],
+                          household_ids.get(person["person_id"]))
+            counts[CSV_FILES[1]] += 1
+            if not duplicated_gift:
                 gifts_writer.writerow(row)
-                _record_truth(records, "giving_platform", gift_id, person["person_id"],
-                              household_ids.get(person["person_id"]))
+                _mark_messiness(injected, CSV_FILES[1], "duplicate_row")
                 counts[CSV_FILES[1]] += 1
-                if not duplicated_gift:
-                    gifts_writer.writerow(row)
-                    _mark_messiness(injected, CSV_FILES[1], "duplicate_row")
-                    counts[CSV_FILES[1]] += 1
-                    duplicated_gift = True
+                duplicated_gift = True
         gifts_writer.writerow({
             "external_id": "", "contact_external_id": "", "email": "", "phone": "",
             "amount": "not-a-number", "currency": "USD", "gift_date": "",

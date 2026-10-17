@@ -12,6 +12,23 @@ PRIVACY_REVIEWS = """
           AND reviewed.entity_id=a.id::text)
 """
 
+REJECTED_REPORTS = """
+    SELECT i.id AS import_id,i.created_at::date AS day,s.key AS source,
+           i.filename,i.record_type,i.rows_rejected AS rejected
+    FROM imports i JOIN sources s ON s.id=i.source_id
+    WHERE i.rows_rejected>0 AND i.status IN ('completed','failed')
+      AND NOT EXISTS (SELECT 1 FROM audit_log a
+        WHERE a.action='data_health.rejected_report.review'
+          AND a.entity_id=i.id::text
+          AND a.details->>'rows_rejected'=i.rows_rejected::text)
+"""
+
+
+def rejected_reports(db):
+    """Current actionable reports, independent of the dashboard's gift date range."""
+    return [dict(r) for r in db.execute(text(
+        REJECTED_REPORTS + " ORDER BY i.created_at DESC,i.id DESC")).mappings()]
+
 
 def health_counts(db, role="admin"):
     from app.dashboards.cache import check_deadline
@@ -20,13 +37,6 @@ def health_counts(db, role="admin"):
     # a report; EXISTS avoids multiplying issues when reviews are repeated.
     counts = dict(db.execute(text("""SELECT
       (SELECT count(*) FROM jobs WHERE status='failed') AS failed_jobs,
-      (SELECT count(*) FROM imports i WHERE i.rows_rejected>0
-        AND i.status IN ('completed','failed')
-        AND NOT EXISTS (SELECT 1 FROM audit_log a
-          WHERE a.action='data_health.rejected_report.review'
-          AND a.entity_id=i.id::text
-          AND a.details->>'rows_rejected'=i.rows_rejected::text))
-        AS rejected_reports,
       (SELECT count(*) FROM identifier_blocklist b WHERE reason='high_cardinality'
         AND NOT EXISTS (SELECT 1 FROM audit_log a
           WHERE a.action='data_health.blocklist.approve'
@@ -35,6 +45,8 @@ def health_counts(db, role="admin"):
         WHERE license_expires_at >= CURRENT_DATE
           AND license_expires_at <= CURRENT_DATE + 60) AS expiring_enrichment
     """)).mappings().one())
+    counts["rejected_reports"] = db.scalar(text(
+        "SELECT count(*) FROM (" + REJECTED_REPORTS + ") reports"))
     counts["privacy_segment_reviews"] = db.scalar(text(
         "SELECT count(*) FROM (" + PRIVACY_REVIEWS + ") issues"))
     if role != "admin":
@@ -63,6 +75,6 @@ def attention(db, role, lapsing):
              for key, severity, title, explanation, href in definitions if counts[key]]
     if lapsing:
         items.append({"severity": "warning", "title": "Partners are lapsing",
-                      "explanation": f"{lapsing:,} partners last gave 366–730 days ago.",
+                       "explanation": f"{lapsing:,} partners are lapsing as of today (current profile traits).",
                       "href": "/segments"})
     return items

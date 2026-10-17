@@ -64,6 +64,6 @@ def test_split_card_payload_contracts(db):
         result = api._card_endpoint(card)(date(2025, 1, 1), date(2025, 1, 31), user, db)
         assert set(result) == keys
         if card == "giving-by-month":
-            assert set(result["giving_by_month"]) == {"monthly_giving", "top_two_month_share"}
+            assert set(result["giving_by_month"]) == {"monthly_giving", "top_two_month_share", "top_two_months"}
         if card == "campaigns":
             assert set(result["top_campaigns"]) == {"campaigns", "campaigns_href"}

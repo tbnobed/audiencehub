@@ -1,6 +1,4 @@
 """Shared cache regressions against an explicitly disposable PostgreSQL schema."""
-import hashlib
-import json
 import time
 from datetime import date
 
@@ -56,7 +54,7 @@ def test_background_refresh_replaces_old_generation(db):
     db.commit()
     version = cache.generation(db)
     assert old != version
-    digest = hashlib.sha256(json.dumps(key, default=str).encode()).hexdigest()
+    digest = cache.cache_digest(key)
     cache._refresh(digest, key, version, db.get_bind())
     db.rollback()
     result = _dashboard(*key, db)
@@ -75,7 +73,7 @@ def test_failed_background_refresh_preserves_stale_payload(db, monkeypatch):
     def fail(*args):
         raise RuntimeError("deliberate refresh failure")
     monkeypatch.setattr(api, "build_cache_key", fail)
-    digest = hashlib.sha256(json.dumps(key, default=str).encode()).hexdigest()
+    digest = cache.cache_digest(key)
     cache._refresh(digest, key, cache.generation(db), db.get_bind())
     assert db.scalar(text("SELECT payload FROM dashboard_cache")) == original
 

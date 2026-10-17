@@ -15,8 +15,8 @@ Use “partners” in all user-facing copy.
 
 **How to apply:** Use partner terminology in segment names, summaries, labels, errors and templates; retain existing internal/API field identifiers where compatibility requires them.
 
-Do not change the import, identity-resolution or attachment pipeline until the user sends the production timings.
+Do not change the import, identity-resolution or attachment pipeline as part of the dashboard and seed-realism correction.
 
-**Why:** The user is measuring the 500k production load and explicitly froze those pipelines while requesting worker lifecycle fixes, M7 follow-ups, UI completion, then M6.
+**Why:** The user froze those pipelines while measuring the 500k production load. Production timings have now arrived; the next explicit request prioritizes dashboard correctness and seed realism before further M6 work, not another pipeline rewrite.
 
-**How to apply:** Keep shutdown/session management changes outside pipeline algorithms. Build M6 ingestion around existing resolution and attachment interfaces rather than modifying the frozen pipeline.
+**How to apply:** Seed-generation changes are expressly authorized. Keep import, identity-resolution and attachment algorithms unchanged unless a subsequent request requires changing them. Do not treat completion PASS as proof that the under-60-minute target or identity accuracy passed.

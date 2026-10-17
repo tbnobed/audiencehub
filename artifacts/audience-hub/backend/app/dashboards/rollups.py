@@ -52,7 +52,8 @@ def refresh_dashboard_rollups(db, *, as_of=None):
         CASE WHEN amount<25 THEN 1 WHEN amount<50 THEN 2 WHEN amount<100 THEN 3
           WHEN amount<250 THEN 4 WHEN amount<500 THEN 5 WHEN amount<1000 THEN 6
           WHEN amount<5000 THEN 7 ELSE 8 END,count(*),sum(amount)
-      FROM gifts WHERE gift_date IS NOT NULL GROUP BY 1,2,3,4
+      FROM gifts g JOIN active_profiles p ON p.id=g.profile_id
+      WHERE gift_date IS NOT NULL GROUP BY 1,2,3,4
     """))
     db.execute(text("""
       INSERT INTO dashboard_event_daily
@@ -77,13 +78,16 @@ def refresh_dashboard_rollups(db, *, as_of=None):
           HAVING bool_or(c.status IN ('opted_in','subscribed','granted'))
              AND NOT bool_or(c.status IN ('opted_out','unsubscribed','denied','hard_bounce'))
         ) eligible) AS email_opted_in,
-        (SELECT count(*) FROM profile_traits WHERE is_recurring_active) AS recurring_partners,
-        (SELECT count(*) FROM profile_traits WHERE donor_status='lapsing') AS lapsing
+        (SELECT count(*) FROM profile_traits pt JOIN active_profiles p ON p.id=pt.profile_id
+          WHERE is_recurring_active) AS recurring_partners,
+        (SELECT count(*) FROM profile_traits pt JOIN active_profiles p ON p.id=pt.profile_id
+          WHERE donor_status='lapsing') AS lapsing
     """)).mappings().one()
     for key, value in counts.items():
         put(key, value)
     put("partner_status", [dict(r) for r in db.execute(text(
-        "SELECT donor_status AS status,count(*) AS count FROM profile_traits GROUP BY 1")).mappings()])
+        "SELECT donor_status AS status,count(*) AS count FROM profile_traits pt "
+        "JOIN active_profiles p ON p.id=pt.profile_id GROUP BY 1")).mappings()])
     # Non-date source diagnostics are precomputed once, including expensive overlap
     # and blocklist matching; requests only deserialize these small chart payloads.
     from app.dashboards.offline_charts import static_charts

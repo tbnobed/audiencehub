@@ -18,7 +18,8 @@ def static_charts(db):
           SELECT s.key AS source,count(DISTINCT sr.profile_id) AS profiles,
             count(DISTINCT sr.profile_id) FILTER(WHERE COALESCE(sr.email_norm::text,'')<>'') AS email_profiles,
             count(DISTINCT sr.profile_id) FILTER(WHERE COALESCE(sr.phone_e164,'')<>'') AS phone_profiles,
-            count(DISTINCT sr.profile_id) FILTER(WHERE COALESCE(sr.address1,sr.address2,sr.city,sr.postal_code,'')<>'') AS address_profiles
+            count(DISTINCT sr.profile_id) FILTER(WHERE
+              COALESCE(NULLIF(sr.address1,''),NULLIF(sr.address2,''),NULLIF(sr.city,''),NULLIF(sr.postal_code,''),'')<>'') AS address_profiles
           FROM source_records sr JOIN sources s ON s.id=sr.source_id
           JOIN active_profiles p ON p.id=sr.profile_id GROUP BY s.key ORDER BY s.key""",
         "pending_resolutions": """
@@ -31,7 +32,7 @@ def static_charts(db):
             OR (b.type='phone' AND sr.phone_e164=b.value) GROUP BY b.type ORDER BY b.type""",
         "retention_by_year": """
           WITH y AS (SELECT DISTINCT profile_id,extract(year FROM gift_date)::int AS year
-            FROM gifts WHERE profile_id IS NOT NULL AND gift_date IS NOT NULL)
+            FROM gifts g JOIN active_profiles p ON p.id=g.profile_id WHERE gift_date IS NOT NULL)
           SELECT a.year,count(*) FILTER(WHERE b.profile_id IS NOT NULL)::int AS retained,
             count(*)::int AS donors,
             100.0*count(*) FILTER(WHERE b.profile_id IS NOT NULL)/count(*) AS retention_rate
@@ -39,7 +40,7 @@ def static_charts(db):
           GROUP BY a.year ORDER BY a.year""",
         "cohorts": """
           WITH y AS (SELECT DISTINCT profile_id,extract(year FROM gift_date)::int AS year
-            FROM gifts WHERE profile_id IS NOT NULL AND gift_date IS NOT NULL),
+            FROM gifts g JOIN active_profiles p ON p.id=g.profile_id WHERE gift_date IS NOT NULL),
           f AS (SELECT profile_id,min(year) AS first_year FROM y GROUP BY profile_id),
           n AS (SELECT first_year,count(*) AS size FROM f GROUP BY first_year)
           SELECT first_year,y.year-first_year AS years_after_first,count(*)::int AS retained,

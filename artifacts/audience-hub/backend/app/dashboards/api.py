@@ -1,5 +1,6 @@
 """Dashboard requests read only published aggregates; raw scans live in rollups.py."""
 import csv
+import copy
 import io
 from datetime import date, timedelta, datetime
 from decimal import Decimal
@@ -62,7 +63,7 @@ def _build_dashboard(db, name, start, end, prior_start, prior_end):
         charts["monthly_giving"] = _rows(db, """
           SELECT date_trunc('month',day)::date AS month,sum(gift_amount) AS amount,
             sum(gift_count)::bigint AS gifts FROM dashboard_daily
-          WHERE day BETWEEN :s AND :e GROUP BY 1 ORDER BY 1""", params)
+          WHERE active AND day BETWEEN :s AND :e GROUP BY 1 ORDER BY 1""", params)
         charts["new_returning"] = _rows(db, """
           WITH m AS (SELECT DISTINCT p.id,p.days[1] AS first_date,p.donors,
             date_trunc('month',day)::date AS month FROM dashboard_donor_patterns p,
@@ -75,7 +76,7 @@ def _build_dashboard(db, name, start, end, prior_start, prior_end):
             charts[chart] = _rows(db, f"""
               SELECT COALESCE({field},'(unspecified)') AS {field},
                 sum(gift_count)::bigint AS gifts,sum(gift_amount) AS amount
-              FROM dashboard_daily WHERE day BETWEEN :s AND :e
+              FROM dashboard_daily WHERE active AND day BETWEEN :s AND :e
               GROUP BY 1 ORDER BY amount DESC,gifts DESC
               {"LIMIT 10" if field == "campaign" else ""}""", params)
         charts["appeal_codes"] = _rows(db, """
@@ -113,11 +114,8 @@ def _build_dashboard(db, name, start, end, prior_start, prior_end):
         charts["merges_per_day"] = _rows(db, """
           SELECT merged_at::date AS day,count(*) AS merges FROM profile_merges
           WHERE merged_at>=:s AND merged_at<CAST(:e AS date)+1 GROUP BY 1 ORDER BY 1""", params)
-        charts["rejected_rows_by_import"] = _rows(db, """
-          SELECT i.created_at::date AS day,s.key AS source,i.record_type,
-            sum(i.rows_rejected)::int AS rejected FROM imports i JOIN sources s ON s.id=i.source_id
-          WHERE i.created_at>=:s AND i.created_at<CAST(:e AS date)+1 AND i.rows_rejected>0
-          GROUP BY 1,2,3 ORDER BY 1,2,3""", params)
+        from app.dashboards.health import rejected_reports
+        charts["rejected_rows_by_import"] = rejected_reports(db)
         charts["blocklist_review"] = _rows(db, """
           SELECT b.type,count(*) AS awaiting_review FROM identifier_blocklist b
           WHERE b.reason='high_cardinality' AND NOT EXISTS(SELECT 1 FROM audit_log a
@@ -150,7 +148,11 @@ def _dashboard(name, from_date, to_date, db):
     from app.dashboards.cache import cached
     start, end, _, _ = _date_range(from_date, to_date)
     key = (name, start, end)
-    return cached(db, key, lambda: build_cache_key(db, key))
+    result = cached(db, key, lambda: build_cache_key(db, key))
+    if name in ("overview", "overview-primary"):
+        from app.dashboards.overview import current_status_cards
+        result = current_status_cards(db, copy.deepcopy(result))
+    return result
 
 
 def _endpoint(name):
@@ -161,7 +163,11 @@ def _endpoint(name):
         result = _dashboard(name, from_date, to_date, db)
         if name == "overview":
             from app.dashboards.overview import attention
-            result["overview"]["attention"] = attention(db, user.role, result["overview"]["stats"]["lapsing"]["value"])
+            result["overview"]["attention"] = attention(db, user.role, int(_kpi(db, "lapsing")))
+        if name == "data-health":
+            # Operational review state is live, not a stale date-bound cache entry.
+            from app.dashboards.health import rejected_reports
+            result["charts"]["rejected_rows_by_import"] = _safe_rows(rejected_reports(db)) if user.role != "viewer" else []
         return result
     endpoint.__name__ = "get_"+name.replace("-", "_")
     return endpoint
@@ -190,7 +196,7 @@ def _card_endpoint(card):
             return {"range": result["range"], "kpis": value["kpis"], "stats": value["stats"]}
         if card == "giving-by-month":
             return {"range": result["range"], "giving_by_month": {
-                k: value[k] for k in ("monthly_giving", "top_two_month_share")}}
+                k: value[k] for k in ("monthly_giving", "top_two_month_share", "top_two_months")}}
         if card == "campaigns":
             return {"top_campaigns": {k: value[k] for k in ("campaigns", "campaigns_href")}}
         return {"partner_status": value["partner_status"]}
@@ -250,6 +256,9 @@ def download_chart_csv(dashboard: str, chart: str,
         raise HTTPException(404, detail="Dashboard chart not found")
     payload = _dashboard(dashboard, from_date, to_date, db)
     rows = payload["charts"][chart]
+    if dashboard == "data-health" and chart == "rejected_rows_by_import":
+        from app.dashboards.health import rejected_reports
+        rows = _safe_rows(rejected_reports(db))
     output = io.StringIO(newline="")
     if rows:
         writer = csv.DictWriter(output, fieldnames=list(rows[0]), extrasaction="ignore")

@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 TTL_SECONDS = 60
 DEADLINE_SECONDS = 15
 MIN_STATEMENT_BUDGET_MS = 100
+CACHE_CONTRACT_VERSION = "dashboard-v2-trailing-retention-current-traits"
 _deadline = ContextVar("dashboard_deadline", default=None)
 # The executor holds work, not data. Payloads and coordination live in PostgreSQL.
 _executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="dashboard-refresh")
@@ -121,7 +122,7 @@ def _refresh(key, logical_key, version, engine):
 
 def cached(db, key, build):
     version = generation(db)
-    digest = hashlib.sha256(json.dumps(key, default=str).encode()).hexdigest()
+    digest = cache_digest(key)
     row = db.execute(text("""
       SELECT payload,generation,computed_at>now()-interval '60 seconds' AS fresh
       FROM dashboard_cache WHERE key=:key
@@ -141,3 +142,8 @@ def cached(db, key, build):
         _publish(writer, digest, result, version)
         writer.commit()
     return result
+
+
+def cache_digest(key):
+    """A deploy must not serve an older payload with obsolete arithmetic/shape."""
+    return hashlib.sha256(json.dumps([CACHE_CONTRACT_VERSION, key], default=str).encode()).hexdigest()

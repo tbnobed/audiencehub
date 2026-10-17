@@ -10,13 +10,14 @@ const root = path.resolve(__dirname, '..');
 
 function load(file, mocks = {}, globals = {}) {
   const source = fs.readFileSync(path.join(root, file), 'utf8');
-  const code = ts.transpileModule(source, {
+  // Vite-only syntax: the vm runs CommonJS, so expose import.meta.env as an injectable global.
+  const code = ts.transpileModule(source.replaceAll('import.meta.env', '__importMetaEnv'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022 },
   }).outputText;
   const exports = {};
   vm.runInNewContext(code, {
     exports, require: id => id in mocks ? mocks[id] : require(id),
-    AbortController, DOMException, Headers, setTimeout, clearTimeout, URLSearchParams, ...globals,
+    AbortController, DOMException, Headers, setTimeout, clearTimeout, URLSearchParams, __importMetaEnv: { BASE_URL: '/' }, ...globals,
   });
   return exports;
 }
@@ -79,6 +80,14 @@ test('admin default range form loads persisted dates, validates changes, and sen
     '@/lib/date-range': dateRange,
     '@/components/ui/button': { Button: props => React.createElement('button', props) },
     'lucide-react': { RefreshCw: () => null, Settings2: () => null },
+    '@/components/ui/tabs': {
+      Tabs: ({ children }) => React.createElement('div', null, children),
+      TabsList: ({ children }) => React.createElement('div', null, children),
+      TabsTrigger: ({ children, value }) => React.createElement('button', { type: 'button', 'data-tab': value }, children),
+      TabsContent: ({ children }) => React.createElement('div', null, children),
+    },
+    '@/components/privacy/suppressions-panel': { SuppressionsPanel: () => null },
+    '@/components/privacy/deletion-panel': { DeletionPanel: () => null },
   }).default;
   try {
     const view = render(React.createElement(Admin));
@@ -174,4 +183,78 @@ test('built CSS contains only emitted local WOFF2 font files', () => {
     assert.ok(fs.existsSync(path.join(root, 'dist/public', url)), `missing font ${url}`);
   }
   assert.doesNotMatch(css, /fonts\.googleapis|fonts\.gstatic|data:[^)]*(?:woff|font)/);
+});
+function loadOverview(results) {
+  return load('src/components/dashboard/overview.tsx', {
+    '@/hooks/use-dashboards': { useOverviewCard: card => ({ ...(results[card] || {}), isError: false, refetch() {}, isFetching: false }) },
+    '@/components/ui/skeleton': { Skeleton: props => React.createElement('div', props) },
+    '@/lib/utils': { cn: (...parts) => parts.filter(Boolean).join(' ') },
+    '@/lib/date-range': { millionsTick: () => String },
+  });
+}
+const mrow = (month, amount) => ({ month, from: month, to: month, prior_from: month, prior_to: month, amount, prior_amount: 0, gifts: 1 });
+
+test('multi-year takeaway folds repeated Novembers into distinct calendar months (hand-computed)', () => {
+  // 2023-01..2024-12 = 24 rows. Nov: 300+500=800, Dec: 200+400=600, every other month 50 each (20 rows => 1000).
+  const rows = [];
+  for (const y of [2023, 2024]) for (let m = 1; m <= 12; m++) {
+    const mm = String(m).padStart(2, '0');
+    rows.push(mrow(`${y}-${mm}-01`, m === 11 ? (y === 2023 ? 300 : 500) : m === 12 ? (y === 2023 ? 200 : 400) : 50));
+  }
+  const c = loadOverview({});
+  const months = c.chartMonths(rows);
+  assert.equal(months.length, 12);
+  assert.equal(months.find(m => m.key === '11').amount, 800);
+  // total 2400; (800+600)/2400 = 58.333 -> 58.3
+  assert.equal(c.givingTakeaway(months), 'November and December brought in 58.3% of giving, summed across all years in this range.');
+  const html = renderToStaticMarkup(React.createElement(c.OverviewView, { from: '2023-01-01', to: '2024-12-31', canImport: false, onWiden() {}, periodNoun: 'year',
+  }));
+  assert.ok(html); // render path does not throw with pending cards
+  assert.doesNotMatch(c.givingTakeaway(months), /Nov and Nov/);
+});
+
+test('single-year takeaway keeps month-year labels from chart totals', () => {
+  const c = loadOverview({});
+  const rows = [mrow('2024-10-01', 100), mrow('2024-11-01', 300), mrow('2024-12-01', 600)];
+  assert.equal(c.givingTakeaway(c.chartMonths(rows)), 'Nov 2024 and Dec 2024 brought in 90.0% of giving in this period.');
+});
+
+test('retention tooltip is anchored to period end; status cards say as of today for historical ranges', () => {
+  const c = loadOverview({ 'partner-status': { data: { partner_status: { givers: 5, statuses: [], prospects: 2 } } } });
+  assert.deepEqual({ ...c.retentionWindows('2024-12-31') }, { from: '2024-01-01', to: '2024-12-31', prior_from: '2023-01-01', prior_to: '2023-12-31' });
+  assert.equal(c.retentionDefinition('2024-12-31'), "Of partners who gave Jan 1, 2023 – Dec 31, 2023 (the 12 months before the period's last 12), the share who gave again Jan 1, 2024 – Dec 31, 2024.");
+  assert.equal(c.isHistorical('2024-12-31', '2026-03-01'), true);
+  assert.equal(c.isHistorical('2026-03-01', '2026-03-01'), false);
+  const html = renderToStaticMarkup(React.createElement(c.OverviewView, { from: '2020-01-01', to: '2024-12-31', canImport: false, onWiden() {}, periodNoun: 'year' }));
+  assert.match(html, />As of today</);
+});
+
+test('retention fallback mirrors backend clamped month_shift across leap years', () => {
+  const c = loadOverview({});
+  const w = to => ({ ...c.retentionWindows(to) });
+  // boundary = month_shift(end,-12); from = boundary+1; prior_from = month_shift(end,-24)+1; prior_to = boundary
+  assert.deepEqual(w('2024-02-29'), { from: '2023-03-01', to: '2024-02-29', prior_from: '2022-03-01', prior_to: '2023-02-28' });
+  assert.deepEqual(w('2024-02-28'), { from: '2023-03-01', to: '2024-02-28', prior_from: '2022-03-01', prior_to: '2023-02-28' });
+  assert.deepEqual(w('2025-02-28'), { from: '2024-02-29', to: '2025-02-28', prior_from: '2023-03-01', prior_to: '2024-02-28' });
+  assert.deepEqual(w('2026-02-28'), { from: '2025-03-01', to: '2026-02-28', prior_from: '2024-02-29', prior_to: '2025-02-28' });
+  assert.deepEqual(w('2025-03-15'), { from: '2024-03-16', to: '2025-03-15', prior_from: '2023-03-16', prior_to: '2024-03-15' });
+  assert.deepEqual(w('2024-12-31'), { from: '2024-01-01', to: '2024-12-31', prior_from: '2023-01-01', prior_to: '2023-12-31' });
+});
+
+test('retention tooltip renders the explicit server window, not the client fallback', () => {
+  const spark = [];
+  const metric = { value: 0, prior: 0, change: 0, change_pct: null, delta_label: null, sparkline: spark };
+  const server = { from: '2024-02-29', to: '2025-02-28', prior_from: '2023-03-01', prior_to: '2024-02-28' };
+  const c = loadOverview({ kpis: { data: {
+    kpis: { giving: metric, active_partners: metric, average_gift: metric,
+      retention_yoy: { ...metric, value: 45.2, denominator: 1000, retained: 452, prior_denominator: 900, window: server, prior_window: server, definition: 'x' } },
+    stats: { profiles: { value: 1 }, recurring_partners: { value: 10, prior: null, change: null, change_pct: null }, email_opted_in: { value: 0, percentage: 0 }, lapsing: { value: 4, prior: null, change: null, change_pct: null } },
+  } } });
+  assert.equal(c.retentionDefinition('2025-02-28', server), "Of partners who gave Mar 1, 2023 – Feb 28, 2024 (the 12 months before the period's last 12), the share who gave again Feb 29, 2024 – Feb 28, 2025.");
+  // Deliberately mismatched range end: tooltip must still follow the server window.
+  const html = renderToStaticMarkup(React.createElement(c.OverviewView, { from: '2020-01-01', to: '2030-06-30', canImport: false, onWiden() {}, periodNoun: 'year' }));
+  assert.match(html, /Of partners who gave Mar 1, 2023 – Feb 28, 2024 \(the 12 months before the period&#x27;s last 12\), the share who gave again Feb 29, 2024 – Feb 28, 2025\./);
+  assert.match(html, /452 of 1,000 prior-12-month partners gave again/);
+  assert.match(html, /Current status · as of today/);
+  assert.doesNotMatch(html, /▼ 0 this month/);
 });

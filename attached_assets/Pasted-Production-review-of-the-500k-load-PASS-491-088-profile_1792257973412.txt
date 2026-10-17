@@ -1,0 +1,15 @@
+Production review of the 500k load (PASS, 491,088 profiles) found these issues. Fix them before M6; dashboards must be correct before any stakeholder demo.
+
+Dashboard correctness (add a test for each with a hand-computed fixture):
+1. Partner retention shows 100.0% ("317,989 of 317,989 last-year partners gave again") for Jan 1 2020 – Dec 31 2024. Define it as: of partners who gave in the 12 months before the period's last 12 months, the share who also gave in the last 12 months of the period. Show the definition in the tile tooltip.
+2. The giving takeaway says "Nov and Nov brought in 4.0%". For ranges over 12 months, aggregate by calendar month across years and name distinct months ("November and December brought in X% of giving"). Compute the share from the same totals the chart shows.
+3. Lapsing is 64,220 in Partner status but 124,097 in Needs attention. Use one definition (donor_status = 'lapsing' from profile_traits as of today) everywhere, and say "as of today" on status-based cards when a historical range is selected.
+4. Giving, Retention, Engagement and Sources tabs show "No records in this range" for 2020–2024 while the Overview shows $327M. Move every tab's endpoints to the precomputed rollup tables, verify each chart against a direct SQL total in a test, and confirm Profiles by source, Source overlap and Identifier coverage populate (they are not date-bound).
+5. Data Health "Rejected import rows" is empty while the Overview reports 5 rejected-row reports. Use the same source for both.
+6. Apply the redesigned card layout and copy to every tab (no "Unified audience signals" subtitle; compact empty states, no 300 px empty boxes).
+
+Seed realism (the data must look like a real ministry for demos):
+7. Campaigns: 10 to 15 campaigns with a skewed distribution (Year-End 30 to 35% of dollars, a monthly partner program about 20%, the rest tapering), distinct average gifts by campaign and channel (mail lower, online higher, major gifts rare but large).
+8. Gift amounts log-normal with a long tail: median about $50, 1 to 2% of gifts $1,000 or more, a few $10,000 or more.
+9. Seasonality: November and December about 30% of one-time dollars, with a spike in the last week of December; summer dip; recurring monthly gifts flat; gradual year-over-year growth of 3 to 6% with some partner churn.
+10. After the changes, report for the small seed: campaign share table, gift-size distribution, Nov–Dec share by year, and retention by year (should land roughly 40 to 50%).
