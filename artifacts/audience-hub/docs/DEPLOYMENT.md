@@ -367,7 +367,83 @@ Migrations must be backward compatible for one release (add columns nullable, ba
 
 Tag images per release (`audience-hub:2026.10.1`) as well as `latest`, and keep the last three.
 
+## Existing synthetic audit seed: opt-in repair (not reset/reseed)
+
+Run **only on your own server**, against the intended existing database. Retain
+a verified database backup/snapshot first; a journal is not a backup. Do not
+regenerate CSVs, reload imports, reset profiles, or rescale positive gifts. The
+reported production median of 49.77 is already in currency units and is not an
+error. Counts such as 52 unlinked refunds and 173,903 donation-source profiles
+without gifts are observations, not hard-coded repair targets.
+
+```bash
+# Default is PostgreSQL-enforced read-only, including connection startup.
+docker compose exec -T api python -m app.cli repair-seed
+# After reviewing counts/backup and letting pending work finish:
+# Stop API traffic and the worker; do not cancel or discard unfinished jobs.
+docker compose stop api worker
+docker compose run --rm --no-deps api python -m app.cli repair-seed --apply --yes
+# Restore service after success (or after a reported rollback):
+docker compose start api worker
+# Independent read-only reconciliation after the committed repair:
+docker compose exec -T api python -m app.cli verify-seed
+```
+
+Both write flags and `APP_ENV=production` are required; apply refuses a Replit
+environment. The command never contacts Replit or another
+server: it uses this server's configured `DATABASE_URL`. Schedule a maintenance
+window with no imports, ingestion or queued/running jobs. Apply refuses busy
+jobs/imports, pending resolution and conflicting table locks; it takes a
+transaction advisory lock plus write-excluding table locks to fence even
+non-cooperating writers. It does not cancel work or change worker configuration.
+Dry-run takes no write locks and makes no database/audit/temp-table writes; its
+snapshot is informational and all preconditions are repeated under apply locks.
+
+Scope requires deterministic seed IDs, original seeded-file/contact provenance,
+reserved-domain email (or hash-only contact evidence), same-person explicit
+identity references and JSON boolean `context.synthetic=true` on corresponding
+events. Mixed, ambiguous, incomplete, deleted/merged, or unproven data fails
+closed; this is intentionally not a general-purpose production-data repair.
+Destination namespace collisions abort the entire transaction. Existing
+nonfinancial events and their source records move from `donation_events` to
+`people_feed` without changing row IDs, profile IDs, messages or external IDs.
+Existing resolver identifiers, master IDs, canonical identity keys and consent
+are untouched; identity resolution is deliberately not rerun.
+
+Each deterministic `donation_return-i-recent-j` must have exactly one same-person,
+same-source original `gift:donation-i-recent-j` (or the corresponding explicit
+legacy ID), matching currency and non-reversed known chronology. Only that
+refund's amount is corrected to the exact negative original amount, once;
+duplicate/other returns against the original abort. Missing dates are allowed,
+not fabricated. Undated ledger entries count toward lifetime giving; future
+entries do not yet count. A future refund does not remove today's original
+from the unreturned-gift count. Latest donation uses the latest unreturned dated
+gift, with deterministic ID tie-breaking; an undated-only gift has a null date.
+Canonical lifetime amount is net ledger total; count, average and latest-gift
+fields reflect unreturned gifts. Positive original gift amounts never change.
+
+The existing traits pipeline refreshes the scoped synthetic profiles, source
+chips and shared dashboard rollups/cache **inside the repair transaction**.
+No queued work is needed. Its established trait count/average semantics remain
+unchanged (positive ledger gifts, including subsequently returned gifts);
+canonical contact count/average intentionally describe unreturned gifts.
+Historical monthly snapshots and materialized segment memberships are not
+rewritten. Use the normal segment refresh UI/job pipeline if needed afterwards.
+
+Every changed base row has a full `audit_log` before image under
+`action='seed.repair.before'`; `details.run_id` groups it with the
+`seed.repair.complete` summary. Event before images include their composite
+`id,occurred_at` key. Restrict access/retention as for other contact audit data.
+Recovery is a reviewed DBA operation from these before images or the retained
+backup, in another exclusive maintenance window; there is deliberately no blind
+undo command that could overwrite later legitimate changes. Any failure rolls
+back base changes, journal, traits and rollups together. A reconciled repeat
+invocation makes no further changes or journal entries.
+
 ## Restore
+
+The following is a separate disaster-recovery procedure, **not a seed repair
+step**. It replaces database contents with the retained backup.
 
 ```bash
 docker compose stop api worker

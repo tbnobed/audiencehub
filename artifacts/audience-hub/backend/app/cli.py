@@ -102,7 +102,33 @@ def main():
     verify = commands.add_parser("verify-seed", help="Read-only gift, refund and profile reconciliation.")
     verify.add_argument("--timeout-seconds", type=int, default=600,
                         help="Per-query timeout (default: 600 seconds). No data is changed.")
+    repair = commands.add_parser(
+        "repair-seed", help="Repair only the existing synthetic audit seed (default: read-only dry run).")
+    repair.add_argument("--apply", action="store_true", help="Apply atomically; also requires --yes.")
+    repair.add_argument("--yes", action="store_true", help="Explicit acknowledgement; also requires --apply.")
+    repair.add_argument("--timeout-seconds", type=int, default=7200,
+                        help="Per-query timeout, 1..14400 seconds (default: 7200).")
     args = parser.parse_args()
+    if args.command == "repair-seed":
+        from app.repair_seed import repair_seed
+        from sqlalchemy.exc import SQLAlchemyError
+        try:
+            raise SystemExit(repair_seed(
+                apply=args.apply, yes=args.yes, timeout_seconds=args.timeout_seconds))
+        except (ValueError, RuntimeError) as exc:
+            raise SystemExit(str(exc)) from None
+        except SQLAlchemyError as exc:
+            sqlstate = getattr(getattr(exc, "orig", None), "sqlstate", None)
+            reason = {
+                "55P03": "Maintenance lock unavailable: concurrent database work is active.",
+                "57014": "Database query timeout/cancellation.",
+                "42501": "Database role lacks required permissions.",
+                "25006": "Database/role is read-only.",
+            }.get(sqlstate, "Database request failed.")
+            raise SystemExit(
+                f"{reason} Repair failed; transaction rolled back. "
+                f"SQLSTATE={sqlstate or 'unavailable'}. Check database availability, permissions, "
+                "maintenance-window locks and query timeout. No partial repair was committed.") from None
     if args.command == "verify-seed":
         from app.verify_seed import verify_seed
         raise SystemExit(verify_seed(args.timeout_seconds))
