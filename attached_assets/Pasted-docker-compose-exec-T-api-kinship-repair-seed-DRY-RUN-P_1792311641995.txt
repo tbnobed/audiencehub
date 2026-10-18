@@ -1,0 +1,50 @@
+docker compose exec -T api kinship repair-seed
+DRY RUN: PostgreSQL-enforced read-only repeatable-read snapshot; no writes.
+Database request failed. Repair failed; transaction rolled back. SQLSTATE=unavailable. Check database availability, permissions, maintenance-window locks and query timeout. No partial repair was committed.
+obtv-admin@audiencehub:~/audiencehub/artifacts/audience-hub$ docker compose stop api worker
+docker compose run --rm --no-deps api kinship repair-seed --apply --yes
+docker compose start api worker
+docker compose exec -T api kinship verify-seed
+[+] stop 2/2
+ ✔ Container audience-hub-worker-1 Stopped                                                                                                                                  0.4s
+ ✔ Container audience-hub-api-1    Stopped                                                                                                                                  0.7s
+Container audience-hub-api-run-c7ecdf0e7691 Creating
+Container audience-hub-api-run-c7ecdf0e7691 Created
+Apply is permitted only on your production server (APP_ENV=production), not Replit.
+
+[+] start 3/3
+ ✔ Container audience-hub-db-1     Healthy                                                                                                                                  1.3s
+ ✔ Container audience-hub-api-1    Healthy                                                                                                                                 15.8s
+ ✔ Container audience-hub-worker-1 Started                                                                                                                                  0.3s
+Read-only repeatable-read snapshot; amounts are currency units, not cents.
+Lifetime reconciliation includes undated gifts and gifts through today UTC.
+Gift count: 118,474; ledger rows (including returns): 118,526
+Gift amount min/median/max (excluding return rows): 1.00 / 49.77 / 21862.80
+Negative amounts: 52; without refund evidence: 0
+Invalid/unlinked/over-refunded original gifts: 52
+Profiles with lifetime giving mismatch or missing traits: 0
+Profiles with donation_events source but zero gifts: 173,903
+Unattached gift/return rows: 0
+Donation-source profiles without gifts (first 20):
+  kin_01M56WKEXPEJBXXQTFGGKJMB8W profile=1
+  kin_01M56WKEXPCYB3Z2FFSQMD6BAT profile=7
+  kin_01M56WKEXPDFPPTMB6TS7G4NE7 profile=9
+  kin_01M56WKEXPWKMYAN13GBNE353Z profile=12
+  kin_01M56WKEXP1PTHWWW86SBAS9AB profile=18
+  kin_01M56WKEXPA07NW9VV528HKJVQ profile=20
+  kin_01M56WKEXPC3DAMP4J7Y2AEYD8 profile=30
+  kin_01M56WKEXP1V95CV0S05Y6RJDJ profile=32
+  kin_01M56WKEXP9XTXYJ1B7AJ1P7KT profile=34
+  kin_01M56WKEXP53KC4ZAQ70VNFZ2R profile=45
+  kin_01M56WKEXPC7EQCW2G3N15W74E profile=50
+  kin_01M56WKEXPQHTSJKNPVD02WXAX profile=52
+  kin_01M56WKEXPEWQDB5GETBR38S8M profile=54
+  kin_01M56WKEXP064F4726C2SS42FC profile=58
+  kin_01M56WKEXPC6R9DVT9YJHZMPMG profile=59
+  kin_01M56WKEXPJZC7AA3YVME20R40 profile=60
+  kin_01M56WKEXP1V42TNTFTR1KA3PG profile=64
+  kin_01M56WKEXPC3RA78YGSRTMM3QF profile=66
+  kin_01M56WKEXPKCQPHJ8ZAKF7BMGC profile=67
+  kin_01M56WKEXPSCWX2VC25ZTY44Q6 profile=68
+FAIL: discrepancies found; no changes made.
+obtv-admin@audiencehub:~/audiencehub/artifacts/audience-hub$
