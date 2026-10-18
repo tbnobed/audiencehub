@@ -1,0 +1,14 @@
+Production 500k segment benchmark: all 23 audience counts are correct. Performance is not. Code changes only: commit and push. Do not run tests, seeds, imports or benchmarks in Replit; verification runs on the production server.
+
+Measured on production (warm medians):
+- Event-based audiences (donors past 30 days, Giving Tuesday, VOD viewed, app donors): 60–180 ms count.
+- Property-based audiences (tbn_plus_subscription, rfm_*, has_active_email, opt-out fields, VOD opt status): 3–4.5 s count, 6–9 s sample. TBN Plus Premium (2,326 members) takes 3.2 s, so every property query scans all profiles.
+- Active (120 days): 7.5 s count, 16 s sample.
+- Sample is consistently about 2x count, so the sample re-runs the full query.
+Targets at 8M profiles: count under 2 s, sample under 1 s.
+
+1. Make canonical profile properties used in segments fast to filter: either typed columns (or a wide profile_attributes table keyed by profile id) for the canonical fields in the catalog, with btree indexes on the ones segments filter on (tbn_plus_subscription, tbn_plus_subscription_update, donor_account_status, rfm_date, rfm_recency_score, rfm_raw_frequency, has_recurring_donation, has_active_email, mobile_mktg_optin_tbn, tbn_call_center_sms_optin, mobile_mktg_optout_date_tbn, tbn_video_on_demand_updates_opt_status, donation_likelihood_prob, wealth_score, amt_suggested), or expression/partial indexes if they stay in JSONB. Choose based on the current storage and explain the choice.
+2. Store last_activity_at (greatest of last_seen and last_contact) as an indexed column maintained by the trait pipeline, and compile "Active (120 days)" to a range check on it.
+3. Sample must not recompute the full membership: run the compiled query with LIMIT and the sort on an indexed key, and reuse the count when it was just computed.
+4. Add the migration with CREATE INDEX CONCURRENTLY where possible, and backfill the new columns in batches so existing production data is not rewritten in one transaction.
+5. Include EXPLAIN (ANALYZE, BUFFERS) for each of the 23 audiences in the benchmark evidence directory so the server run shows the plans.
