@@ -20,7 +20,21 @@ export type FeedMapping = {
   query?: string;
   cursor_column?: string;
   resource_type?: string;
+  target_type?: TargetType;
+  columns?: Record<string, string>;
+  schedule?: MappingSchedule;
 };
+
+export const TARGET_TYPES = ['people', 'donation', 'donation_return', 'order_shipped', 'vod_viewed', 'source_codes', 'products', 'vod_titles', 'model_scores'] as const;
+export type TargetType = (typeof TARGET_TYPES)[number];
+export type MappingSchedule = { frequency: 'manual' | 'hourly' | 'daily' | 'monthly'; hour?: number; minute?: number; day?: number; timezone: 'America/New_York' };
+/** Derive feed (and resource_type) from a target type. */
+export function deriveFeed(t: TargetType): { feed: Feed; resource_type?: string } {
+  if (t === 'people') return { feed: 'people' };
+  if (t === 'model_scores') return { feed: 'models' };
+  if (t === 'source_codes' || t === 'products' || t === 'vod_titles') return { feed: 'resources', resource_type: t };
+  return { feed: 'events' };
+}
 
 export type FeedSchedule = {
   frequency: 'hourly' | 'daily' | 'monthly' | 'manual';
@@ -41,9 +55,10 @@ export type SourceConnection = {
   config: ConnectionConfig;
   default_schedules: Partial<Record<Feed, FeedSchedule>>;
   recovery_pending: boolean;
+  connection_fields?: Record<string, string>;
 };
 
-export type DryRunPreview = { mapping_id: string; rows_checked: number; fields: string[]; rows_rejected: number };
+export type DryRunPreview = { mapping_id: string; rows_checked: number; fields: string[]; rows_rejected: number; rows?: Record<string, unknown>[]; identity_keys?: string[]; suggested_columns?: Record<string, string> };
 export type DryRunResult = { limit_per_mapping: number; items: DryRunPreview[] };
 export type PullResult = { job_id: number | string; status: string };
 export type PullCounts = { imports_total: number; imports_completed: number; rows_total: number; rows_ok: number; rows_rejected: number };
@@ -83,36 +98,54 @@ export function useSaveSourceConnection(id: number) {
   const client = useQueryClient();
   return useMutation<SourceConnection, Error, { config: ConnectionConfig; credentials?: Record<string, unknown> }>({
     // Credentials omitted entirely when unchanged so the server keeps the encrypted blob.
-    mutationFn: ({ config, credentials }) =>
-      fetchApi(`/api/sources/${id}/connection`, {
+    mutationFn: variables => {
+      const body = JSON.stringify(variables);
+      // React Query retains mutation variables. Remove write-only credentials
+      // before the first await; only the in-flight request owns the serialized body.
+      delete variables.credentials;
+      return fetchApi(`/api/sources/${id}/connection`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(credentials ? { config, credentials } : { config }),
-      }),
+        body,
+      });
+    },
     onSuccess: data => client.setQueryData(key(id), data),
   });
 }
 
+const jsonPost = (url: string, body: unknown) =>
+  fetchApi(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+
 export function useSourceDryRun(id: number) {
-  return useMutation<DryRunResult, Error, { feed?: Feed | null }>({
-    mutationFn: ({ feed }) =>
-      fetchApi(`/api/sources/${id}/dry-run`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ feed: feed ?? null }),
-      }),
+  return useMutation<DryRunResult, Error, { mapping_id?: string | null }>({
+    mutationFn: ({ mapping_id }) => jsonPost(`/api/sources/${id}/dry-run`, mapping_id ? { mapping_id } : {}),
   });
 }
 
 export function useSourcePull(id: number) {
   const client = useQueryClient();
-  return useMutation<PullResult, Error, { feed?: Feed | null }>({
-    mutationFn: ({ feed }) =>
-      fetchApi(`/api/sources/${id}/pull`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ feed: feed ?? null }),
-      }),
-    onSettled: () => client.invalidateQueries({ queryKey: pullsKey(id) }),
+  return useMutation<PullResult, Error, { mapping_id?: string | null }>({
+    mutationFn: ({ mapping_id }) => jsonPost(`/api/sources/${id}/pull`, mapping_id ? { mapping_id } : {}),
+    onSettled: () => { client.invalidateQueries({ queryKey: pullsKey(id) }); client.invalidateQueries({ queryKey: ['imports'] }); },
+  });
+}
+
+/** Credentials are sent once and never cached; omit to test the saved source. */
+export function useSourceTest(id: number) {
+  return useMutation<{ version: string; tables: string[] }, Error, { credentials?: Record<string, unknown> }>({
+    mutationFn: variables => {
+      const body = JSON.stringify(variables);
+      delete variables.credentials;
+      return fetchApi(`/api/sources/${id}/test`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body, timeoutMs: 60000,
+      });
+    },
+  });
+}
+
+export type ColumnsResult = { columns: string[]; suggested_columns: Record<string, string> };
+export function useSourceColumns(id: number) {
+  return useMutation<ColumnsResult, Error, { table: string }>({
+    mutationFn: ({ table }) => fetchApi(`/api/sources/${id}/columns?table=${encodeURIComponent(table)}`, { timeoutMs: 60000 }),
   });
 }

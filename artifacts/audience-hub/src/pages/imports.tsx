@@ -15,6 +15,8 @@ import { toast } from '@/hooks/use-toast';
 import { format } from 'date-fns';
 import { useQueryClient } from '@tanstack/react-query';
 import { fetchApi } from '@/lib/api';
+import { SourceJobsPanel } from '@/components/source-jobs-panel';
+import { ZetaImportButton } from '@/components/zeta-import';
 
 export default function Imports() {
   const { data: importsData, isLoading: isLoadingImports } = useImports();
@@ -61,10 +63,15 @@ export default function Imports() {
             Manual and scheduled batch ingestion jobs.
           </p>
         </div>
-        <Button onClick={startNewImport}>
-          <FileUp className="mr-2 h-4 w-4" /> New Import
-        </Button>
+        <div className="flex items-center gap-2">
+          <ZetaImportButton />
+          <Button onClick={startNewImport}>
+            <FileUp className="mr-2 h-4 w-4" /> New Import
+          </Button>
+        </div>
       </div>
+
+      <SourceJobsPanel />
 
       <div className="border rounded-md bg-card">
         <Table>

@@ -17,7 +17,9 @@ from app.imports.validation import map_and_validate_row
 def test_jsonl_stream_bounds_and_shape(monkeypatch):
     monkeypatch.setattr(connectors, "MAX_LINES", 2)
     assert list(connectors.jsonl_rows(io.BytesIO(b'{"id":1}\n{"id":2}\n'))) == [{"id": 1}, {"id": 2}]
-    for content in (b'{}\n{}\n{}\n', b'[]\n', b'\n', b'{"broken"\n'):
+    # File size is unbounded; the COPY spool, not the file parser, chunks rows.
+    assert len(list(connectors.jsonl_rows(io.BytesIO(b'{}\n{}\n{}\n')))) == 3
+    for content in (b'[]\n', b'\n', b'{"broken"\n'):
         with pytest.raises(connectors.SourceError):
             list(connectors.jsonl_rows(io.BytesIO(content)))
     monkeypatch.setattr(connectors, "MAX_LINE_BYTES", 4)
@@ -40,6 +42,7 @@ def test_strict_readonly(query):
 
 def test_bound_identifiers_cursor_inclusive_and_all_ties():
     result = MagicMock()
+    result.get_result_batches = None  # DB-API/fetchmany adapter, not Arrow batches.
     result.__enter__.return_value = result
     result.description = [("ID",), ("UPDATED_AT",)]
     result.fetchmany.side_effect = [[("a", 12), ("b", 12)], [("c", 12)], []]

@@ -100,6 +100,17 @@ def main():
         help="After writing files, call app.importer.import_seed_files(files) if available.",
     )
     verify = commands.add_parser("verify-seed", help="Read-only gift, refund and profile reconciliation.")
+    source_commands = commands.add_parser("sources", help="Admin source connection, preview and queued run.").add_subparsers(
+        dest="source_command", required=True)
+    for operation in ("test", "preview", "run"):
+        command = source_commands.add_parser(operation)
+        command.add_argument("source_id", type=int)
+        if operation != "test":
+            command.add_argument("mapping")
+    zeta = commands.add_parser("import-zeta", help="Snapshot a Zeta export folder and queue its resumable migration.")
+    zeta.add_argument("folder")
+    zeta.add_argument("--source-id", type=int)
+    zeta.add_argument("--counts", help="JSON file containing the 23 real Zeta audience counts.")
     verify.add_argument("--timeout-seconds", type=int, default=600,
                         help="Per-query timeout (default: 600 seconds). No data is changed.")
     verify.add_argument("--as-of", type=date.fromisoformat,
@@ -143,6 +154,16 @@ def main():
     if args.command == "verify-seed":
         from app.verify_seed import verify_seed
         raise SystemExit(verify_seed(args.timeout_seconds, as_of=args.as_of))
+    if args.command in {"sources", "import-zeta"}:
+        import json
+        from pathlib import Path
+        from app.zeta_cli import sources_command, import_folder, print_result
+        if args.command == "sources":
+            print_result(sources_command(args.source_command, args.source_id, getattr(args, "mapping", None)))
+        else:
+            counts = json.loads(Path(args.counts).read_text()) if args.counts else None
+            print_result(import_folder(args.folder, args.source_id, counts))
+        return
     if args.command == "source-pull":
         from app.source_pulls import run_source, collect, connection_row
         from app.db import engine

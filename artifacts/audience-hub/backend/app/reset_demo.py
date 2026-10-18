@@ -11,6 +11,7 @@ from sqlalchemy.exc import OperationalError
 # retained table must make the operation fail, not quietly destroy configuration.
 DATA_TABLES = (
     "audit_log", "client_errors", "scheduled_runs", "jobs", "source_import_receipts",
+    "zeta_migrations", "zeta_migration_files",
     "imports", "import_batch_diagnostics", "identity_batches",
     "profiles", "source_records", "ingestion_receipts",
     "identifiers", "identifier_blocklist", "profile_merges", "gifts", "events",

@@ -359,6 +359,50 @@ def revoke_import_history(db, ids, identities):
             remove_owned_file(path, get_settings().upload_dir)
         db.execute(text("UPDATE imports SET file_path='',error_file_path=NULL WHERE id=:id"),
                    {"id": import_id})
+    # Raw browser/SFTP exit files precede their COPY manifests. They are also
+    # uploads, not a second ungoverned archive of deleted identities.
+    from app.zeta_files import records
+    from app.source_rows import ZETA_ALIASES
+    from app.source_connectors import SourceError
+    real_keys = {(row[0], row[1]) for row in db.execute(text("""
+        SELECT key_type,key_value FROM identity_xref WHERE master_id IN
+          (SELECT master_id FROM profiles WHERE id=ANY(:ids))"""), {"ids": ids})}
+    def raw_matches(value, key=""):
+        if isinstance(value, dict):
+            return any(raw_matches(v, k.lower().lstrip("$").split(".")[-1]) for k, v in value.items())
+        if isinstance(value, list):
+            return any(raw_matches(v, key) for v in value)
+        if value is None:
+            return False
+        value = str(value)
+        if value.startswith(("{", "[")):
+            try:
+                return raw_matches(json.loads(value))
+            except ValueError:
+                pass
+        canonical = ZETA_ALIASES.get(key, key)
+        normalized = value.lower() if canonical == "zeta_uid" else value.strip()
+        return ((canonical, normalized) in real_keys
+                or (key in {"email", "email_address"} and normalize_email(value) in emails)
+                or (key in {"phone", "mobile_phone", "phone_number"} and normalize_phone(value) in phones)
+                or (key in {"id", "external_id", "contact_external_id", "user_id"}
+                    and any(value == ext.split(":", 1)[-1] for ext in external)))
+    for upload in db.execute(text("""SELECT f.id,f.file_path,f.status,m.source_id FROM zeta_migration_files f
+        JOIN zeta_migrations m ON m.id=f.migration_id WHERE NULLIF(f.file_path,'') IS NOT NULL
+        ORDER BY f.id FOR UPDATE OF f""")).mappings():
+        path = owned_file(upload["file_path"], get_settings().upload_dir)
+        contains = upload["source_id"] in affected
+        if not contains and path and path.exists():
+            try:
+                contains = any(has_reference(row, ids) or raw_matches(row) for row in records(path))
+            except SourceError:
+                # An incomplete upload cannot establish absence. Its original
+                # remains with the uploader, but the server copy is revoked.
+                contains = True
+        if contains:
+            remove_owned_file(path, get_settings().upload_dir)
+            db.execute(text("""UPDATE zeta_migration_files SET file_path='',manifests='[]'::jsonb,
+                status='revoked' WHERE id=:id"""), {"id": upload["id"]})
 
 
 def expire_import_uploads(db):
@@ -378,6 +422,13 @@ def expire_import_uploads(db):
         for file in files:
             remove_owned_file(file, get_settings().upload_dir)
         db.execute(text("UPDATE imports SET file_path='',error_file_path=NULL WHERE id=:id"), {"id": import_id})
+    for upload in db.execute(text("""SELECT f.id,f.file_path FROM zeta_migration_files f
+        JOIN zeta_migrations m ON m.id=f.migration_id
+        WHERE m.status='completed' AND m.updated_at < now()-(:days * interval '1 day')
+          AND NULLIF(f.file_path,'') IS NOT NULL FOR UPDATE OF f"""), {"days": days}).mappings():
+        remove_owned_file(upload["file_path"], get_settings().upload_dir)
+        db.execute(text("""UPDATE zeta_migration_files SET file_path='',manifests='[]'::jsonb,
+            status='expired' WHERE id=:id"""), {"id": upload["id"]})
     if paths:
         audit(db, None, "imports.retention", "imports", None, {"imports_revoked": len(paths)})
     return {"imports_revoked": len(paths)}
@@ -387,7 +438,9 @@ def execute_deletion(db, request_id):
     """Caller commits; failure rolls back all relational erasure, never its audit."""
     from app.identity.locking import acquire_resolver_lock, IdentityResolutionDeferred
     privacy_exclusive(db)
-    if db.scalar(text("SELECT EXISTS(SELECT 1 FROM imports WHERE status='running')")):
+    if db.scalar(text("""SELECT EXISTS(SELECT 1 FROM imports WHERE status='running')
+        OR EXISTS(SELECT 1 FROM zeta_migrations m JOIN jobs j ON j.id=m.job_id
+            WHERE j.type='zeta.import' AND j.status IN ('queued','running'))""")):
         raise IdentityResolutionDeferred("Privacy execution waits for active imports to finish.")
     acquire_resolver_lock(db)
     db.execute(text("SELECT pg_advisory_xact_lock(hashtext('audience-hub:trait-recompute'))"))

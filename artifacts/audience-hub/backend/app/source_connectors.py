@@ -21,6 +21,9 @@ DEFAULT_SCHEDULES = {
     "lookups": {"frequency": "hourly", "timezone": "America/New_York"},
 }
 RESOURCES = {"source_codes", "products", "vod_titles"}
+TARGET_FEEDS = {"people": "people", "model_scores": "models", "lookups": "lookups",
+                **{name: "events" for name in ("donation", "donation_return", "order_shipped", "vod_viewed")},
+                **{name: "resources" for name in RESOURCES}}
 
 
 class SourceError(ValueError):
@@ -28,12 +31,10 @@ class SourceError(ValueError):
 
 
 def jsonl_rows(stream):
-    for number in range(MAX_LINES + 1):
+    while True:
         line = stream.readline(MAX_LINE_BYTES + 1)
         if not line:
             return
-        if number == MAX_LINES:
-            raise SourceError("JSONL files must not exceed 500,000 lines.")
         if len(line) > MAX_LINE_BYTES:
             raise SourceError("JSONL row exceeds the 1 MiB limit.")
         try:
@@ -77,11 +78,11 @@ def validate_config(kind, config):
     if not isinstance(config, dict) or set(config) - {"mappings", "schedules"}:
         raise SourceError("Unknown source configuration field.")
     mappings = config.get("mappings", [])
-    if not isinstance(mappings, list) or not 1 <= len(mappings) <= 50:
-        raise SourceError("Configure between 1 and 50 feed mappings.")
+    if not isinstance(mappings, list) or len(mappings) > 50:
+        raise SourceError("Configure at most 50 feed mappings.")
     seen = set()
     for mapping in mappings:
-        if not isinstance(mapping, dict) or set(mapping) - {"id", "feed", "folder", "pattern", "table", "query", "cursor_column", "resource_type"}:
+        if not isinstance(mapping, dict) or set(mapping) - {"id", "feed", "folder", "pattern", "table", "query", "cursor_column", "resource_type", "target_type", "columns", "schedule"}:
             raise SourceError("Invalid feed mapping.")
         key = mapping.get("id")
         if not isinstance(key, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", key) or key in seen:
@@ -89,6 +90,14 @@ def validate_config(kind, config):
         seen.add(key)
         if mapping.get("feed") not in FEEDS:
             raise SourceError("Unsupported feed.")
+        if mapping.get("target_type") and TARGET_FEEDS.get(mapping["target_type"]) != mapping["feed"]:
+            raise SourceError("Target type does not match the mapping feed.")
+        if not isinstance(mapping.get("columns", {}), dict) or any(
+                not isinstance(k, str) or not isinstance(v, str) or len(k) > 256 or len(v) > 256
+                for k, v in mapping.get("columns", {}).items()):
+            raise SourceError("Column mapping must contain field-name pairs.")
+        if mapping.get("schedule"):
+            validate_schedule(mapping["schedule"])
         if mapping.get("feed") == "resources" and mapping.get("resource_type") not in RESOURCES:
             raise SourceError("Resource mappings require a supported resource_type.")
         if kind == "snowflake":
@@ -112,17 +121,20 @@ def validate_config(kind, config):
     if not isinstance(schedules, dict) or set(schedules) - FEEDS:
         raise SourceError("Invalid feed schedules.")
     for feed, schedule in schedules.items():
-        if not isinstance(schedule, dict) or set(schedule) - {"frequency", "hour", "day", "timezone"}:
-            raise SourceError("Invalid schedule fields.")
-        if schedule.get("frequency") not in {"hourly", "daily", "monthly", "manual"}:
-            raise SourceError("Unsupported schedule frequency.")
-        if schedule.get("timezone", "America/New_York") != "America/New_York":
-            raise SourceError("Schedules use America/New_York.")
-        if type(schedule.get("hour", 0)) is not int or not 0 <= schedule.get("hour", 0) <= 23:
-            raise SourceError("Invalid schedule hour.")
-        if type(schedule.get("day", 1)) is not int or not 1 <= schedule.get("day", 1) <= 28:
-            raise SourceError("Monthly schedule day must be between 1 and 28.")
+        validate_schedule(schedule)
     return config
+
+
+def validate_schedule(schedule):
+    if not isinstance(schedule, dict) or set(schedule) - {"frequency", "hour", "minute", "day", "timezone"}:
+        raise SourceError("Invalid schedule fields.")
+    if schedule.get("frequency") not in {"hourly", "daily", "monthly", "manual"}:
+        raise SourceError("Unsupported schedule frequency.")
+    if schedule.get("timezone", "America/New_York") != "America/New_York":
+        raise SourceError("Schedules use America/New_York.")
+    for field, default, low, high in (("hour", 0, 0, 23), ("minute", 0, 0, 59), ("day", 1, 1, 28)):
+        if type(schedule.get(field, default)) is not int or not low <= schedule.get(field, default) <= high:
+            raise SourceError("Invalid schedule time or monthly day.")
 
 
 def window(schedule, now: datetime):
@@ -132,7 +144,7 @@ def window(schedule, now: datetime):
         return None
     if frequency == "hourly":
         return local.strftime("%Y-%m-%dT%H%z")
-    if local.hour < schedule.get("hour", 0):
+    if (local.hour, local.minute) < (schedule.get("hour", 0), schedule.get("minute", 0)):
         return None
     if frequency == "monthly":
         return local.strftime("%Y-%m") if local.day >= schedule.get("day", 1) else None
@@ -150,8 +162,8 @@ def validate_credentials(kind, credentials):
     else:
         if set(credentials) - {"account", "user", "private_key", "private_key_passphrase", "warehouse", "database", "schema", "role"}:
             raise SourceError("Unsupported Snowflake credentials field.")
-        if not all(isinstance(credentials.get(k), str) and credentials[k] for k in ("account", "user", "private_key", "role")):
-            raise SourceError("Snowflake account, user, private key and read-only role are required.")
+        if not all(isinstance(credentials.get(k), str) and credentials[k] for k in ("account", "user", "private_key", "role", "warehouse", "database", "schema")):
+            raise SourceError("Snowflake account, user, role, warehouse, database, schema and private key are required.")
         if not re.fullmatch(r"[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+){0,3}", credentials["account"]):
             raise SourceError("Invalid Snowflake account.")
         for key in ("role", "warehouse", "database", "schema"):
@@ -176,15 +188,34 @@ def snowflake_connection(credentials, factory=None):
         options = {k: v for k, v in credentials.items() if k not in {"private_key", "private_key_passphrase"}}
         connection = factory(**options, private_key=key.private_bytes(Encoding.DER, PrivateFormat.PKCS8, NoEncryption()),
                              login_timeout=15, network_timeout=30,
+                             client_prefetch_threads=1,
                              session_parameters={"QUERY_TAG": "kinship_readonly_source", "STATEMENT_TIMEOUT_IN_SECONDS": 600})
         yield connection
     except SourceError:
         raise
-    except Exception:
-        raise SourceError("Snowflake read failed; verify the key-pair credentials and SELECT-only role.") from None
+    except Exception as error:
+        from app.jobs.lifecycle import OwnershipLost
+        from app.identity.locking import IdentityResolutionDeferred
+        if isinstance(error, (OwnershipLost, IdentityResolutionDeferred)):
+            raise
+        raise SourceError(snowflake_error(error)) from None
     finally:
         if connection is not None:
             connection.close()
+
+
+def snowflake_error(error):
+    # Inspect only to classify; never echo the exception, SQL, host or secrets.
+    message = str(error).lower()
+    if any(word in message for word in ("network policy", "ip address", "timeout", "connection refused", "name resolution")):
+        return "Snowflake network connection denied or timed out. Check network policy and outbound access."
+    if "warehouse" in message:
+        return "Snowflake warehouse unavailable. Check warehouse name, USAGE grant and suspension policy."
+    if any(word in message for word in ("privilege", "authorized", "role", "permission")):
+        return "Snowflake role cannot read this database/schema. Check USAGE and SELECT grants."
+    if any(word in message for word in ("compilation", "syntax", "invalid identifier", "does not exist")):
+        return "Snowflake query or mapping could not be compiled. Check table, schema and column names."
+    return "Snowflake key-pair authentication or read failed. Check account, user, PEM, passphrase and read-only role."
 
 
 def snowflake_rows(connection, mapping, cursor_value=None, limit=None):
@@ -210,6 +241,11 @@ def snowflake_rows(connection, mapping, cursor_value=None, limit=None):
         result.execute(query, tuple(parameters))
         names = [col[0].lower() for col in result.description]
         emitted = 0
+        if limit is None and callable(getattr(result, "get_result_batches", None)):
+            for batch in result.get_result_batches() or ():
+                for row in batch.create_iter():
+                    yield dict(zip(names, row))
+            return
         while True:
             rows = result.fetchmany(1000 if limit is None else min(limit, 100))
             if not rows:

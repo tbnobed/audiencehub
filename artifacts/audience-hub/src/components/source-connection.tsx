@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, CheckCircle2, KeyRound, Play, Plus, RefreshCw, ScanSearch, Trash2 } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { AlertTriangle, CheckCircle2, KeyRound, Play, Plus, RefreshCw, ScanSearch, Trash2, Wand2, Plug } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import type { Source } from '@/hooks/use-sources';
 import {
-  FEEDS, RESOURCE_TYPES, SFTP_FOLDERS, type ConnectionConfig, type Feed, type FeedMapping, type FeedSchedule, type PullHistoryItem, ACTIVE_PULL_STATUSES,
-  useSaveSourceConnection, useSourceConnection, useSourceDryRun, useSourcePull, useSourcePulls,
+  FEEDS, RESOURCE_TYPES, TARGET_TYPES, deriveFeed, type MappingSchedule, type TargetType, SFTP_FOLDERS, type ConnectionConfig, type Feed, type FeedMapping, type FeedSchedule, type PullHistoryItem, ACTIVE_PULL_STATUSES,
+  useSaveSourceConnection, useSourceTest, useSourceColumns, useSourceConnection, useSourceDryRun, useSourcePull, useSourcePulls,
 } from '@/hooks/use-source-connection';
 
 type CredField = { key: string; label: string; secret?: boolean; multiline?: boolean; required?: boolean; numeric?: boolean };
@@ -23,9 +24,9 @@ const SNOWFLAKE_CREDS: CredField[] = [
   { key: 'account', label: 'Account', required: true },
   { key: 'user', label: 'User', required: true },
   { key: 'role', label: 'Read-only role', required: true },
-  { key: 'warehouse', label: 'Warehouse' },
-  { key: 'database', label: 'Database' },
-  { key: 'schema', label: 'Schema' },
+  { key: 'warehouse', label: 'Warehouse', required: true },
+  { key: 'database', label: 'Database', required: true },
+  { key: 'schema', label: 'Schema', required: true },
   { key: 'private_key', label: 'Private key (PEM)', secret: true, multiline: true, required: true },
   { key: 'private_key_passphrase', label: 'Key passphrase', secret: true },
 ];
@@ -36,18 +37,26 @@ const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*){0,2}$/;
 /** Client-side mirror of validate_config; the server remains authoritative. */
 export function validateConnection(kind: string, config: ConnectionConfig): string[] {
   const errors: string[] = [];
-  if (config.mappings.length < 1 || config.mappings.length > 50) errors.push('Configure between 1 and 50 feed mappings.');
+  if (config.mappings.length > 50) errors.push('Configure at most 50 feed mappings.');
   const seen = new Set<string>();
   config.mappings.forEach((m, i) => {
     const n = `Mapping ${i + 1}`;
     if (!ID_RE.test(m.id)) errors.push(`${n}: ID must be a lowercase identifier.`);
     else if (seen.has(m.id)) errors.push(`${n}: ID "${m.id}" is duplicated.`);
     seen.add(m.id);
-    if (m.feed === 'resources' && !RESOURCE_TYPES.includes(m.resource_type as never)) errors.push(`${n}: choose a resource type.`);
+    if (m.feed === 'resources' && !m.target_type && !RESOURCE_TYPES.includes(m.resource_type as never)) errors.push(`${n}: choose a resource type.`);
     if (kind === 'snowflake') {
       if (!!m.table === !!m.query) errors.push(`${n}: choose exactly one table or query.`);
       if (m.table && !IDENT_RE.test(m.table)) errors.push(`${n}: invalid table identifier.`);
       if (m.query && !/^\s*SELECT\s+/i.test(m.query)) errors.push(`${n}: query must be a restricted SELECT.`);
+      if (m.schedule) {
+        const sc = m.schedule;
+        if (sc.hour !== undefined && (sc.hour < 0 || sc.hour > 23)) errors.push(`${n}: schedule hour must be 0-23.`);
+        if (sc.minute !== undefined && (sc.minute < 0 || sc.minute > 59)) errors.push(`${n}: schedule minute must be 0-59.`);
+        if (sc.day !== undefined && (sc.day < 1 || sc.day > 28)) errors.push(`${n}: schedule day must be 1-28.`);
+      }
+      const canon = Object.values(m.columns ?? {}).filter(Boolean);
+      if (new Set(canon).size !== canon.length) errors.push(`${n}: two columns map to the same canonical field.`);
       if (m.cursor_column && (!IDENT_RE.test(m.cursor_column) || m.cursor_column.includes('.'))) errors.push(`${n}: cursor must be an unqualified column.`);
     } else {
       if (!SFTP_FOLDERS.includes(m.folder as never)) errors.push(`${n}: choose a Zeta folder.`);
@@ -71,6 +80,16 @@ function cleanConfig(kind: string, config: ConnectionConfig): ConnectionConfig {
       if (m.table?.trim()) out.table = m.table.trim();
       if (m.query?.trim()) out.query = m.query.trim();
       if (m.cursor_column?.trim()) out.cursor_column = m.cursor_column.trim();
+      if (m.target_type) out.target_type = m.target_type;
+      const cols = Object.fromEntries(Object.entries(m.columns ?? {}).filter(([k, v]) => k && v?.trim()).map(([k, v]) => [k, v.trim()]));
+      if (Object.keys(cols).length) out.columns = cols;
+      if (m.schedule) {
+        const sc: MappingSchedule = { frequency: m.schedule.frequency, timezone: 'America/New_York' };
+        if (sc.frequency !== 'manual') sc.minute = m.schedule.minute ?? 0;
+        if (sc.frequency === 'daily' || sc.frequency === 'monthly') sc.hour = m.schedule.hour ?? 0;
+        if (sc.frequency === 'monthly') sc.day = m.schedule.day ?? 1;
+        out.schedule = sc;
+      }
     } else {
       out.folder = m.folder;
       out.pattern = m.pattern?.trim() || '*.jsonl';
@@ -128,6 +147,70 @@ function PullHistory({ items }: { items: PullHistoryItem[] }) {
   );
 }
 
+const CANON_HINT = 'canonical field (blank keeps as extra attribute)';
+
+function SnowflakeMappingExtras({ m, i, tables, cols, colsError, busy, onChange, onIntrospect }: {
+  m: FeedMapping; i: number; tables: string[]; cols?: string[]; colsError?: string; busy: boolean;
+  onChange: (patch: Partial<FeedMapping>) => void; onIntrospect: () => void;
+}) {
+  void tables;
+  const headers = Array.from(new Set([...(cols ?? []), ...Object.keys(m.columns ?? {})]));
+  const sc = m.schedule;
+  const setSc = (patch: Partial<MappingSchedule> | null) => onChange({ schedule: patch === null ? undefined : { ...(sc ?? { frequency: 'manual' }), ...patch, timezone: 'America/New_York' } });
+  return (
+    <div className="sm:col-span-12 space-y-3 border-t pt-3">
+      <div className="grid gap-2 sm:grid-cols-12 items-end">
+        <div className="sm:col-span-4 space-y-1">
+          <Label className="text-[11px]">Target type</Label>
+          <select className={selectCls} value={m.target_type ?? ''} data-testid={`select-mapping-target-${i}`}
+            onChange={e => { const t = e.target.value as TargetType | ''; onChange(t ? { target_type: t, ...deriveFeed(t), resource_type: deriveFeed(t).resource_type } : { target_type: undefined }); }}>
+            <option value="">Choose feed manually</option>
+            {TARGET_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+          </select>
+          {m.target_type && <p className="text-[10px] text-muted-foreground">feed: {m.feed}{m.resource_type ? ` / ${m.resource_type}` : ''}</p>}
+        </div>
+        <div className="sm:col-span-3 space-y-1">
+          <Label className="text-[11px]">Schedule</Label>
+          <select className={selectCls} value={sc?.frequency ?? ''} data-testid={`select-mapping-schedule-${i}`}
+            onChange={e => e.target.value ? setSc({ frequency: e.target.value as MappingSchedule['frequency'] }) : setSc(null)}>
+            <option value="">Source default</option>
+            {['manual', 'hourly', 'daily', 'monthly'].map(f => <option key={f} value={f}>{f}</option>)}
+          </select>
+        </div>
+        {sc && sc.frequency === 'monthly' && <div className="sm:col-span-1 space-y-1"><Label className="text-[11px]">Day</Label>
+          <Input type="number" min={1} max={28} className="h-8 text-xs" value={sc.day ?? 1} data-testid={`input-mapping-day-${i}`} onChange={e => setSc({ day: Number(e.target.value) })} /></div>}
+        {sc && (sc.frequency === 'daily' || sc.frequency === 'monthly') && <div className="sm:col-span-1 space-y-1"><Label className="text-[11px]">Hour</Label>
+          <Input type="number" min={0} max={23} className="h-8 text-xs" value={sc.hour ?? 0} data-testid={`input-mapping-hour-${i}`} onChange={e => setSc({ hour: Number(e.target.value) })} /></div>}
+        {sc && sc.frequency !== 'manual' && <div className="sm:col-span-1 space-y-1"><Label className="text-[11px]">Min</Label>
+          <Input type="number" min={0} max={59} className="h-8 text-xs" value={sc.minute ?? 0} data-testid={`input-mapping-minute-${i}`} onChange={e => setSc({ minute: Number(e.target.value) })} /></div>}
+        {sc && <span className="sm:col-span-2 pb-2 text-[10px] font-mono text-muted-foreground">America/New_York</span>}
+      </div>
+      <div className="space-y-2">
+        <div className="flex items-center gap-2">
+          <Label className="text-[11px] mr-auto">Column mapping</Label>
+          <Button size="sm" variant="outline" className="h-7 text-[11px]" disabled={!m.table?.trim() || busy} onClick={onIntrospect} data-testid={`button-introspect-${i}`}>
+            <Wand2 className="mr-1 h-3 w-3" /> {busy ? 'Reading…' : 'Introspect and auto-match'}
+          </Button>
+        </div>
+        {!m.table?.trim() && <p className="text-[10px] text-muted-foreground">Introspection needs a table. For a query, run a dry run and apply suggested columns.</p>}
+        {colsError && <p role="alert" className="text-[11px] text-destructive" data-testid={`text-columns-error-${i}`}>{colsError}</p>}
+        {headers.length > 0 && (
+          <div className="grid max-h-56 gap-1 overflow-auto sm:grid-cols-2">
+            {headers.map(h => (
+              <div key={h} className="flex items-center gap-2 rounded border bg-background p-1.5">
+                <span className="flex-1 truncate font-mono text-[11px]" title={h}>{h}</span>
+                <span className="text-muted-foreground">→</span>
+                <Input className="h-7 flex-1 font-mono text-[11px]" placeholder={CANON_HINT} value={m.columns?.[h] ?? ''} data-testid={`input-column-${i}-${h}`}
+                  onChange={e => onChange({ columns: { ...(m.columns ?? {}), [h]: e.target.value } })} />
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function SourceConnection({ source }: { source: Source }) {
   const kind = source.kind;
   const credFields = kind === 'snowflake' ? SNOWFLAKE_CREDS : SFTP_CREDS;
@@ -142,7 +225,12 @@ export function SourceConnection({ source }: { source: Source }) {
   const [replaceCreds, setReplaceCreds] = useState(false);
   // Secrets live only in this component's state; cleared on save/unmount, never persisted or logged.
   const [creds, setCreds] = useState<Record<string, string>>({});
-  const [feedFilter, setFeedFilter] = useState<'' | Feed>('');
+  const [mappingFilter, setMappingFilter] = useState('');
+  const test = useSourceTest(source.id);
+  const columnsApi = useSourceColumns(source.id);
+  const [tables, setTables] = useState<string[]>([]);
+  const [sourceCols, setSourceCols] = useState<Record<string, string[]>>({});
+  const [colsError, setColsError] = useState<Record<string, string>>({});
   const [submitted, setSubmitted] = useState(false);
   const initFor = useRef<number | null>(null);
 
@@ -153,6 +241,8 @@ export function SourceConnection({ source }: { source: Source }) {
       setConfig(c);
       setSavedJson(JSON.stringify(cleanConfig(kind, c)));
       setReplaceCreds(!conn.data.has_credentials);
+      const cf = conn.data.connection_fields ?? {};
+      setCreds(Object.fromEntries(Object.entries(cf).filter(([k]) => k !== 'private_key' && k !== 'private_key_passphrase').map(([k, v]) => [k, String(v ?? '')])));
     }
   }, [conn.data, source.id, kind]);
   useEffect(() => () => setCreds({}), []);
@@ -160,22 +250,42 @@ export function SourceConnection({ source }: { source: Source }) {
   const cleaned = useMemo(() => cleanConfig(kind, config), [kind, config]);
   const errors = useMemo(() => validateConnection(kind, config), [kind, config]);
   const credErrors = replaceCreds ? credFields.filter(f => f.required && !creds[f.key]?.trim()).map(f => `${f.label} is required.`) : [];
-  const dirty = JSON.stringify(cleaned) !== savedJson || (replaceCreds && Object.values(creds).some(Boolean));
+  const dirty = JSON.stringify(cleaned) !== savedJson || (replaceCreds && credFields.some(f => f.secret && !!creds[f.key]));
   const pending = !!conn.data?.recovery_pending;
   const saved = !!conn.data?.configured;
+
+  const buildCredentials = (): Record<string, unknown> | undefined => {
+    if (!replaceCreds) return undefined;
+    const out: Record<string, unknown> = {};
+    for (const f of credFields) {
+      const v = creds[f.key]?.trim();
+      if (!v) continue;
+      out[f.key] = f.numeric ? Number(v) : f.secret ? creds[f.key] : v;
+    }
+    return out;
+  };
+
+  const handleTest = () => {
+    if (replaceCreds && credErrors.length) { setSubmitted(true); return; }
+    test.mutate({ credentials: buildCredentials() }, { onSuccess: d => setTables(d.tables ?? []) });
+  };
+
+  const introspect = (m: FeedMapping, i: number) => {
+    if (!m.table?.trim()) return;
+    setColsError(e => ({ ...e, [m.id]: '' }));
+    columnsApi.mutate({ table: m.table.trim() }, {
+      onSuccess: d => {
+        setSourceCols(c => ({ ...c, [m.id]: d.columns }));
+        updateMapping(i, { columns: { ...d.suggested_columns, ...Object.fromEntries(Object.entries(m.columns ?? {}).filter(([, v]) => v)) } });
+      },
+      onError: err => setColsError(e => ({ ...e, [m.id]: err.message })),
+    });
+  };
 
   const handleSave = () => {
     setSubmitted(true);
     if (errors.length || credErrors.length || pending) return;
-    let credentials: Record<string, unknown> | undefined;
-    if (replaceCreds) {
-      credentials = {};
-      for (const f of credFields) {
-        const v = creds[f.key]?.trim();
-        if (!v) continue;
-        credentials[f.key] = f.numeric ? Number(v) : f.key === 'private_key' ? creds[f.key] : v;
-      }
-    }
+    const credentials = buildCredentials();
     save.mutate({ config: cleaned, credentials }, {
       onSuccess: data => {
         setCreds({});
@@ -190,8 +300,7 @@ export function SourceConnection({ source }: { source: Source }) {
   };
 
   const handlePull = () => {
-    const feed = feedFilter || null;
-    pull.mutate({ feed });
+    pull.mutate({ mapping_id: mappingFilter || null });
   };
 
   const updateMapping = (i: number, patch: Partial<FeedMapping>) =>
@@ -219,7 +328,7 @@ export function SourceConnection({ source }: { source: Source }) {
     );
   }
 
-  const feedsInUse = Array.from(new Set(config.mappings.map(m => m.feed)));
+  const feedsInUse = kind === 'snowflake' ? [] : Array.from(new Set(config.mappings.map(m => m.feed)));
   const shownErrors = submitted ? [...errors, ...credErrors] : [];
 
   return (
@@ -270,6 +379,17 @@ export function SourceConnection({ source }: { source: Source }) {
             )}
           </div>
         )}
+        {kind === 'snowflake' && (
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <Button size="sm" variant="outline" disabled={test.isPending || (!saved && !replaceCreds)} onClick={handleTest} data-testid="button-test-connection">
+                <Plug className="mr-1.5 h-3.5 w-3.5" /> {test.isPending ? 'Testing…' : saved && !replaceCreds ? 'Test saved connection' : 'Test connection'}
+              </Button>
+              {test.data && <span className="text-xs text-ok" data-testid="status-test-ok">Connected. {test.data.version} · {test.data.tables.length.toLocaleString()} tables visible</span>}
+            </div>
+            {test.error && <p role="alert" className="text-xs text-destructive" data-testid="text-test-error">Connection test failed: {test.error.message}</p>}
+          </div>
+        )}
       </section>
 
       <fieldset disabled={pending} className="space-y-6 disabled:opacity-60" data-testid="fieldset-config">
@@ -296,7 +416,7 @@ export function SourceConnection({ source }: { source: Source }) {
                 </div>
                 <div className="sm:col-span-2 space-y-1">
                   <Label className="text-[11px]">Feed</Label>
-                  <select className={selectCls} value={m.feed} data-testid={`select-mapping-feed-${i}`} onChange={e => updateMapping(i, { feed: e.target.value as Feed })}>
+                  <select className={selectCls} value={m.feed} data-testid={`select-mapping-feed-${i}`} disabled={kind === 'snowflake' && !!m.target_type} onChange={e => updateMapping(i, { feed: e.target.value as Feed })}>
                     {FEEDS.map(f => <option key={f} value={f}>{f}</option>)}
                   </select>
                 </div>
@@ -304,7 +424,7 @@ export function SourceConnection({ source }: { source: Source }) {
                   <>
                     <div className="sm:col-span-3 space-y-1">
                       <Label className="text-[11px]">Table</Label>
-                      <Input className="h-8 font-mono text-xs" value={m.table ?? ''} placeholder="DB.SCHEMA.TABLE" data-testid={`input-mapping-table-${i}`}
+                      <Input className="h-8 font-mono text-xs" value={m.table ?? ''} placeholder="DB.SCHEMA.TABLE" list="snowflake-tables" data-testid={`input-mapping-table-${i}`}
                         onChange={e => updateMapping(i, { table: e.target.value })} />
                     </div>
                     <div className="sm:col-span-3 space-y-1">
@@ -350,6 +470,10 @@ export function SourceConnection({ source }: { source: Source }) {
                       placeholder="SELECT ID, EMAIL, UPDATED_AT FROM DB.SCHEMA.PEOPLE" onChange={e => updateMapping(i, { query: e.target.value })} />
                   </div>
                 )}
+                {kind === 'snowflake' && (
+                  <SnowflakeMappingExtras m={m} i={i} tables={tables} cols={sourceCols[m.id]} colsError={colsError[m.id]} busy={columnsApi.isPending}
+                    onChange={patch => updateMapping(i, patch)} onIntrospect={() => introspect(m, i)} />
+                )}
               </div>
             ))}
           </div>
@@ -357,7 +481,8 @@ export function SourceConnection({ source }: { source: Source }) {
       </section>
 
       {/* Schedules */}
-      <section className="space-y-3">
+      {kind === 'snowflake' ? <datalist id="snowflake-tables">{tables.map(t => <option key={t} value={t} />)}</datalist> : null}
+      {kind !== 'snowflake' && <section className="space-y-3">
         <h3 className="kin-heading">Schedules <span className="text-[11px] font-mono text-muted-foreground font-normal">America/New_York</span></h3>
         {feedsInUse.length === 0 ? (
           <p className="text-xs text-muted-foreground">Schedules appear once a feed is mapped.</p>
@@ -393,7 +518,7 @@ export function SourceConnection({ source }: { source: Source }) {
             })}
           </div>
         )}
-      </section>
+      </section>}
 
       </fieldset>
 
@@ -415,12 +540,12 @@ export function SourceConnection({ source }: { source: Source }) {
       <section className="space-y-3 border-t pt-4">
         <div className="flex flex-wrap items-center gap-2">
           <h3 className="kin-heading mr-auto">Test & pull</h3>
-          <select className={`${selectCls} w-36`} value={feedFilter} data-testid="select-run-feed" onChange={e => setFeedFilter(e.target.value as '' | Feed)}>
-            <option value="">All feeds</option>
-            {FEEDS.map(f => <option key={f} value={f}>{f}</option>)}
+          <select className={`${selectCls} w-44`} value={mappingFilter} data-testid="select-run-mapping" onChange={e => setMappingFilter(e.target.value)}>
+            <option value="">All mappings</option>
+            {config.mappings.map(m => <option key={m.id} value={m.id}>{m.id}</option>)}
           </select>
           <Button size="sm" variant="outline" disabled={!saved || dirty || dryRun.isPending} data-testid="button-dry-run"
-            onClick={() => dryRun.mutate({ feed: feedFilter || null })}>
+            onClick={() => dryRun.mutate({ mapping_id: mappingFilter || null })}>
             <ScanSearch className="mr-1.5 h-3.5 w-3.5" /> {dryRun.isPending ? 'Checking…' : 'Dry run'}
           </Button>
           <Button size="sm" disabled={!saved || (dirty && !pending) || pull.isPending || !source.is_active} data-testid="button-pull"
@@ -435,7 +560,7 @@ export function SourceConnection({ source }: { source: Source }) {
         {dryRun.isPending && <div className="h-16 rounded-md bg-muted animate-pulse" />}
         {dryRun.data && (
           <div className="rounded-md border" data-testid="table-dry-run">
-            <div className="border-b px-3 py-1.5 text-[11px] text-muted-foreground">Up to {dryRun.data.limit_per_mapping} rows per mapping. Field names and counts only.</div>
+            <div className="border-b px-3 py-1.5 text-[11px] text-muted-foreground">Up to {dryRun.data.limit_per_mapping} rows per mapping. Mapped records and identity keys; review before pulling.</div>
             {dryRun.data.items.length === 0 ? (
               <p className="p-3 text-xs text-muted-foreground" data-testid="empty-dry-run">No matching files or rows found.</p>
             ) : dryRun.data.items.map(p => (
@@ -448,11 +573,37 @@ export function SourceConnection({ source }: { source: Source }) {
                 <div className="mt-1 flex flex-wrap gap-1">
                   {p.fields.map(f => <span key={f} className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px]">{f}</span>)}
                 </div>
+                {p.identity_keys && p.identity_keys.length > 0 && (
+                  <div className="mt-1 flex flex-wrap items-center gap-1 text-[10px] text-muted-foreground" data-testid={`identity-keys-${p.mapping_id}`}>
+                    identity keys: {p.identity_keys.map(k => <span key={k} className="rounded bg-signal-soft px-1.5 py-0.5 font-mono text-primary">{k}</span>)}
+                  </div>
+                )}
+                {p.suggested_columns && Object.keys(p.suggested_columns).length > 0 && (
+                  <Button size="sm" variant="ghost" className="mt-1 h-6 px-2 text-[11px]" data-testid={`button-apply-suggestions-${p.mapping_id}`}
+                    onClick={() => setConfig(c => ({ ...c, mappings: c.mappings.map(m => m.id === p.mapping_id ? { ...m, columns: { ...p.suggested_columns, ...(m.columns ?? {}) } } : m) }))}>
+                    <Wand2 className="mr-1 h-3 w-3" /> Apply suggested columns
+                  </Button>
+                )}
+                {p.rows && p.rows.length > 0 && (
+                  <div className="mt-2 max-h-72 overflow-auto rounded border" data-testid={`rows-dry-run-${p.mapping_id}`}>
+                    <table className="w-full text-[10px] font-mono">
+                      <thead className="sticky top-0 bg-muted"><tr><th className="px-2 py-1 text-left">#</th>{Object.keys(p.rows[0]).map(h => <th key={h} className="whitespace-nowrap px-2 py-1 text-left">{h}</th>)}</tr></thead>
+                      <tbody>
+                        {p.rows.slice(0, 100).map((r, ri) => (
+                          <tr key={ri} className="border-t"><td className="px-2 py-0.5 text-muted-foreground">{ri + 1}</td>
+                            {Object.keys(p.rows![0]).map(h => <td key={h} className="max-w-[200px] truncate whitespace-nowrap px-2 py-0.5" title={String(r[h] ?? '')}>{r[h] === null || r[h] === undefined ? '' : String(r[h])}</td>)}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
             ))}
           </div>
         )}
 
+        {pull.data && <p className="text-xs text-ok" data-testid="status-pull-queued">Pull queued as job #{pull.data.job_id}. <Link to="/imports" className="underline" data-testid="link-imports">Follow progress in Imports</Link></p>}
         {pull.error && <p role="alert" className="text-xs text-destructive" data-testid="text-pull-error">{pull.error.message}</p>}
         <div className="space-y-2">
           <div className="flex items-center justify-between text-[11px] text-muted-foreground">

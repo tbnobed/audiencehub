@@ -11,6 +11,7 @@ import json
 import os
 import re
 import tempfile
+import time
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -230,6 +231,11 @@ def gift_for_event(row):
                  "gift_date": str(row.get("occurred_at", ""))[:10],
                  "is_refund": row["name"] == "donation_return",
                  "original_donation_id": props.get("original_donation_id")})
+    if gift["is_refund"] and gift.get("original_donation_id"):
+        original = str(gift["original_donation_id"]).removeprefix("gift:")
+        if not original.startswith("donation:_event:"):
+            original = "donation:" + (original if original.startswith("_event:") else "_event:" + original)
+        gift["original_donation_id"] = original
     return gift
 
 
@@ -258,17 +264,44 @@ def connection_row(db, source_id):
     return row
 
 
-def collect(row, feed=None, dry_run=False):
+def collect(row, feed=None, dry_run=False, mapping_id=None, progress_callback=None):
     credentials = security.decrypt(row["credentials"])
-    mappings = [m for m in row["config"]["mappings"] if feed is None or m["feed"] == feed]
+    mappings = [m for m in row["config"]["mappings"] if (feed is None or m["feed"] == feed)
+                and (mapping_id is None or m["id"] == mapping_id)]
+    if mapping_id and not mappings:
+        raise SourceError("Mapping not found.")
     manifests, previews, cursors = [], [], dict(row["state"].get("cursors", {}))
     connection = snowflake_connection if row["kind"] == "snowflake" else sftp_connection
+    read_count, last_progress = 0, 0.0
     with connection(credentials) as remote:
         for mapping in mappings:
             def consume(rows):
+                from app.source_rows import mapped_row, matched_columns, identity_aliases
+                incoming_rows = rows
+                def mapped():
+                    nonlocal read_count, last_progress
+                    for incoming in incoming_rows:
+                        read_count += 1
+                        if progress_callback and time.monotonic() - last_progress >= 10:
+                            progress_callback(read_count, mapping["id"])
+                            last_progress = time.monotonic()
+                        cursor = mapping.get("cursor_column")
+                        if cursor and not dry_run:
+                            value = incoming.get(cursor.lower())
+                            if value is None:
+                                raise SourceError("Snowflake incremental cursor cannot be null.")
+                            cursors[mapping["id"]] = json_default(value)
+                        item = mapped_row(incoming, mapping)
+                        if dry_run:
+                            yield item
+                        else:
+                            yield from identity_aliases(item, mapping["feed"])
+                rows = mapped()
                 if dry_run:
                     samples = []
+                    identity_keys = set()
                     for item in itertools.islice(rows, 100):
+                        identity_keys.update(key for key in IDENTITIES if item.get(key))
                         item, extras = split_enrichment(item, mapping["feed"])
                         record_type, normalized = canonical_row(item, mapping["feed"])
                         for extra in extras:
@@ -293,7 +326,10 @@ def collect(row, feed=None, dry_run=False):
                                     "gift", gift_mapping["options"])["errors"])
                             errors += int(invalid)
                     previews.append({"mapping_id": mapping["id"], "rows_checked": len(samples),
-                                     "fields": headers, "rows_rejected": errors})
+                                     "fields": headers, "rows_rejected": errors,
+                                     "rows": json.loads(json.dumps([normalized for _, normalized in samples], default=json_default)),
+                                     "identity_keys": sorted(identity_keys),
+                                     "suggested_columns": matched_columns(headers, mapping.get("target_type", mapping["feed"]))})
                     return
                 iterator = iter(rows)
                 while True:
@@ -303,12 +339,6 @@ def collect(row, feed=None, dry_run=False):
                     chunk = itertools.chain([first], itertools.islice(iterator, MAX_LINES - 1))
                     def track():
                         for item in chunk:
-                            cursor = mapping.get("cursor_column")
-                            if cursor:
-                                value = item.get(cursor.lower())
-                                if value is None:
-                                    raise SourceError("Snowflake incremental cursor cannot be null.")
-                                cursors[mapping["id"]] = json_default(value)
                             yield item
                     manifest = spool(track(), mapping["feed"], row["key"], mapping.get("resource_type"))
                     if manifest:
@@ -372,17 +402,31 @@ def save_state(db, source_id, state):
     db.commit()
 
 
-def run_source(source_id, feed=None, job_id=None):
+def run_source(source_id, feed=None, job_id=None, mapping_id=None, manifests=None):
     with source_lock(source_id), Session(engine) as db:
         row = connection_row(db, source_id)
         state = dict(row["state"])
+        if manifests is not None and mapping_id in state.get("completed_migrations", {}):
+            return {"batch_id": state["completed_migrations"][mapping_id], "files": len(manifests)}
         pending = state.get("pending")
         if not pending:
-            manifests, cursors = collect(row, feed)
+            if manifests is None:
+                def collected(rows_read, mapping):
+                    if job_id is not None:
+                        from app.jobs.queue import heartbeat
+                        if not heartbeat(db, job_id, {"phase": "collecting", "rows_read": rows_read,
+                                                      "mapping_id": mapping}):
+                            from app.jobs.lifecycle import OwnershipLost
+                            raise OwnershipLost("Source job no longer owns its collection.")
+                        db.commit()
+                manifests, cursors = collect(row, feed, mapping_id=mapping_id, progress_callback=collected)
+            else:
+                cursors = dict(state.get("cursors", {}))
             manifests.sort(key=lambda m: 0 if m["record_type"] in RESOURCES else
                            1 if m["record_type"] == "contact" else 2)
             batch_id = db.scalar(text("INSERT INTO identity_batches DEFAULT VALUES RETURNING id"))
-            pending = {"batch_id": batch_id, "manifests": manifests, "cursors": cursors, "feed": feed}
+            pending = {"batch_id": batch_id, "manifests": manifests, "cursors": cursors,
+                       "feed": feed, "mapping_id": mapping_id}
             state["pending"] = pending
             save_state(db, source_id, state)
         batch_id = pending["batch_id"]
@@ -430,11 +474,13 @@ def run_source(source_id, feed=None, job_id=None):
         enqueue(db, "identity.resolve_batch", {"batch_id": batch_id}, dedupe_key=f"identity:batch:{batch_id}")
         state["cursors"] = pending["cursors"]
         state.pop("pending", None)
+        if (pending.get("mapping_id") or "").startswith("migration_"):
+            state.setdefault("completed_migrations", {})[pending["mapping_id"]] = batch_id
         save_state(db, source_id, state)
         result = {"batch_id": batch_id, "files": len(pending["manifests"])}
     # Recover an older poll first, then honor this job's distinct schedule.
-    if pending.get("feed") != feed:
-        return run_source(source_id, feed=feed, job_id=job_id)
+    if pending.get("feed") != feed or pending.get("mapping_id") != mapping_id:
+        return run_source(source_id, feed=feed, job_id=job_id, mapping_id=mapping_id, manifests=manifests)
     return result
 
 
@@ -442,9 +488,10 @@ def tick_sources(db, now):
     from app.jobs.scheduler import schedule_once
     for row in db.execute(text("""SELECT s.id,c.config FROM sources s
         JOIN source_connections c ON c.source_id=s.id WHERE s.is_active""")).mappings():
-        for feed in {m["feed"] for m in row["config"]["mappings"]}:
-            schedule = row["config"].get("schedules", {}).get(feed, DEFAULT_SCHEDULES[feed])
+        for mapping in row["config"]["mappings"]:
+            feed = mapping["feed"]
+            schedule = mapping.get("schedule") or row["config"].get("schedules", {}).get(feed, DEFAULT_SCHEDULES[feed])
             key = window(schedule, now)
             if key:
-                schedule_once(db, f"source:{row['id']}:{feed}", key, "source.pull",
-                              {"source_id": row["id"], "feed": feed})
+                schedule_once(db, f"source:{row['id']}:{mapping['id']}", key, "source.pull",
+                              {"source_id": row["id"], "mapping_id": mapping["id"]})

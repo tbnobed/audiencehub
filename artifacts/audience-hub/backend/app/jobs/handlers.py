@@ -6,13 +6,22 @@ class SegmentTraitsRefreshRequired(ValueError):
 
 
 def run(job_type: str, payload: dict, job_id: int | None = None) -> None:
+    if job_type == "zeta.import":
+        from app.zeta_migrations import run_migration
+        run_migration(int(payload["migration_id"]), job_id=job_id, paths=payload.get("paths"))
+        return
+    if job_type == "zeta.parity":
+        from app.zeta_migrations import run_parity
+        run_parity(int(payload["migration_id"]), job_id=job_id)
+        return
     if job_type == "source.pull":
         from app.source_pulls import run_source
         from app.source_connectors import SourceError
         from app.identity.locking import IdentityResolutionDeferred
         from app.jobs.lifecycle import OwnershipLost
         try:
-            run_source(int(payload["source_id"]), feed=payload.get("feed"), job_id=job_id)
+            run_source(int(payload["source_id"]), feed=payload.get("feed"), job_id=job_id,
+                       mapping_id=payload.get("mapping_id"))
         except (IdentityResolutionDeferred, OwnershipLost):
             raise
         except Exception:
