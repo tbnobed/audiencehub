@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { ArrowRight, Search, Users, RefreshCw } from 'lucide-react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -100,7 +100,7 @@ export default function Profiles() {
           const sourceKeys = Array.isArray(traits?.source_keys) ? traits.source_keys as string[] : [];
           const selected = previewId === p.id;
           return <TableRow key={p.id} ref={el => { if (el) rowRefs.current.set(p.id, el); else rowRefs.current.delete(p.id); }} tabIndex={0} aria-selected={selected} data-state={selected ? 'selected' : undefined} data-testid={`row-profile-${p.id}`} title="Enter to preview · arrows to move" className={`cursor-pointer border-line text-xs transition-colors outline-none focus-visible:bg-surface-raised focus-visible:shadow-[inset_2px_0_0_var(--signal)] ${selected ? 'bg-signal-soft shadow-[inset_2px_0_0_var(--signal)] hover:bg-signal-soft' : 'hover:bg-surface-raised'}`} onClick={() => select(selected ? null : p.id)} onKeyDown={e => onRowKey(e, index, p.id)}>
-            <TableCell className="font-medium text-ink">{name}<div className="mt-0.5"><MasterIdChip masterId={p.master_id} compact testId={`copy-master-id-${p.id}`} /></div></TableCell>
+            <TableCell className="font-medium text-ink"><Link to={`/profiles/${p.id}`} state={{ from }} data-testid={`link-profile-${p.id}`} className="hover:text-signal hover:underline focus-visible:underline" onClick={e => e.stopPropagation()} onKeyDown={e => e.stopPropagation()}>{name}</Link><div className="mt-0.5"><MasterIdChip masterId={p.master_id} compact testId={`copy-master-id-${p.id}`} /></div></TableCell>
             <TableCell><span className="block text-ink-muted">{p.email || '—'}</span><span className="block text-ink-muted mt-0.5">{p.phone || ''}</span></TableCell>
             <TableCell className="text-ink-muted">{[p.city, p.region].filter(Boolean).join(', ') || '—'}</TableCell>
             <TableCell><span className={`inline-block px-2 py-0.5 rounded-sm border uppercase tracking-wide font-mono text-[10px] ${statusStyle[p.donor_status] || statusStyle.prospect}`}>{p.donor_status}</span></TableCell>

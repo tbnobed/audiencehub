@@ -16,16 +16,19 @@ export function ProfilePreview({ id, from, onClose }: { id: number; from: string
   const gifts = records(data?.gifts).slice(0, 4);
 
   return <div className="flex flex-col h-full min-h-0" data-testid="panel-profile-preview" aria-live="polite">
-    <div className="flex items-start justify-between gap-2 border-b border-line px-4 py-3">
+    <div className="flex shrink-0 items-start justify-between gap-2 border-b border-line px-4 py-3">
       <div className="min-w-0">
-        <p className="text-[10px] font-mono uppercase tracking-[.16em] text-signal">Preview · #{id}</p>
+        <p className="text-[10px] font-mono uppercase tracking-[.16em] text-signal">Profile preview</p>
         {isLoading ? <Skeleton className="h-5 w-40 mt-1 bg-surface-raised" />
           : <h2 className="kin-heading truncate" data-testid="text-preview-name">{data ? displayJoined([data.first_name, data.last_name], ' ') : 'Profile'}</h2>}
           {data && <MasterIdChip masterId={data.master_id} testId="button-copy-preview-master-id" />}
       </div>
       <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" aria-label="Close preview" data-testid="button-close-preview" onClick={onClose}><X size={14} /></Button>
     </div>
-    <div className="flex-1 overflow-auto px-4 py-3 space-y-4 text-xs">
+    <div className="shrink-0 border-b border-line p-3">
+      <Button asChild size="sm" className="w-full"><Link to={`/profiles/${id}`} state={{ from }} data-testid="link-open-full-profile">Open full profile <ArrowUpRight size={13} className="ml-1.5" /></Link></Button>
+    </div>
+    <div className="min-h-0 flex-1 overflow-auto px-4 py-3 space-y-4 text-xs">
       {isLoading ? <div className="space-y-3">{Array.from({ length: 6 }, (_, i) => <Skeleton key={i} className="h-8 w-full bg-surface-raised" />)}</div>
       : isError || !data ? <div className="py-10 text-center" role="alert">
           <p className="text-danger text-sm">Unable to load preview</p>
@@ -52,9 +55,6 @@ export function ProfilePreview({ id, from, onClose }: { id: number; from: string
           <p className="text-ink-muted">{records(data.events).length} events · {records(data.source_records).length} source records</p>
         </section>
       </>}
-    </div>
-    <div className="border-t border-line p-3">
-      <Button asChild size="sm" className="w-full"><Link to={`/profiles/${id}`} state={{ from }} data-testid="link-open-full-profile">Open full profile <ArrowUpRight size={13} className="ml-1.5" /></Link></Button>
     </div>
   </div>;
 }
