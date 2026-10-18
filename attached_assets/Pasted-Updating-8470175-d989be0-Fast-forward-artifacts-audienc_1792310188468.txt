@@ -1,0 +1,106 @@
+Updating 8470175..d989be0
+Fast-forward
+ artifacts/audience-hub/backend/app/cli.py                          |   6 ++++++
+ artifacts/audience-hub/backend/app/importer.py                     |  26 +++++++++++++++++++----
+ artifacts/audience-hub/backend/app/imports/mapping.py              |   2 +-
+ artifacts/audience-hub/backend/app/imports/validation.py           |  10 +++++++--
+ artifacts/audience-hub/backend/app/seed.py                         |   2 ++
+ artifacts/audience-hub/backend/app/seed_audit.py                   |  82 +++++++++++++++++++++++++++++++++++++++++++++++++----------------------
+ artifacts/audience-hub/backend/app/seed_audit_report.py            |  51 +++++++++++++++++++++++++++++++++++++++++---
+ artifacts/audience-hub/backend/app/seed_audit_verification.py      |  46 +++++++++++++++++++++++++++++++++++++---
+ artifacts/audience-hub/backend/app/verify_seed.py                  | 116 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ artifacts/audience-hub/scripts/identity_acceptance.py              |  34 +++++++++++++++++++++++-------
+ artifacts/audience-hub/src/components/profiles/profile-preview.tsx |  14 ++++++-------
+ artifacts/audience-hub/src/pages/profiles.tsx                      |   4 ++--
+ attached_assets/image_1792308391071.png                            | Bin 0 -> 356862 bytes
+ 13 files changed, 339 insertions(+), 54 deletions(-)
+ create mode 100644 artifacts/audience-hub/backend/app/verify_seed.py
+ create mode 100644 attached_assets/image_1792308391071.png
+[+] Building 14.5s (36/36) FINISHED
+ => [internal] load local bake definitions                                                                                                                                 0.0s
+ => => reading from stdin 555B                                                                                                                                             0.0s
+ => [internal] load build definition from Dockerfile                                                                                                                       0.0s
+ => => transferring dockerfile: 1.91kB                                                                                                                                     0.0s
+ => [internal] load metadata for docker.io/library/python:3.12-slim-bookworm                                                                                               0.4s
+ => [internal] load metadata for docker.io/library/node:20.20.2-bookworm-slim                                                                                              0.4s
+ => [internal] load .dockerignore                                                                                                                                          0.0s
+ => => transferring context: 229B                                                                                                                                          0.0s
+ => [internal] load build context                                                                                                                                          0.1s
+ => => transferring context: 249.89kB                                                                                                                                      0.0s
+ => [web  1/14] FROM docker.io/library/node:20.20.2-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0                                  0.1s
+ => => resolve docker.io/library/node:20.20.2-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0                                        0.0s
+ => [stage-1  1/14] FROM docker.io/library/python:3.12-slim-bookworm@sha256:34386ef0cb081344d7ec1c103ba398e6e9f64e9ab3a1509accc92a4e24a07258                               0.0s
+ => => resolve docker.io/library/python:3.12-slim-bookworm@sha256:34386ef0cb081344d7ec1c103ba398e6e9f64e9ab3a1509accc92a4e24a07258                                         0.0s
+ => CACHED [stage-1  2/14] RUN apt-get update && apt-get install -y --no-install-recommends libpq5 tini curl   && rm -rf /var/lib/apt/lists/*                              0.0s
+ => CACHED [stage-1  3/14] RUN useradd --create-home --uid 10001 app                                                                                                       0.0s
+ => CACHED [stage-1  4/14] WORKDIR /app                                                                                                                                    0.0s
+ => CACHED [stage-1  5/14] COPY backend/pyproject.toml ./backend/                                                                                                          0.0s
+ => CACHED [stage-1  6/14] COPY backend/app/__init__.py ./backend/app/                                                                                                     0.0s
+ => CACHED [stage-1  7/14] RUN pip install --upgrade pip && pip install ./backend                                                                                          0.0s
+ => CACHED [web  2/14] WORKDIR /web                                                                                                                                        0.0s
+ => CACHED [web  3/14] RUN npm install --global npm@10.9.9 --no-audit --no-fund   && node --version && npm --version                                                       0.0s
+ => CACHED [web  4/14] COPY package.json package-lock.json ./                                                                                                              0.0s
+ => CACHED [web  5/14] COPY scripts/check-package-lock.cjs ./scripts/check-package-lock.cjs                                                                                0.0s
+ => CACHED [web  6/14] RUN node scripts/check-package-lock.cjs                                                                                                             0.0s
+ => CACHED [web  7/14] RUN npm ci --include=dev --bin-links=true --no-audit --no-fund --cache=/tmp/npm-cache   || { cat /tmp/npm-cache/_logs/*-debug-0.log; exit 1; }      0.0s
+ => CACHED [web  8/14] RUN test "$(npm --version)" = "10.9.9"   && test -x node_modules/.bin/vite                                                                          0.0s
+ => CACHED [web  9/14] COPY index.html vite.config.ts vite.sdk.config.ts tsconfig.json ./                                                                                  0.0s
+ => CACHED [web 10/14] COPY scripts/sdk-build.mjs ./scripts/sdk-build.mjs                                                                                                  0.0s
+ => CACHED [web 11/14] COPY sdk/ ./sdk/                                                                                                                                    0.0s
+ => [stage-1  8/14] COPY backend/ ./backend/                                                                                                                               0.1s
+ => [web 12/14] COPY src/ ./src/                                                                                                                                           0.1s
+ => [web 13/14] COPY public/ ./public/                                                                                                                                     0.1s
+ => [stage-1  9/14] RUN pip install --no-deps ./backend                                                                                                                    7.1s
+ => [web 14/14] RUN PORT=5000 BASE_PATH=/ npm run build                                                                                                                    9.9s
+ => [stage-1 10/14] COPY --from=web /web/dist/public ./static                                                                                                              0.1s
+ => [stage-1 11/14] COPY --from=web /web/dist/sdk ./static/sdk                                                                                                             0.1s
+ => [stage-1 12/14] COPY scripts/ ./scripts/                                                                                                                               0.1s
+ => [stage-1 13/14] RUN chmod +x scripts/*.sh && mkdir -p /data/uploads /data/exports   && chown -R app:app /data /app                                                     1.6s
+ => [stage-1 14/14] WORKDIR /app/backend                                                                                                                                   0.1s
+ => exporting to image                                                                                                                                                     1.5s
+ => => exporting layers                                                                                                                                                    0.6s
+ => => exporting manifest sha256:53bc752f94d994c9265785b55931ec298aaacf6aabe7cb329d051e2f0926d4ff                                                                          0.0s
+ => => exporting config sha256:898152b3da67bcf07e64d5a6ed02790e7981de2a859ceab2b11f8d6baff3fe4c                                                                            0.0s
+ => => exporting attestation manifest sha256:cee5a16944140ec5a2d1f1b5fd5315dcd954b4e14869c495ec1001134692c1f3                                                              0.0s
+ => => exporting manifest list sha256:7bc4289ee93bb155b3f4a3e1cf58ecb704d031341479b6a056a3be15ec3615d2                                                                     0.0s
+ => => naming to docker.io/library/audience-hub:latest                                                                                                                     0.0s
+ => => unpacking to docker.io/library/audience-hub:latest                                                                                                                  0.8s
+ => resolving provenance for metadata file                                                                                                                                 0.0s
+[+] up 5/5
+ ✔ Image audience-hub:latest       Built                                                                                                                                   14.7s
+ ✔ Container audience-hub-db-1     Healthy                                                                                                                                  3.3s
+ ✔ Container audience-hub-backup-1 Running                                                                                                                                  0.0s
+ ✔ Container audience-hub-api-1    Healthy                                                                                                                                 18.3s
+ ✔ Container audience-hub-worker-1 Started                                                                                                                                 17.6s
+obtv-admin@audiencehub:~/audiencehub/artifacts/audience-hub$ docker compose exec api kinship verify-seed
+Read-only repeatable-read snapshot; amounts are currency units, not cents.
+Lifetime reconciliation includes undated gifts and gifts through today UTC.
+Gift count: 118,474; ledger rows (including returns): 118,526
+Gift amount min/median/max (excluding return rows): 1.00 / 49.77 / 21862.80
+Negative amounts: 52; without refund evidence: 0
+Invalid/unlinked/over-refunded original gifts: 52
+Profiles with lifetime giving mismatch or missing traits: 0
+Profiles with donation_events source but zero gifts: 173,903
+Unattached gift/return rows: 0
+Donation-source profiles without gifts (first 20):
+  kin_01M56WKEXPEJBXXQTFGGKJMB8W profile=1
+  kin_01M56WKEXPCYB3Z2FFSQMD6BAT profile=7
+  kin_01M56WKEXPDFPPTMB6TS7G4NE7 profile=9
+  kin_01M56WKEXPWKMYAN13GBNE353Z profile=12
+  kin_01M56WKEXP1PTHWWW86SBAS9AB profile=18
+  kin_01M56WKEXPA07NW9VV528HKJVQ profile=20
+  kin_01M56WKEXPC3DAMP4J7Y2AEYD8 profile=30
+  kin_01M56WKEXP1V95CV0S05Y6RJDJ profile=32
+  kin_01M56WKEXP9XTXYJ1B7AJ1P7KT profile=34
+  kin_01M56WKEXP53KC4ZAQ70VNFZ2R profile=45
+  kin_01M56WKEXPC7EQCW2G3N15W74E profile=50
+  kin_01M56WKEXPQHTSJKNPVD02WXAX profile=52
+  kin_01M56WKEXPEWQDB5GETBR38S8M profile=54
+  kin_01M56WKEXP064F4726C2SS42FC profile=58
+  kin_01M56WKEXPC6R9DVT9YJHZMPMG profile=59
+  kin_01M56WKEXPJZC7AA3YVME20R40 profile=60
+  kin_01M56WKEXP1V42TNTFTR1KA3PG profile=64
+  kin_01M56WKEXPC3RA78YGSRTMM3QF profile=66
+  kin_01M56WKEXPKCQPHJ8ZAKF7BMGC profile=67
+  kin_01M56WKEXPSCWX2VC25ZTY44Q6 profile=68
+FAIL: discrepancies found; no changes made.
