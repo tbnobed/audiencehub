@@ -2,7 +2,6 @@
 import csv
 import hashlib
 import json
-import math
 import os
 import random
 from contextlib import ExitStack
@@ -12,6 +11,7 @@ from pathlib import Path
 from app.canonical import FIELDS
 from app.seed_audit_people import display_person
 from app.seed_dates import seed_window
+from app.seed_audit_giving import AuditGiving
 
 DENOMINATOR = 7807899
 TARGETS = {
@@ -69,6 +69,7 @@ def generate_audit_seed(profiles, scale, random_seed, output_dir, as_of):
     nonapp = t["TBN App Non-Donors"]
     freepartner = t["TBN Plus Free Users"] - basic - nonapp
     recent = t["Donors Past 30 Days"]
+    giving = AuditGiving(profiles, t, w, random_seed, GT, GT_CODES)
     rng = random.Random(random_seed)
     counts = dict.fromkeys(AUDIT_FILES, 0)
     headers = [
@@ -127,17 +128,21 @@ def generate_audit_seed(profiles, scale, random_seed, output_dir, as_of):
         def money(cents):
             return f"{cents // 100}.{cents % 100:02d}"
 
-        def donation(i, day, suffix, code="SYN-GEN", refund=False, original=None):
+        def donation(i, day, suffix, code="SYN-GEN", refund=False, original=None,
+                     amount_cents=None, is_recurring=False):
             # CSV and event amounts are USD, not cents. Keep arithmetic in cents
-            # internally; the narrower distribution retains a $50 median.
+            # internally; amounts and frequency come from the cohort-safe plan.
             if refund:
                 if (original is None or original["owner"] != i or original["is_refund"] or
                         original["returned"] or day < original["day"]):
                     raise ValueError("Return requires this person's unreturned original gift")
                 cents, code = original["cents"], original["code"]
+                is_recurring = original["is_recurring"]
                 original["returned"] = True
             else:
-                cents = round(max(5, min(1000, rng.lognormvariate(math.log(50), .55))) * 100)
+                if amount_cents is None or amount_cents <= 0:
+                    raise ValueError("Donation requires a positive planned amount")
+                cents = amount_cents
             name = "donation_return" if refund else "donation"
             eid = f"{name}-{i}-{suffix}"
             gift_id = f"gift:{eid}"
@@ -155,14 +160,12 @@ def generate_audit_seed(profiles, scale, random_seed, output_dir, as_of):
                           fund="General", campaign="Giving Tuesday 2024" if code in GT_CODES else
                           "Year-End Giving" if code == "SYN-YE" else "General Giving",
                           source_code=code, channel="online",
-                          is_recurring=i < t["Basic Recurring Donors"], is_refund=refund,
+                          is_recurring=is_recurring, is_refund=refund,
                           original_donation_id=original["gift_id"] if refund else ""))
             event(i, name, day, props, suffix)
             return {"gift_id": gift_id, "owner": i, "day": day, "cents": cents,
-                    "code": code, "returned": False, "is_refund": refund}
+                    "code": code, "returned": False, "is_refund": refund, "is_recurring": is_recurring}
 
-        recent_gifts = round(profiles * 3000 * 30 / 7830000)
-        return_gifts = round(profiles * 27 * 30 / 7830000)
         for i in range(profiles):
             giver = i < g
             account = i < g + partner
@@ -236,46 +239,32 @@ def generate_audit_seed(profiles, scale, random_seed, output_dir, as_of):
                               vendor="kinship-synthetic-demo", license_id="synthetic-demo-only",
                               append_date=str(w.end), sensitive=False))
             if giver:
-                # Five-year history with 40% of dates concentrated in Nov/Dec.
-                day = w.start + timedelta(days=rng.randrange(max(1, (w.as_of-w.start).days-721)))
-                if rng.random() < .4:
-                    candidate = date(day.year, rng.choice((11, 12)), rng.randrange(1, 29))
-                    if w.start <= candidate <= w.as_of-timedelta(days=721):
-                        day = candidate
-                code = "SYN-YE" if day.month >= 11 else "SYN-GEN"
-                amount = donation(i, day, "history", code)["cents"]
-                lifetime, gifts, lastday, lastamount, lastcode = amount, 1, day, amount, code
-                if i < t["Giving Tuesday 2024"] and w.start <= GT <= w.end:
-                    amount = donation(i, GT, "gt", GT_CODES[i % 4])["cents"]
-                    lifetime += amount
+                lifetime, gifts, lastday, lastamount, lastcode = 0, 0, w.start, 0, ""
+                amount_rng = random.Random(giving.rank[i] ^ 0xA510)
+                for planned in giving.gifts(i):
+                    original = donation(i, planned.day, planned.suffix, planned.code,
+                                        amount_cents=giving.amount(amount_rng),
+                                        is_recurring=planned.is_recurring)
+                    if planned.refund_day is not None:
+                        donation(i, planned.refund_day, planned.suffix, refund=True, original=original)
+                        continue
+                    lifetime += original["cents"]
                     gifts += 1
-                    if GT >= lastday:
-                        lastday, lastamount, lastcode = GT, amount, GT_CODES[i % 4]
-                # The recent app donor audience is a strict subset of recent
-                # donors: remaining recent donors have no TBN+ subscription.
-                app_recent = min(recent, t["TBN App Donors"])
-                recent_rank = (i if i < app_recent else
-                               app_recent+i-basic-premium if basic+premium <= i <
-                               basic+premium+recent-app_recent else None)
-                if recent_rank is not None:
-                    for j in range(recent_rank, recent_gifts, recent):
-                        day = w.end - timedelta(days=j % 30)
-                        original = donation(i, day, f"recent-{j}")
-                        if j < return_gifts:
-                            # Pair before writing the primary contact. Historical
-                            # and GT gifts remain intact, preserving cohort/key
-                            # coverage. Only one current gift is retained in memory.
-                            donation(i, day, f"recent-{j}", refund=True, original=original)
-                            continue
-                        amount = original["cents"]
-                        lifetime += amount
-                        gifts += 1
-                        if day >= lastday:
-                            lastday, lastamount, lastcode = day, amount, "SYN-GEN"
+                    if planned.day >= lastday:
+                        lastday, lastamount, lastcode = planned.day, original["cents"], planned.code
+                recency = (w.as_of-lastday).days
+                status = "lapsed" if recency > 730 else "lapsing" if recency > 365 else "active"
                 row.update(last_donation_date=str(lastday), last_donation_amount=money(lastamount),
                            last_donation_source=lastcode, lifetime_amount=money(lifetime),
                            lifetime_avg_donation=money((2*lifetime+gifts)//(2*gifts)),
-                           number_of_donations=gifts)
+                           number_of_donations=gifts, rfm_raw_frequency=gifts,
+                           rfm_raw_recency=recency, rfm_raw_monetary=money(lifetime),
+                           rfm_recency_score=0 if recency > 730 else 1 if recency > 365 else 5,
+                           rfm_frequency_score=1 if gifts == 1 else 2 if gifts <= 3 else 4 if gifts < 20 else 5,
+                           rfm_monetary_score=1 if lifetime < 10000 else 3 if lifetime < 100000 else 5,
+                           rfm_bi_segment=status, donor_account_status=status, donor_status=status)
+                row["rfm_rfm_score"] = (row["rfm_recency_score"] * 100 +
+                                        row["rfm_frequency_score"] * 10 + row["rfm_monetary_score"])
             write("donor_direct.csv", row)
             if i < t["Customers with VOD Viewed"]:
                 event(i, "vod_viewed", w.end, {"vod_title_id": "SYN-VOD"})
@@ -297,11 +286,20 @@ def generate_audit_seed(profiles, scale, random_seed, output_dir, as_of):
             i = j % max(1, recent)
             day = w.end - timedelta(days=j % 30)
             event(i, "order_shipped", day, {"product_id": "SYN-BOOK", "amount": 25}, str(j))
+        expected_financial_rows = giving.donations + giving.return_count
+        if (giving.amount_ordinal != giving.donations or giving.return_ordinal != giving.return_count
+                or counts["donation_events_gifts.csv"] != expected_financial_rows
+                or counts["donation_events.csv"] != expected_financial_rows):
+            raise ValueError("Gift plan quotas and emitted financial rows disagree")
     metadata = {"as_of": str(w.as_of), "start_date": str(w.start), "end_date": str(w.end),
                 "mode": "audit", "requested_people": profiles, "random_seed": random_seed,
                 "scale": scale, "denominator": DENOMINATOR,
                 "scale_policy": "Audit ratios and daily rates are invariant across density labels.",
-                "generation_memory": "O(1) population memory; rows and identity truth are not accumulated.",
+                "generation_memory": "O(donors) integer gift quotas; CSV rows/identity truth are streamed.",
+                "giving_targets": {"donations": giving.donations, "returns": giving.return_count,
+                                   "recent_donations": giving.recent_donations,
+                                   "single_givers": len(giving.singles),
+                                   "gifts_1000_plus": giving.tail_count, "gifts_10000_plus": giving.major_count},
                 "ground_truth_format": "Compact deterministic identity rule, not an in-memory event dictionary.",
                 "giving_tuesday_in_window": w.start <= GT <= w.end,
                 "source_file_mapping": {

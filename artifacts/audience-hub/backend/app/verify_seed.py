@@ -31,6 +31,9 @@ def verify_seed(timeout_seconds=600):
                   percentile_cont(0.5) WITHIN GROUP (ORDER BY amount)
                     FILTER (WHERE COALESCE(attributes->>'is_refund','false')<>'true') AS median,
                   max(amount) FILTER (WHERE COALESCE(attributes->>'is_refund','false')<>'true') AS maximum,
+                  count(*) FILTER (WHERE amount>=1000 AND COALESCE(attributes->>'is_refund','false')<>'true') AS gifts_1000,
+                  count(*) FILTER (WHERE amount>=10000 AND COALESCE(attributes->>'is_refund','false')<>'true') AS gifts_10000,
+                  count(*) FILTER (WHERE COALESCE(attributes->>'is_refund','false')='true') AS returns,
                   count(*) FILTER (WHERE amount<0) AS negative_amounts,
                   count(*) FILTER (WHERE amount<0 AND COALESCE(attributes->>'is_refund','false')<>'true')
                     AS unexplained_negatives,
@@ -76,6 +79,63 @@ def verify_seed(timeout_seconds=600):
             print("Lifetime reconciliation includes undated gifts and gifts through today UTC.")
             print(f"Gift count: {stats['gift_count']:,}; ledger rows (including returns): {stats['ledger_rows']:,}")
             print(f"Gift amount min/median/max (excluding return rows): {stats['minimum']} / {stats['median']} / {stats['maximum']}")
+            distribution = db.execute(text("""
+                WITH positive AS (
+                  SELECT g.* FROM gifts g WHERE g.profile_id IS NOT NULL AND g.amount>0
+                    AND COALESCE(g.attributes->>'is_refund','false')<>'true'
+                ), retained AS (
+                  SELECT g.* FROM positive g WHERE NOT EXISTS (
+                    SELECT 1 FROM gifts r WHERE r.source_id=g.source_id AND r.profile_id=g.profile_id
+                      AND (r.amount<0 OR r.attributes->>'is_refund'='true')
+                      AND (r.attributes->>'original_gift_external_id'=g.external_id
+                           OR r.attributes->>'original_donation_id'=g.external_id)
+                  )
+                ), gross_counts AS (
+                  SELECT profile_id,count(*) AS n FROM positive GROUP BY profile_id
+                ), retained_counts AS (
+                  SELECT profile_id,count(*) AS n FROM retained GROUP BY profile_id
+                )
+                SELECT
+                  (SELECT percentile_cont(.5) WITHIN GROUP(ORDER BY n) FROM gross_counts) AS gross_median,
+                  (SELECT percentile_cont(.95) WITHIN GROUP(ORDER BY n) FROM gross_counts) AS gross_p95,
+                  count(*) AS donors,
+                  percentile_cont(.5) WITHIN GROUP(ORDER BY n) AS median,
+                  percentile_cont(.95) WITHIN GROUP(ORDER BY n) AS p95,
+                  count(*) FILTER(WHERE n=1) AS single_givers,
+                  count(*) FILTER(WHERE n>=20) AS frequent_givers
+                FROM retained_counts
+            """)).mappings().one()
+            seasonal = db.execute(text("""
+                SELECT extract(year FROM g.gift_date)::int AS year,
+                  count(*) AS gifts,sum(g.amount) AS dollars,
+                  sum(g.amount) FILTER(WHERE extract(month FROM g.gift_date) IN (11,12)) AS year_end,
+                  min(g.gift_date) AS first_date,max(g.gift_date) AS last_date
+                FROM gifts g WHERE g.amount>0 AND NOT g.is_recurring
+                  AND COALESCE(g.attributes->>'is_refund','false')<>'true'
+                  AND NOT EXISTS (
+                    SELECT 1 FROM gifts r WHERE r.source_id=g.source_id AND r.profile_id=g.profile_id
+                      AND (r.amount<0 OR r.attributes->>'is_refund'='true')
+                      AND (r.attributes->>'original_gift_external_id'=g.external_id
+                           OR r.attributes->>'original_donation_id'=g.external_id))
+                  AND g.gift_date IS NOT NULL
+                GROUP BY extract(year FROM g.gift_date) ORDER BY year
+            """)).mappings().all()
+            pct = lambda numerator, denominator: 100 * float(numerator or 0) / denominator if denominator else 0
+            print(f"Gifts per donor (unreturned): median={distribution['median']}; p95={distribution['p95']}; donors={distribution['donors']:,}")
+            print(f"Gifts per donor (all positive originals): median={distribution['gross_median']}; p95={distribution['gross_p95']}")
+            print(f"One-time givers (one unreturned gift): {distribution['single_givers']:,} "
+                  f"({pct(distribution['single_givers'], distribution['donors']):.2f}%); "
+                  f"20+ unreturned gifts: {distribution['frequent_givers']:,}")
+            print(f"Gifts at 1,000+: {stats['gifts_1000']:,} ({pct(stats['gifts_1000'],stats['gift_count']):.3f}%); "
+                  f"at 10,000+: {stats['gifts_10000']:,} ({pct(stats['gifts_10000'],stats['gift_count']):.3f}%)")
+            print(f"Returns: {stats['returns']:,} ({pct(stats['returns'],stats['gift_count']):.3f}% of donations)")
+            print("Nov-Dec share of one-time dollars by year (unreturned gifts; boundary years may be partial):")
+            for year in seasonal:
+                print(f"  {year['year']}: {pct(year['year_end'],float(year['dollars'])):.2f}%; "
+                      f"one-time gifts={year['gifts']:,}; dollars={year['dollars']}; "
+                      f"observed={year['first_date']}..{year['last_date']}")
+            print(f"Nov-Dec share of one-time dollars, all years: "
+                  f"{pct(sum(float(y['year_end'] or 0) for y in seasonal), sum(float(y['dollars']) for y in seasonal)):.2f}%")
             print(f"Negative amounts: {stats['negative_amounts']:,}; without refund evidence: {stats['unexplained_negatives']:,}")
             print(f"Invalid/unlinked/over-refunded original gifts: {invalid_returns:,}")
             print(f"Profiles with lifetime giving mismatch or missing traits: {mismatch:,}")

@@ -22,3 +22,16 @@ recency templates and RFM misleading despite otherwise plausible distributions.
 traits, rollups and templates. Five rolling calendar years usually span six
 year labels; report partial boundary years separately instead of fabricating
 future gifts to satisfy full-year seasonality or growth targets.
+
+Gift-frequency/amount realism must not change the accepted audience recipient
+sets. Increase repeat donations within the existing recent cohort, not by
+spreading recent gifts to additional people. Preserve Basic One-Time membership
+when deriving imported frequency from the ledger.
+
+**Why:** The user explicitly required every audience membership, identity key
+proportion and as_of anchoring to stay fixed while increasing gift volume.
+
+**How to apply:** Non-lapsed imported RFM can include 13–24-month lapsing partners;
+do not treat all nonzero imported recency scores as active-in-12-month donors,
+which would silently expand the TBN+ 720-day donor audience. Report actual
+seasonal dollar shares separately from intended date weights.
