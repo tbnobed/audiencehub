@@ -389,8 +389,11 @@ docker compose start api worker
 docker compose exec -T api python -m app.cli verify-seed
 ```
 
-Both write flags and `APP_ENV=production` are required; apply refuses a Replit
-environment. The command never contacts Replit or another
+Both write flags are required; apply refuses a Replit-marked environment and
+reports which marker names caused the refusal (never their values). APP_ENV
+is not a server-location check: a self-hosted container using the default
+development setting receives a notice, without changing its auth configuration.
+The command never contacts Replit or another
 server: it uses this server's configured `DATABASE_URL`. Schedule a maintenance
 window with no imports, ingestion or queued/running jobs. Apply refuses busy
 jobs/imports, pending resolution and conflicting table locks; it takes a

@@ -119,12 +119,21 @@ def main():
             raise SystemExit(str(exc)) from None
         except SQLAlchemyError as exc:
             sqlstate = getattr(getattr(exc, "orig", None), "sqlstate", None)
+            if sqlstate is None and getattr(exc, "orig", None) is not None:
+                # Binding/compiler failures have no server SQLSTATE. Do not
+                # print the outer exception, which includes SQL and parameters.
+                original = exc.orig
+                from sqlalchemy.exc import InvalidRequestError
+                if isinstance(original, InvalidRequestError):
+                    raise SystemExit(
+                        f"Repair query construction failed: {original}. "
+                        "No repair was committed.") from None
             reason = {
                 "55P03": "Maintenance lock unavailable: concurrent database work is active.",
                 "57014": "Database query timeout/cancellation.",
                 "42501": "Database role lacks required permissions.",
                 "25006": "Database/role is read-only.",
-            }.get(sqlstate, "Database request failed.")
+            }.get(sqlstate, f"Database request failed ({type(exc).__name__}).")
             raise SystemExit(
                 f"{reason} Repair failed; transaction rolled back. "
                 f"SQLSTATE={sqlstate or 'unavailable'}. Check database availability, permissions, "

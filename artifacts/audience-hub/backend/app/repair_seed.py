@@ -108,7 +108,8 @@ gift_evidence AS MATERIALIZED (
     SELECT g.id,count(c.id) FILTER (WHERE r.profile_id=g.profile_id AND r.source_id=g.source_id
       AND r.attributes #>> '{_identity_reference,source_key}'='donor_direct'
       AND r.attributes #>> '{_identity_reference,contact_external_id}'=c.external_id
-      AND substring(g.external_id FROM 'donation(?:_return)?-([0-9]+)-')::bigint
+       AND substring(replace(g.external_id,'donation_return-','donation-')
+                     FROM 'donation-([0-9]+)-')::bigint
           =substring(c.external_id FROM 5)::bigint) AS proven
     FROM gifts g JOIN affected a ON a.profile_id=g.profile_id
     LEFT JOIN source_records r ON r.id=g.source_record_id
@@ -254,12 +255,12 @@ def _preflight(db, params):
             OR g.external_id !~ '^(gift:|donation:(_event:)?|donation_return:(_event:)?)?donation(_return)?-[0-9]+-(history|gt|recent-[0-9]+)$'
             OR v.proven<>1 OR COALESCE(rc.n,0)<>1
             OR (SELECT count(*) FROM events e WHERE e.source_id=g.source_id
-                AND e.message_id=substring(g.external_id FROM '(donation(?:_return)?-[0-9]+-(?:history|gt|recent-[0-9]+))$'))<>1
+                 AND e.message_id=substring(g.external_id FROM '(donation(_return)?-[0-9]+-(history|gt|recent-[0-9]+))$'))<>1
             OR (SELECT count(*) FROM events e WHERE e.source_id=g.source_id
                 AND e.profile_id=g.profile_id AND e.context @> jsonb_build_object('synthetic',true)
                 AND e.name=CASE WHEN g.attributes->>'is_refund'='true'
                                THEN 'donation_return' ELSE 'donation' END
-                AND e.message_id=substring(g.external_id FROM '(donation(?:_return)?-[0-9]+-(?:history|gt|recent-[0-9]+))$'))<>1
+                 AND e.message_id=substring(g.external_id FROM '(donation(_return)?-[0-9]+-(history|gt|recent-[0-9]+))$'))<>1
             OR (g.amount<=0 AND COALESCE(g.attributes->>'is_refund','false')<>'true')
         """,
         "unguarded refund event source-record mirrors": """
@@ -430,9 +431,15 @@ def repair_seed(*, apply=False, yes=False, timeout_seconds=7200):
     if not 1 <= timeout_seconds <= 14400:
         raise ValueError("--timeout-seconds must be between 1 and 14400")
     settings = get_settings()
-    if apply and (settings.app_env != "production" or any(os.environ.get(key) for key in
-            ("REPL_ID", "REPLIT_DEPLOYMENT", "REPLIT_DEV_DOMAIN", "REPLIT_DOMAINS"))):
-        raise ValueError("Apply is permitted only on your production server (APP_ENV=production), not Replit.")
+    replit_markers = [key for key in
+        ("REPL_ID", "REPLIT_DEPLOYMENT", "REPLIT_DEV_DOMAIN", "REPLIT_DOMAINS")
+        if os.environ.get(key)]
+    if apply and replit_markers:
+        raise ValueError("Apply refused in a Replit-marked environment: " +
+                         ", ".join(replit_markers) + ". No changes made.")
+    if apply and settings.app_env != "production":
+        print("NOTICE: APP_ENV is not production. Explicit --apply --yes authorizes "
+              "only this guarded synthetic repair; application configuration is unchanged.")
     url = make_url(settings.database_url.replace(
         "postgres://", "postgresql+psycopg://", 1).replace(
         "postgresql://", "postgresql+psycopg://", 1))
