@@ -10,6 +10,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from app.canonical import FIELDS
+from app.seed_audit_people import display_person
 from app.seed_dates import seed_window
 
 DENOMINATOR = 7807899
@@ -29,6 +30,16 @@ TARGETS = {
 }
 GT = date(2024, 12, 3)
 GT_CODES = ("T4XWDGT", "T4XPCGT", "T4YWDGT", "T4YPCGT")
+AUDIT_FILES = {
+    "donor_direct.csv": ("donor_direct", "contact"),
+    "donation_events_gifts.csv": ("donation_events", "gift"),
+    "people_feed.csv": ("people_feed", "contact"),
+    "hubspot.csv": ("hubspot", "contact"),
+    "okta_tbn_plus.csv": ("okta_tbn_plus", "contact"),
+    "donation_events.csv": ("donation_events", "event"),
+    "vod_viewed_events.csv": ("vod_viewed_events", "event"),
+    "model_scores.csv": ("model_scores", "enrichment"),
+}
 RESOURCES = {
     "source_codes": [{"key": code, "name": "Giving Tuesday 2024",
                       "attributes": {"synthetic": True, "campaign_date": str(GT)}}
@@ -42,7 +53,6 @@ RESOURCES = {
 
 
 def generate_audit_seed(profiles, scale, random_seed, output_dir, as_of):
-    from app.seed import CSV_FILES
     if profiles < 1 or scale not in ("small", "medium", "large"):
         raise ValueError("Positive --profiles and small/medium/large --scale required")
     w = seed_window(as_of)
@@ -59,7 +69,7 @@ def generate_audit_seed(profiles, scale, random_seed, output_dir, as_of):
     freepartner = t["TBN Plus Free Users"] - basic - nonapp
     recent = t["Donors Past 30 Days"]
     rng = random.Random(random_seed)
-    counts = dict.fromkeys(CSV_FILES, 0)
+    counts = dict.fromkeys(AUDIT_FILES, 0)
     headers = [
         ("external_id", "email", "phone", "first_name", "last_name", "zeta_cdp_id",
          "zeta_uid", "donor_account_number", "okta_customer_id", "hubspot_record_id",
@@ -73,26 +83,38 @@ def generate_audit_seed(profiles, scale, random_seed, output_dir, as_of):
         ("external_id", "contact_external_id", "hh_income_band", "age_band",
          "interests", "donor_propensity_score", "vendor", "license_id", "append_date", "sensitive"),
     ]
+    # Reassign the accepted rows without adding/removing identity evidence.
+    file_headers = {
+        "donor_direct.csv": headers[0],
+        "donation_events_gifts.csv": headers[1],
+        "people_feed.csv": headers[2],
+        "hubspot.csv": headers[2],
+        "okta_tbn_plus.csv": headers[2],
+        "donation_events.csv": headers[3],
+        "vod_viewed_events.csv": headers[3],
+        "model_scores.csv": headers[4],
+    }
     with ExitStack() as stack:
-        writers = []
-        for filename, cols in zip(CSV_FILES, headers):
+        writers = {}
+        for filename, cols in file_headers.items():
             # Identity fields can also enter the canonical catalog. Preserve
             # first occurrence/order and emit their single row value only once.
             cols = tuple(dict.fromkeys(cols))
             handle = stack.enter_context((dest / filename).open("w", newline="", encoding="utf-8"))
             writer = csv.DictWriter(handle, fieldnames=cols, lineterminator="\n")
             writer.writeheader()
-            writers.append(writer)
+            writers[filename] = writer
 
         def write(file, row):
             writers[file].writerow({k: str(v).lower() if isinstance(v, bool) else v
                                    for k, v in row.items()})
-            counts[CSV_FILES[file]] += 1
+            counts[file] += 1
 
         def event(i, name, day, props=None, suffix=""):
             eid = f"{name}-{i}-{suffix}"
             stamp = f"{day}T12:00:00Z"
-            write(3, dict(external_id=eid, contact_external_id=f"crm-{i:08d}",
+            filename = "vod_viewed_events.csv" if name == "vod_viewed" else "donation_events.csv"
+            write(filename, dict(external_id=eid, contact_external_id=f"crm-{i:08d}",
                          message_id=eid, type="track", name=name, occurred_at=stamp,
                          received_at=stamp, properties=json.dumps(props or {}),
                          context='{"synthetic":true}'))
@@ -103,7 +125,7 @@ def generate_audit_seed(profiles, scale, random_seed, output_dir, as_of):
             eid = f"{name}-{i}-{suffix}"
             # CSV event imports do not materialize gifts. Write exactly one ledger
             # row here; the source-pull gift adapter is deliberately not invoked.
-            write(1, dict(external_id=eid, contact_external_id=f"crm-{i:08d}",
+            write("donation_events_gifts.csv", dict(external_id=f"gift:{eid}", contact_external_id=f"crm-{i:08d}",
                           amount=f"{amount:.2f}", currency="USD", gift_date=str(day),
                           fund="General", campaign="Giving Tuesday 2024" if code in GT_CODES else
                           "Year-End Giving" if code == "SYN-YE" else "General Giving",
@@ -119,13 +141,14 @@ def generate_audit_seed(profiles, scale, random_seed, output_dir, as_of):
             ispremium = basic <= i < basic + premium
             app = i < t["TBN App Donors"] or g + partner <= i < g + partner + nonapp
             active = i < t["Active (120 days)"]
-            email = f"synthetic-{i}@example.org"
+            person = display_person(i, random_seed)
+            email = person["email"]
             # Explicit household overlap, hash-only and duplicate HubSpot evidence.
             if i % 1000 == 999:
-                email = f"synthetic-{i-1}@example.org"
+                email = display_person(i-1, random_seed)["email"]
             known = i < round(profiles * .49)
-            row = dict(external_id=f"crm-{i:08d}", first_name="Synthetic",
-                       last_name=f"Person {i}", email="" if i % 200 == 199 else email,
+            row = dict(external_id=f"crm-{i:08d}", first_name=person["first_name"],
+                       last_name=person["last_name"], email="" if i % 200 == 199 else email,
                        email_sha256=hashlib.sha256(email.encode()).hexdigest(),
                        zeta_cdp_id=f"cdp-{i}" if i < round(profiles * .93) else "",
                        zeta_uid=f"uid-{i}" if i >= round(profiles * .93) else "",
@@ -140,6 +163,8 @@ def generate_audit_seed(profiles, scale, random_seed, output_dir, as_of):
                        mobile_mktg_optin_tbn=i < t["Mobile Subscribed"],
                        mobile_consent=i < t["Mobile Subscribed"],
                        tbn_call_center_sms_optin=i < t["Call Center SMS Opt-ins"])
+            row.update({key: person[key] for key in
+                        ("address1", "city", "region", "postal_code", "country")})
             # Disjoint opt-out and subscribed cohorts.
             if t["Call Center SMS Opt-ins"] <= i < t["Call Center SMS Opt-ins"] + t["SMS Opt-Out Date Exists"]:
                 row["mobile_mktg_optout_date_tbn"] = f"{w.end}T12:00:00Z"
@@ -165,14 +190,18 @@ def generate_audit_seed(profiles, scale, random_seed, output_dir, as_of):
                            donation_likelihood_model_date=str(w.end),
                            wealth_score_model_date=str(w.end), donation_ask_model_date=str(w.end))
             if i < t["Has Active Email"]:
-                write(2, dict(external_id=f"esp-{i}", contact_external_id=f"crm-{i:08d}",
+                # Only partition the existing secondary contact rows. Keep
+                # every row's keys, reference and consent evidence unchanged.
+                secondary_file = ("okta_tbn_plus.csv" if app and row["okta_customer_id"] else
+                                  "hubspot.csv" if i % 2 else "people_feed.csv")
+                write(secondary_file, dict(external_id=f"esp-{i}", contact_external_id=f"crm-{i:08d}",
                               email=row["email"], email_consent="opted_in",
                               zeta_cdp_id=row["zeta_cdp_id"], zeta_uid=row["zeta_uid"],
                               email_sha256=row["email_sha256"],
                               hubspot_record_id=row["hubspot_record_id"] if i % 10000 == 9999 else "",
                               consent_captured_at=f"{w.end}T12:00:00Z"))
             if known:
-                write(4, dict(external_id=f"zeta-{i}", contact_external_id=f"crm-{i:08d}",
+                write("model_scores.csv", dict(external_id=f"zeta-{i}", contact_external_id=f"crm-{i:08d}",
                               hh_income_band="75k_149k", age_band="55_64", interests="media",
                               donor_propensity_score=f"{rng.random():.4f}",
                               vendor="kinship-synthetic-demo", license_id="synthetic-demo-only",
@@ -210,7 +239,7 @@ def generate_audit_seed(profiles, scale, random_seed, output_dir, as_of):
                 row.update(last_donation_date=str(lastday), last_donation_amount=lastamount,
                            last_donation_source=lastcode, lifetime_amount=round(lifetime, 2),
                            lifetime_avg_donation=round(lifetime/gifts, 2), number_of_donations=gifts)
-            write(0, row)
+            write("donor_direct.csv", row)
             if i < t["Customers with VOD Viewed"]:
                 event(i, "vod_viewed", w.end, {"vod_title_id": "SYN-VOD"})
             if i < t["Mobile Subscribed"]:
@@ -243,6 +272,11 @@ def generate_audit_seed(profiles, scale, random_seed, output_dir, as_of):
                 "generation_memory": "O(1) population memory; rows and identity truth are not accumulated.",
                 "ground_truth_format": "Compact deterministic identity rule, not an in-memory event dictionary.",
                 "giving_tuesday_in_window": w.start <= GT <= w.end,
+                "source_file_mapping": {
+                    name: {"source": source, "record_type": record_type}
+                    for name, (source, record_type) in AUDIT_FILES.items()},
+                "reference_source": "donor_direct",
+                "source_record_count": sum(counts.values()),
                 "files": {name: {"rows_generated": count, "messiness_injected": {}}
                           for name, count in counts.items()}}
     for name, data in (("generator_stats.json", metadata), ("resources.json", RESOURCES),
@@ -250,7 +284,10 @@ def generate_audit_seed(profiles, scale, random_seed, output_dir, as_of):
                         "identity_rule": "crm-{zero_based_index:08d}; synthetic only",
                         "household_rule": "Indices 1000*k+998 and 1000*k+999 share email; distinct Zeta IDs",
                         "hash_only_rule": "index % 200 == 199",
-                        "hubspot_duplicate_rule": "index % 10000 == 9999 repeats CRM HubSpot ID on ESP record of same person",
+                        "hubspot_duplicate_rule": "index % 10000 == 9999 repeats donor_direct HubSpot ID on the partitioned secondary contact record of same person",
+                        "source_file_mapping": metadata["source_file_mapping"],
+                        "reference_source": "donor_direct",
+                        "secondary_contact_rule": "Existing esp-{index} rows only: okta_tbn_plus when app and okta_customer_id; otherwise hubspot for odd index and people_feed for even index",
                         "as_of": str(w.as_of)})):
         (dest/name).write_text(json.dumps(data, indent=2)+"\n")
     return {**metadata, "output_dir": dest, "files": {name: dest/name for name in counts},

@@ -14,20 +14,49 @@ from pathlib import Path
 def measure_audit(directory):
     directory = Path(directory)
     metadata = json.loads((directory / "generator_stats.json").read_text())
+    audit_files = metadata.get("source_file_mapping")
+    if audit_files is None:
+        inputs = (("c", "donor_crm_contacts.csv"), ("g", "giving_platform_gifts.csv"),
+                  ("e", "five9_calls.csv"), ("z", "zeta_enrichment.csv"))
+        gift_event_key = "e.external_id"
+        event_gift_join = "e.external_id=g.external_id"
+    else:
+        expected = {
+            "donor_direct.csv": ("donor_direct", "contact"),
+            "people_feed.csv": ("people_feed", "contact"),
+            "hubspot.csv": ("hubspot", "contact"),
+            "okta_tbn_plus.csv": ("okta_tbn_plus", "contact"),
+            "donation_events_gifts.csv": ("donation_events", "gift"),
+            "donation_events.csv": ("donation_events", "event"),
+            "vod_viewed_events.csv": ("vod_viewed_events", "event"),
+            "model_scores.csv": ("model_scores", "enrichment"),
+        }
+        if (audit_files != {name: {"source": source, "record_type": kind}
+                            for name, (source, kind) in expected.items()}
+                or metadata.get("reference_source") != "donor_direct"):
+            raise ValueError("Unsupported audit source-file/reference contract")
+        inputs = (("c", "donor_direct.csv"), ("g", "donation_events_gifts.csv"),
+                  ("e", "donation_events.csv"), ("e", "vod_viewed_events.csv"),
+                  ("z", "model_scores.csv"))
+        gift_event_key = "'gift:' || e.external_id"
+        # Keep the reverse lookup indexed on the unmodified event key.
+        event_gift_join = "e.external_id=substr(g.external_id,6) AND substr(g.external_id,1,5)='gift:'"
     reference = date.fromisoformat(metadata["as_of"])
     catalog = json.loads((Path(__file__).resolve().parents[2] /
                           "docs/ZETA_AUDIENCE_TARGETS.json").read_text())
     with tempfile.TemporaryDirectory(prefix="seed-oracle-") as temp:
         db = sqlite3.connect(str(Path(temp) / "oracle.sqlite"))
         try:
-            for table, filename in (("c", "donor_crm_contacts.csv"),
-                                    ("g", "giving_platform_gifts.csv"),
-                                    ("e", "five9_calls.csv"),
-                                    ("z", "zeta_enrichment.csv")):
+            table_columns = {}
+            for table, filename in inputs:
                 with (directory / filename).open(newline="") as handle:
                     reader = csv.DictReader(handle)
                     columns = reader.fieldnames
-                    db.execute(f"CREATE TABLE {table} ({','.join(chr(34)+c+chr(34)+' TEXT' for c in columns)})")
+                    if table not in table_columns:
+                        db.execute(f"CREATE TABLE {table} ({','.join(chr(34)+c+chr(34)+' TEXT' for c in columns)})")
+                        table_columns[table] = columns
+                    elif columns != table_columns[table]:
+                        raise ValueError(f"Incompatible split event columns in {filename}")
                     db.executemany(f"INSERT INTO {table} VALUES ({','.join('?' for _ in columns)})",
                                    (tuple(row[c] for c in columns) for row in reader))
             db.commit()
@@ -122,10 +151,10 @@ def measure_audit(directory):
                 f"SELECT count(*) FROM {table} LEFT JOIN c ON c.external_id={table}.contact_external_id "
                 "WHERE c.external_id IS NULL") for table in ("g", "e", "z"))
             ledger_mismatches = count(
-                "SELECT count(*) FROM e LEFT JOIN g ON g.external_id=e.external_id "
+                f"SELECT count(*) FROM e LEFT JOIN g ON g.external_id={gift_event_key} "
                 "WHERE e.name IN ('donation','donation_return') AND g.external_id IS NULL")
             ledger_mismatches += count(
-                "SELECT count(*) FROM g LEFT JOIN e ON g.external_id=e.external_id "
+                f"SELECT count(*) FROM g LEFT JOIN e ON {event_gift_join} "
                 "WHERE e.external_id IS NULL")
             duplicate_gifts = count("SELECT count(*)-count(DISTINCT external_id) FROM g")
             date_violations = count(

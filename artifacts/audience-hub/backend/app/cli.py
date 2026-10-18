@@ -213,7 +213,8 @@ def main():
                 from app.ingestion.seed_events import send_events
                 sent = send_events(profiles=args.profiles, random_seed=args.random_seed, host=args.events_host,
                                    as_of=reference,
-                                   contacts_path=result["files"].get("donor_crm_contacts.csv"))
+                                   contacts_path=(result["files"].get("donor_direct.csv")
+                                                  or result["files"].get("donor_crm_contacts.csv")))
                 print(f"Event API accepted {sent:,} synthetic messages.")
         except (ValueError, RuntimeError) as exc:
             raise SystemExit(str(exc)) from exc

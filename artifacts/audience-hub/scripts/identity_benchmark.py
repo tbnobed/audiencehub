@@ -32,13 +32,13 @@ def child(args):
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     if args.phase == "load":
-        from app.importer import _mapping, SEED_SOURCES
+        from app.importer import _mapping, LEGACY_SEED_SOURCES
         from app.imports.service import csv_reader, run_import
         start = time.perf_counter()
         if args.small:
             from app.seed import generate_seed
             generate_seed(profiles=args.small, scale="small", random_seed=20250308,
-                          output_dir=args.seed_dir)
+                          output_dir=args.seed_dir, mode="legacy")
         imports = []
         for filename in FILES:
             path = (args.seed_dir / filename).resolve()
@@ -49,7 +49,7 @@ def child(args):
                 rows.close()
             with path.open("rb") as stream:
                 digest = hashlib.file_digest(stream, "sha256").hexdigest()
-            key, name, kind = SEED_SOURCES[filename]
+            key, name, kind = LEGACY_SEED_SOURCES[filename]
             with Session(engine) as db:
                 sid = db.execute(text("SELECT id FROM sources WHERE key=:key"), {"key": key}).scalar()
                 if sid is None:

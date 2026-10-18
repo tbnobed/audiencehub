@@ -272,6 +272,7 @@ def resolve_bulk(db: Session, job_id: int | None = None, *, mode: str = "auto",
         k.value,s.source_id,min(s.created_at),max(s.updated_at)
       FROM ir_keys k JOIN source_records s ON s.id=k.record_id
       JOIN profiles p ON p.id=s.profile_id
+      WHERE k.kind <> 'external'
       GROUP BY p.master_id,k.kind,k.value,s.source_id
       ON CONFLICT(master_id,key_type,key_value,source_id) DO UPDATE SET
         first_seen_at=least(identity_xref.first_seen_at,EXCLUDED.first_seen_at),

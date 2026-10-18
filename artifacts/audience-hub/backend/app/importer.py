@@ -21,6 +21,16 @@ from app.jobs.queue import enqueue
 
 
 SEED_SOURCES = {
+    "people_feed.csv": ("people_feed", "people_feed", "contact"),
+    "donor_direct.csv": ("donor_direct", "donor_direct", "contact"),
+    "hubspot.csv": ("hubspot", "hubspot", "contact"),
+    "okta_tbn_plus.csv": ("okta_tbn_plus", "okta_tbn_plus", "contact"),
+    "donation_events_gifts.csv": ("donation_events", "donation_events", "gift"),
+    "donation_events.csv": ("donation_events", "donation_events", "event"),
+    "vod_viewed_events.csv": ("vod_viewed_events", "vod_viewed_events", "event"),
+    "model_scores.csv": ("model_scores", "model_scores", "enrichment"),
+}
+LEGACY_SEED_SOURCES = {
     "donor_crm_contacts.csv": ("donor_crm", "Donor CRM", "contact"),
     "giving_platform_gifts.csv": ("giving_platform", "Giving Platform", "gift"),
     "esp_contacts.csv": ("esp", "Email Service Provider", "contact"),
@@ -45,7 +55,8 @@ def _error_csv_contains_row_error(path: Path, row_number: int) -> bool:
     return False
 
 
-def _mapping(headers: list[str], record_type: str) -> dict:
+def _mapping(headers: list[str], record_type: str, *,
+             reference_source: str = "donor_crm") -> dict:
     columns = suggest_mapping(headers, record_type)
     options = {}
     if record_type == "contact":
@@ -72,14 +83,27 @@ def _mapping(headers: list[str], record_type: str) -> dict:
     if record_type in {"gift", "event", "enrichment"} and any(
         target == "contact_external_id" for target in columns.values()
     ):
-        options["reference_source"] = "donor_crm"
+        options["reference_source"] = reference_source
+    elif (record_type == "contact" and "contact_external_id" in headers
+          and reference_source != "donor_crm"):
+        # Secondary contacts still resolve by their existing identity keys.
+        # Keep the primary namespace explicit without changing contact mapping.
+        options["reference_source"] = reference_source
     return {"columns": validate_mapping(columns, record_type, headers), "options": options}
 
 
 def import_seed_files(files: Mapping[str, Path]) -> list[int]:
     """Create source/import rows, enqueue real import.run jobs, and await completion."""
-    if set(files) != set(SEED_SOURCES):
-        raise ValueError("Seed loader requires exactly the five generated CSV files")
+    if set(files) == set(SEED_SOURCES):
+        sources = SEED_SOURCES
+    elif set(files) == set(LEGACY_SEED_SOURCES):
+        sources = LEGACY_SEED_SOURCES
+    else:
+        raise ValueError("Seed loader requires exactly the audit source manifest or five legacy CSV files")
+    # Validate the complete file manifest before publishing any database work.
+    for filename in sources:
+        if not Path(files[filename]).resolve().is_file():
+            raise FileNotFoundError(files[filename])
     upload_dir = Path(get_settings().upload_dir).resolve()
     upload_dir.mkdir(parents=True, exist_ok=True)
     import_ids: dict[str, int] = {}
@@ -87,8 +111,8 @@ def import_seed_files(files: Mapping[str, Path]) -> list[int]:
     with Session(engine) as db:
         batch_id = db.scalar(text("INSERT INTO identity_batches DEFAULT VALUES RETURNING id"))
         db.commit()
-    for filename, file in files.items():
-        source_key, source_name, record_type = SEED_SOURCES[filename]
+    for filename, (source_key, source_name, record_type) in sources.items():
+        file = files[filename]
         path = Path(file).resolve()
         if not path.is_file():
             raise FileNotFoundError(path)
@@ -97,7 +121,10 @@ def import_seed_files(files: Mapping[str, Path]) -> list[int]:
             count = sum(1 for _ in rows)
         finally:
             rows.close()
-        mapping = _mapping(headers, record_type)
+        mapping = _mapping(
+            headers, record_type,
+            reference_source="donor_direct" if sources is SEED_SOURCES else "donor_crm",
+        )
         checksum = hashlib.sha256()
         with path.open("rb") as stream:
             for chunk in iter(lambda: stream.read(1024 * 1024), b""):
@@ -115,8 +142,10 @@ def import_seed_files(files: Mapping[str, Path]) -> list[int]:
                     VALUES (:key, :name, 'csv', :record_types, :priority, true)
                     RETURNING id
                 """), {"key": source_key, "name": source_name,
-                       "record_types": [record_type],
-                       "priority": len(SEED_SOURCES) * 10}).scalar_one()
+                       "record_types": list(dict.fromkeys(
+                           kind for key, _, kind in sources.values() if key == source_key
+                       )),
+                       "priority": len(sources) * 10}).scalar_one()
             previous = db.execute(text("""
                 SELECT id FROM imports WHERE source_id=:source_id AND file_sha256=:digest
                   AND record_type=:record_type AND status='completed' LIMIT 1
@@ -163,7 +192,7 @@ def import_seed_files(files: Mapping[str, Path]) -> list[int]:
     ):
         raise RuntimeError("Seed load failed; see load-status summary above.")
 
-    # Also refresh on an idempotent seed reload (all five imports may be skipped).
+    # Also refresh on an idempotent reload (all manifest members may be skipped).
     with Session(engine) as db:
         analyze_tables(db, IMPORT_TABLES)
         db.commit()
@@ -192,7 +221,7 @@ def import_seed_files(files: Mapping[str, Path]) -> list[int]:
                 )
                 elapsed = (row["duration_ms"] or 0) / 1000
                 has_injected_unrecoverable = (
-                    stats["files"][filename]["messiness_injected"].get("unrecoverable_row", 0) > 0
+                    stats["files"][filename].get("messiness_injected", {}).get("unrecoverable_row", 0) > 0
                 )
                 stats["files"][filename]["import_handling"] = {
                     "status": row["status"],
@@ -214,6 +243,27 @@ def import_seed_files(files: Mapping[str, Path]) -> list[int]:
                         unrecoverable_row_in_error_csv if has_injected_unrecoverable else None
                     ),
                 }
+            totals = db.execute(text("""
+                SELECT count(*) AS source_records,
+                       count(DISTINCT profile_id) AS resulting_profiles
+                FROM source_records WHERE last_import_id=ANY(:ids)
+            """), {"ids": list(import_ids.values())}).mappings().one()
+            stats["load_summary"] = {
+                "source_file_records": sum(
+                    item["rows_generated"] for item in stats["files"].values()
+                ),
+                "source_records": totals["source_records"],
+                "expected_profiles": stats.get("requested_people"),
+                "resulting_profiles": totals["resulting_profiles"],
+            }
+        summary = stats["load_summary"]
+        print(
+            f"Seed records: {summary['source_file_records']:,} source file records; "
+            f"{summary['source_records']:,} stored source records; "
+            f"expected profiles={summary['expected_profiles']}; "
+            f"resulting profiles={summary['resulting_profiles']:,}",
+            flush=True,
+        )
         with stats_path.open("w", encoding="utf-8", newline="\n") as stream:
             json.dump(stats, stream, sort_keys=True, separators=(",", ":"))
             stream.write("\n")

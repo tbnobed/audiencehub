@@ -103,7 +103,7 @@ def sync_legacy_xref(db, ids):
       SELECT p.master_id,CASE i.type WHEN 'phone' THEN 'mobile_phone' ELSE i.type END,
         i.value,p.first_seen_at,p.last_seen_at
       FROM identifiers i JOIN profiles p ON p.id=i.profile_id
-      WHERE p.id=ANY(:ids) AND p.master_id IS NOT NULL
+      WHERE p.id=ANY(:ids) AND p.master_id IS NOT NULL AND i.type <> 'external'
       ON CONFLICT(master_id,key_type,key_value,source_id) DO NOTHING
     """), {"ids": list(ids)})
     db.execute(text("""
@@ -312,6 +312,9 @@ def unmerge(db, merge_id, actor):
     for label, side in sides.items():
         master = survivor if target[label] == w else new.master_id
         for row in side["xref"]:
+            # Old journals may contain the retired source-record bookkeeping key.
+            if row["key_type"] == "external":
+                continue
             db.execute(text("""
               INSERT INTO identity_xref(master_id,key_type,key_value,source_id,first_seen_at,last_seen_at,status)
               VALUES(:m,:key_type,:key_value,:source_id,:first_seen_at,:last_seen_at,:status)

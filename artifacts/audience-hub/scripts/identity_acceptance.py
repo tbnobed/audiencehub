@@ -40,7 +40,34 @@ FILES = {
     "five9_calls.csv": "five9",
     "zeta_enrichment.csv": "zeta_enrichment",
 }
+AUDIT_FILES = {
+    "donor_direct.csv": "donor_direct",
+    "people_feed.csv": "people_feed",
+    "hubspot.csv": "hubspot",
+    "okta_tbn_plus.csv": "okta_tbn_plus",
+    "donation_events_gifts.csv": "donation_events",
+    "donation_events.csv": "donation_events",
+    "vod_viewed_events.csv": "vod_viewed_events",
+    "model_scores.csv": "model_scores",
+}
 DB_BATCH_SIZE = 10_000
+
+
+def _truth_files(metadata: dict[str, Any]) -> dict[str, str]:
+    mapping = metadata.get("source_file_mapping")
+    if mapping is None:
+        return FILES
+    kinds = {
+        "donor_direct.csv": "contact", "people_feed.csv": "contact",
+        "hubspot.csv": "contact", "okta_tbn_plus.csv": "contact",
+        "donation_events_gifts.csv": "gift", "donation_events.csv": "event",
+        "vod_viewed_events.csv": "event", "model_scores.csv": "enrichment",
+    }
+    expected = {name: {"source": source, "record_type": kinds[name]}
+                for name, source in AUDIT_FILES.items()}
+    if mapping != expected or metadata.get("reference_source") != "donor_direct":
+        raise ValueError("Unsupported compact truth source-file/reference contract")
+    return AUDIT_FILES
 
 
 def _non_whitespace(stream: TextIO) -> str:
@@ -148,7 +175,7 @@ def _iter_ground_truth(path: Path, local: sqlite3.Connection) -> dict[str, Any]:
             first = _non_whitespace(stream)
             if key != "records":
                 if key in {"format_version", "random_seed", "scale", "requested_people", "record_count",
-                           "identity_rule"}:
+                           "identity_rule", "source_file_mapping", "reference_source"}:
                     metadata[key] = _read_json_value(stream, first)
                 else:
                     _read_json_value(stream, first, retain=False)
@@ -220,20 +247,36 @@ def _expand_compact_truth(path: Path, local: sqlite3.Connection,
         raise ValueError("Compact truth requires positive requested_people")
     stats_path = path.with_name("generator_stats.json")
     if not stats_path.is_file():
-        raise ValueError("Compact truth requires generator_stats.json and all five seed CSVs")
+        raise ValueError("Compact truth requires generator_stats.json and its complete seed CSV manifest")
     stats = json.loads(stats_path.read_text(encoding="utf-8"))
     if stats.get("mode") != "audit" or stats.get("requested_people") != population:
         raise ValueError("Compact truth population/mode does not match generator statistics")
+    files = _truth_files(metadata)
+    if (stats.get("source_file_mapping") != metadata.get("source_file_mapping")
+            or stats.get("reference_source") != metadata.get("reference_source")
+            or set(stats.get("files", {})) != set(files)):
+        raise ValueError("Compact truth source manifest does not match generator statistics")
+    primary_source = "donor_direct" if files is AUDIT_FILES else "donor_crm"
     patterns = {
         "donor_crm": re.compile(r"crm-(\d+)"),
         "esp": re.compile(r"esp-(\d+)"),
         "zeta_enrichment": re.compile(r"zeta-(\d+)"),
         "giving_platform": re.compile(r"(?:donation|donation_return)-(\d+)-.+"),
         "five9": re.compile(r"[a-z_]+-(\d+)-.*"),
+        "donor_direct": re.compile(r"crm-(\d+)"),
+        "people_feed": re.compile(r"esp-(\d+)"),
+        "hubspot": re.compile(r"esp-(\d+)"),
+        "okta_tbn_plus": re.compile(r"esp-(\d+)"),
+        "model_scores": re.compile(r"zeta-(\d+)"),
+        "donation_events": re.compile(r"[a-z_]+-(\d+)-.*"),
+        "vod_viewed_events": re.compile(r"vod_viewed-(\d+)-.*"),
     }
     inserted = 0
     per_source = {}
-    for filename, source_key in FILES.items():
+    per_file = {}
+    for filename, source_key in files.items():
+        pattern = (re.compile(r"gift:(?:donation|donation_return)-(\d+)-.+")
+                   if filename == "donation_events_gifts.csv" else patterns[source_key])
         csv_path = path.with_name(filename)
         if not csv_path.is_file():
             raise ValueError(f"Compact truth CSV is missing: {filename}")
@@ -248,14 +291,14 @@ def _expand_compact_truth(path: Path, local: sqlite3.Connection,
                 raise ValueError(f"Compact truth CSV has missing/duplicate headers: {filename}")
             for row in reader:
                 external_id = row.get("external_id", "")
-                match = patterns[source_key].fullmatch(external_id)
+                match = pattern.fullmatch(external_id)
                 if not match:
                     raise ValueError(f"Invalid compact truth external ID in {filename}")
                 index = int(match.group(1))
                 if not 0 <= index < population:
                     raise ValueError(f"Compact truth person index out of range in {filename}")
                 contact = f"crm-{index:08d}"
-                if source_key == "donor_crm":
+                if source_key == primary_source:
                     if external_id != contact or index != count:
                         raise ValueError("Compact truth CRM population is not complete and ordered")
                 elif row.get("contact_external_id") != contact:
@@ -267,15 +310,17 @@ def _expand_compact_truth(path: Path, local: sqlite3.Connection,
                     batch.clear()
             if batch:
                 local.executemany("INSERT INTO truth VALUES (?,?,?,?)", batch)
-        if count != expected or (source_key == "donor_crm" and count != population):
+        if count != expected or (source_key == primary_source and count != population):
             raise ValueError(f"Compact truth CSV row count mismatch: {filename}")
         inserted += count
-        per_source[source_key] = count
+        per_source[source_key] = per_source.get(source_key, 0) + count
+        per_file[filename] = count
         local.commit()
     if not inserted:
         raise ValueError("Compact truth expanded to no records")
     metadata.update(streamed_record_count=inserted, compact_truth=True,
                     truth_records_by_source=per_source,
+                    truth_records_by_file=per_file,
                     household_policy="Shared contact information never permits a person merge")
     return metadata
 
@@ -327,7 +372,8 @@ def _sqlite_database(local: sqlite3.Connection) -> None:
 def _load_csv_identity_evidence(local: sqlite3.Connection, seed_dir: Path) -> set[str]:
     """Load raw CRM/ESP identifiers locally for evidence-only split diagnostics."""
     loaded: set[str] = set()
-    for filename, table in (("donor_crm_contacts.csv", "crm_csv"),):
+    primary = "donor_direct.csv" if (seed_dir / "donor_direct.csv").is_file() else "donor_crm_contacts.csv"
+    for filename, table in ((primary, "crm_csv"),):
         path = seed_dir / filename
         if not path.is_file():
             continue
@@ -363,7 +409,8 @@ def _database_url() -> str:
     return value
 
 
-def _load_active_records(engine: Any, local: sqlite3.Connection) -> None:
+def _load_active_records(engine: Any, local: sqlite3.Connection,
+                         files: dict[str, str] | None = None) -> None:
     statement = text("""
         SELECT s.key AS source_key, sr.external_id, sr.profile_id,
                sr.email_norm, sr.phone_e164, sr.attributes
@@ -379,7 +426,7 @@ def _load_active_records(engine: Any, local: sqlite3.Connection) -> None:
         try:
             connection.exec_driver_sql("SET TRANSACTION READ ONLY")
             result = connection.execution_options(stream_results=True).execute(
-                statement, {"source_keys": list(FILES.values())})
+                statement, {"source_keys": list(set((files or FILES).values()))})
             batch: list[tuple[str, str, int, str | None, str | None, str | None, str | None]] = []
             while rows := result.fetchmany(DB_BATCH_SIZE):
                 for row in rows:
@@ -415,7 +462,7 @@ def _load_active_records(engine: Any, local: sqlite3.Connection) -> None:
     local.commit()
 
 
-def _read_db_report(engine: Any) -> dict[str, Any]:
+def _read_db_report(engine: Any, files: dict[str, str] | None = None) -> dict[str, Any]:
     report: dict[str, Any] = {}
     with engine.connect() as connection:
         transaction = connection.begin()
@@ -439,7 +486,7 @@ def _read_db_report(engine: Any) -> dict[str, Any]:
             FROM imports AS i JOIN sources AS s ON s.id=i.source_id
             WHERE s.key=ANY(:keys)
             ORDER BY s.key, i.filename, i.created_at, i.id
-        """), {"keys": list(FILES.values())}).mappings().all()
+        """), {"keys": list(set((files or FILES).values()))}).mappings().all()
         merge_reasons = Counter()
         result = connection.execution_options(stream_results=True).execute(
             text("SELECT reason FROM profile_merges"))
@@ -549,9 +596,9 @@ def _split_pattern_counts(local: sqlite3.Connection) -> tuple[int, Counter[str]]
         esp_present = False
         for _, _, source_key, external_id, profile_id, email, phone in person_rows:
             profiles.add(profile_id)
-            if source_key == "donor_crm" and not crm_records:
+            if source_key in {"donor_crm", "donor_direct"} and not crm_records:
                 crm_records.append((external_id, profile_id, email, phone))
-            elif source_key == "esp":
+            elif source_key in {"esp", "people_feed", "hubspot", "okta_tbn_plus"}:
                 esp_present = True
                 if email:
                     esp_emails.add(email)
@@ -1147,9 +1194,11 @@ def _print_report(metadata: dict[str, Any], local: sqlite3.Connection,
     imports_by_source: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in report["imports"]:
         imports_by_source[row["source_key"]].append(dict(row))
-    for filename, source_key in FILES.items():
-        expected = local.execute(
-            "SELECT count(*) FROM truth WHERE source_key=?", (source_key,)).fetchone()[0]
+    for filename, source_key in _truth_files(metadata).items():
+        expected = metadata.get("truth_records_by_file", {}).get(filename)
+        if expected is None:
+            expected = local.execute(
+                "SELECT count(*) FROM truth WHERE source_key=?", (source_key,)).fetchone()[0]
         file_stats = (generator_stats or {}).get("files", {}).get(filename)
         generated_count = file_stats.get("rows_generated") if isinstance(file_stats, dict) else None
         generated_text = f"{generated_count:,}" if isinstance(generated_count, int) else "unknown"
@@ -1238,10 +1287,11 @@ def main() -> int:
             local = sqlite3.connect(str(Path(temp_dir) / "acceptance.sqlite"))
             _sqlite_database(local)
             metadata = _iter_ground_truth(path, local)
+            files = _truth_files(metadata)
             loaded_csv_evidence = _load_csv_identity_evidence(local, path.parent)
             generator_stats = _load_generator_stats(stats_path)
-            _load_active_records(engine, local)
-            report = _read_db_report(engine)
+            _load_active_records(engine, local, files)
+            report = _read_db_report(engine, files)
             false_merge_cases = _false_merge_candidates(local)
             _false_merge_database_evidence(engine, local, false_merge_cases)
             report["false_merge_cases"] = false_merge_cases

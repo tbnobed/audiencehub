@@ -199,7 +199,7 @@ def measure(directory, profiles=50_000, *, scale="small", as_of=None, seed_dir=N
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
     reference = date.fromisoformat(as_of) if isinstance(as_of,str) else as_of or datetime.now(timezone.utc).date()
-    from app.seed import generate_seed, load_generated_files, CSV_FILES
+    from app.seed import generate_seed, load_generated_files, CSV_FILES, LEGACY_CSV_FILES
     from app.seed_audit_report import measure_audit
     from app.imports.service import run_import
     from app.jobs import handlers
@@ -220,7 +220,10 @@ def measure(directory, profiles=50_000, *, scale="small", as_of=None, seed_dir=N
             stats = json.loads((seed_path/"generator_stats.json").read_text())
             if stats.get("mode") != "audit" or stats["requested_people"] != profiles or stats["as_of"] != str(reference):
                 raise ValueError("Reused seed must match audit mode, population and as_of")
-            return {"files": {name: seed_path/name for name in CSV_FILES}, "output_dir": seed_path}
+            filenames = CSV_FILES if stats.get("source_file_mapping") is not None else LEGACY_CSV_FILES
+            if set(stats.get("files", {})) != set(filenames):
+                raise ValueError("Reused seed must contain the complete matching audit file manifest")
+            return {"files": {name: seed_path/name for name in filenames}, "output_dir": seed_path}
         generated = timed("reuse_seed", reuse)
     else:
         generated = timed("generate", lambda: generate_seed(profiles,scale,output_dir=directory/"seed",as_of=reference))

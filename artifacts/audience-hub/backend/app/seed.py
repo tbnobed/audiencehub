@@ -25,6 +25,17 @@ from app.seed_giving import CAMPAIGNS, generate_giving, seed_giver_indices
 
 SCALE_DENSITY = {"small": 0.5, "medium": 1.0, "large": 2.0}
 CSV_FILES = (
+    "people_feed.csv",
+    "donor_direct.csv",
+    "hubspot.csv",
+    "okta_tbn_plus.csv",
+    "donation_events_gifts.csv",
+    "donation_events.csv",
+    "vod_viewed_events.csv",
+    "model_scores.csv",
+)
+AUDIT_CSV_FILES = CSV_FILES
+LEGACY_CSV_FILES = (
     "donor_crm_contacts.csv",
     "giving_platform_gifts.csv",
     "esp_contacts.csv",
@@ -115,7 +126,7 @@ def _record_truth(records: dict[str, dict[str, str | None]], source: str,
 
 
 def _messiness_counter() -> dict[str, dict[str, int]]:
-    return {name: {} for name in CSV_FILES}
+    return {name: {} for name in LEGACY_CSV_FILES}
 
 
 def _mark_messiness(stats: dict[str, dict[str, int]], filename: str,
@@ -126,12 +137,14 @@ def _mark_messiness(stats: dict[str, dict[str, int]], filename: str,
 def generate_seed(profiles: int = 50_000, scale: str = "small",
                   random_seed: int = 20250308, output_dir: str | Path | None = None,
                   as_of: date | None = None, mode: str = "audit") -> dict[str, Any]:
-    """Write five deterministic CSVs and ground_truth.json; return output metadata."""
+    """Write audit feeds by default, or the explicit legacy five-file fixture."""
     if mode == "audit":
         from app.seed_audit import generate_audit_seed
         return generate_audit_seed(profiles, scale, random_seed, output_dir, as_of)
     if mode != "legacy":
         raise ValueError("mode must be audit or legacy")
+    # The old generator deliberately retains its original five-file contract.
+    CSV_FILES = LEGACY_CSV_FILES
     if profiles < 1:
         raise ValueError("--profiles must be at least 1")
     if scale not in SCALE_DENSITY:

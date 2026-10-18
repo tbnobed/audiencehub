@@ -41,3 +41,15 @@ Run the 500k full-load acceptance on the production server, not in this
 development environment. Backend regression suites may still run here.
 
 **Why:** The user explicitly reserved the next 500k run for production.
+
+The user confirmed the production 500k seed passed and identity-key coverage
+matches the audit. Preserve its people, key proportions, overlap rules and
+resolver. The superseding seed correction is limited to source reassignment,
+realistic fictional names/email values/locations without changing phone or email
+coverage, removing `external` from identity_xref, and Profiles list presentation.
+Do not apply the earlier requests for 5% hash-only, 3% households or 40% mobile.
+
+**Why:** The user explicitly narrowed the request after production acceptance.
+
+**How to apply:** This work is code-only with commit and push; do not run tests,
+seeds, imports or benchmarks in Replit. Verification runs on the production server.
