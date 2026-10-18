@@ -71,7 +71,7 @@ def readonly_session(engine):
 
 
 def _sample(db, definition, instant):
-    """Same SQL work as the API sample: 25 rows plus full status/source counts.
+    """Same SQL work as the API sample: ordered LIMIT, then 25 profile rows.
 
     Do not import the HTTP module: it initializes the application's write-capable
     engine and worker hooks. No contact data is retained in benchmark evidence.
@@ -80,22 +80,32 @@ def _sample(db, definition, instant):
     from app.segments.compiler import compile_definition
 
     query = compile_definition(db, definition, instant)
-    ids = list(db.scalars(query.limit(25)))
-    sub = query.subquery()
-    status = db.execute(select(ProfileTrait.donor_status, func.count()).select_from(
-        sub.outerjoin(ProfileTrait, ProfileTrait.profile_id == sub.c.id)
-    ).group_by(ProfileTrait.donor_status)).all()
-    sources = db.execute(select(
-        func.unnest(ProfileTrait.source_keys).label("key"), func.count()
-    ).select_from(sub.join(ProfileTrait, ProfileTrait.profile_id == sub.c.id))
-      .group_by(text("key"))).all()
+    ids = list(db.scalars(query.order_by(query.selected_columns.id).limit(25)))
     rows = db.execute(select(
         Profile.id, Profile.first_name, Profile.last_name, Profile.email,
         Profile.phone, ProfileTrait.donor_status, ProfileTrait.source_keys,
     ).outerjoin(ProfileTrait, ProfileTrait.profile_id == Profile.id)
       .where(Profile.id.in_(ids)).order_by(Profile.id)).all()
-    return {"rows": len(rows), "status_total": sum(row[1] for row in status),
-            "source_groups": len(sources)}
+    return {"rows": len(rows)}
+
+
+def _plans(db, definition, instant):
+    """Bound, read-only EXPLAIN ANALYZE; no result rows/contact data are saved."""
+    from app.segments.compiler import compile_definition
+    query = compile_definition(db, definition, instant)
+    result = {}
+    for name, statement in (
+        ("count", select(func.count()).select_from(query.subquery())),
+        ("sample_ids", query.order_by(query.selected_columns.id).limit(25)),
+    ):
+        compiled = statement.compile(
+            dialect=db.bind.dialect, compile_kwargs={"render_postcompile": True})
+        plan = db.connection().exec_driver_sql(
+            "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " + str(compiled),
+            compiled.params,
+        ).scalar_one()
+        result[name] = {"sql": str(compiled), "parameters": compiled.params, "plan": plan}
+    return result
 
 
 def _repeated(fn):
@@ -120,7 +130,7 @@ def measure_existing(engine, directory, *, as_of=None, profiles_option=500_000):
         "profiles_option_ignored": profiles_option,
         "materialization": {"status": "skipped", "reason": "read-only existing-data benchmark"},
         "database_writes": "forbidden by PostgreSQL READ ONLY; transaction always rolled back",
-        "scope": "Code-defined templates against existing data; no seed, migration, template installation, materialization, jobs or audit writes. Count executes a compiled query; preview includes compilation; sample includes 25 rows and status/source breakdowns. No HTTP transport or contact data in evidence.",
+        "scope": "Code-defined templates against existing data; no seed, migration, template installation, materialization, jobs or audit writes. Count executes a compiled query; preview includes compilation; sample includes ordered LIMIT 25 and row hydration, not full-audience breakdowns. EXPLAIN ANALYZE BUFFERS follows measurements. No HTTP transport or contact data in evidence.",
         "first_definition": "First execution of each operation per template, not cold PostgreSQL/OS caches. Count precedes preview and sample; one connection and pinned snapshot for the entire run.",
         "warm_definition": "Three repetitions of each operation in the same read-only snapshot.",
         "templates": [],
@@ -162,11 +172,23 @@ def measure_existing(engine, directory, *, as_of=None, profiles_option=500_000):
                         row.update(count=counts[0], sample_rows=samples[0]["rows"])
                         row["status"] = "passed" if (
                             all(value == counts[0] for value in counts + previews)
-                            and all(sample["rows"] == min(25, counts[0])
-                                    and sample["status_total"] == counts[0] for sample in samples)
+                            and all(sample["rows"] == min(25, counts[0]) for sample in samples)
                         ) else "failed"
                         if row["status"] == "failed":
                             row["error"] = "Count/preview/sample parity failed in the pinned snapshot"
+                        # Capture after timings: EXPLAIN ANALYZE itself warms
+                        # pages and must not precede the first measured query.
+                        plan_file = f'{template["key"]}-plans.json'
+                        plans = _plans(db, template["definition"], instant)
+                        (directory / plan_file).write_text(
+                            json.dumps(plans, indent=2, default=str) + "\n")
+                        row["plans"] = plan_file
+                        row["targets"] = {
+                            "count_under_2s": row["count_latency"]["warm_median_ms"] < 2000,
+                            "sample_under_1s": row["sample_latency"]["warm_median_ms"] < 1000,
+                            "population": report["profiles"],
+                            "note": "Observed at this population; not proof of 8M acceptance.",
+                        }
                 except Exception as exc:
                     # DBAPI SQL parameters can contain sensitive data; retain
                     # only the explicit type/SQLSTATE, not statement or values.

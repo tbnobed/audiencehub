@@ -9,4 +9,4 @@ export type SegmentWrite = { name: string; description?: string | null; definiti
 export type PartnerSample = { id: number; first_name: string | null; last_name: string | null; email: string | null; phone: string | null; donor_status: string | null; source_keys: string[] | null };
 export type SegmentHistory = { counted_at: string; count: number; added: number; removed: number };
 export type SegmentPreview = { count: number; took_ms: number };
-export type SegmentSample = { items: PartnerSample[]; breakdowns: { status: { key: string; count: number }[]; source: { key: string; count: number }[] } };
+export type SegmentSample = { items: PartnerSample[]; breakdownsLoading?: boolean; breakdownsError?: boolean; breakdowns: { status: { key: string; count: number }[]; source: { key: string; count: number }[] } };

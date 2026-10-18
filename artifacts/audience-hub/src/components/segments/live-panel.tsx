@@ -81,6 +81,8 @@ export function LivePanel({ idle, preview, sample, history, lastCount, segmentId
         : sample.isError ? <div className="text-[11px]"><p className="text-danger">{errText(sample.error)}</p><button type="button" onClick={() => sample.refetch()} className="mt-1 text-signal hover:underline">Retry sample</button></div>
         : !sample.data ? <div className="flex flex-col gap-1.5">{Array.from({ length: 6 }, (_, i) => <Skeleton key={i} className="h-6 w-full bg-surface-raised" />)}</div>
         : <>
+          {sample.data.breakdownsLoading && <p className="text-xs text-ink-muted">Loading audience breakdowns…</p>}
+          {sample.data.breakdownsError && <p className="text-xs text-danger">Audience breakdowns could not be loaded. Sample rows are available.</p>}
           <Breakdown title="By partner status" rows={sample.data.breakdowns.status} toneFor={k => STATUS_TONE[k] ?? 'var(--kin-chart-8)'} testId="breakdown-status" />
           <Breakdown title="By source" rows={sample.data.breakdowns.source} toneFor={(_, i) => PALETTE[i % PALETTE.length]} testId="breakdown-source" />
           {sample.data.items.length ? <SampleTable items={sample.data.items} /> : <p className="text-[11px] text-ink-muted">No partners match — loosen a rule to see examples.</p>}

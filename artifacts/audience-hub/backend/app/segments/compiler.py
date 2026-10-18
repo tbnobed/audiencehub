@@ -16,6 +16,7 @@ from app.models import (Profile, ProfileTrait, Gift, Event, Consent, EnrichmentV
 from app.segments.registry import field_registry, OPERATORS
 from app.segments.schema import Definition, SegmentValidationError, fail
 from app.models import SourceRecord
+from app.segments.projection import PROPERTY_TYPES
 
 
 def pinned_time(db, as_of=None):
@@ -201,6 +202,18 @@ class Compiler:
                 fail(path + ".negate", "Expected a boolean.")
             children = [self.node(child, f"{path}.rules[{i}]", depth + 1) for i, child in enumerate(node["rules"])]
             expr = (and_ if node["op"] == "and" else or_)(*children)
+            # Indexed lower bound for the audit's activity OR. Keep the original
+            # predicates as residuals: a future date on one side must not hide a
+            # valid historical date on the other.
+            activity = node["rules"]
+            if (node["op"] == "or" and len(activity) == 2
+                and all(r.get("type") == "attribute"
+                        and r.get("operator") == "within_previous_days" for r in activity)
+                and {r.get("field") for r in activity} == {"last_seen", "last_contact"}
+                and activity[0].get("value") == activity[1].get("value")):
+                days = _days(activity[0]["value"], path + ".value")
+                expr = and_(self.traits.c.last_activity_at >=
+                            _boundary(self.now.date() - timedelta(days=days), "timestamp"), expr)
             return not_(expr) if node.get("negate") else expr
         self.rules += 1
         if self.rules > 50:
@@ -233,6 +246,8 @@ class Compiler:
                 ).order_by(Source.priority, sr.c.updated_at.desc(), sr.c.id).limit(1).correlate(self.active).scalar_subquery()
                 col = cast(col if typ == "text" else func.nullif(func.trim(col), ""), {"text": Text, "number": Numeric, "date": Date,
                                  "timestamp": DateTime(timezone=True), "boolean": Boolean}[typ])
+                if key in PROPERTY_TYPES:
+                    col = self.traits.c["attr_" + key]
             elif kind == "profile":
                 col = self.active.c[node["field"]]
             elif kind == "trait":
@@ -258,6 +273,14 @@ class Compiler:
                     or_(e.c.license_expires_at.is_(None), e.c.license_expires_at >= self.now.date())
                 ).correlate(self.active).scalar_subquery()
             expr = _predicate(col, typ, node, path, self.now, entry["enum_values"])
+            if kind == "attribute" and node["field"] in PROPERTY_TYPES:
+                if node.get("operator") == "exists" and typ != "text":
+                    return col.is_not(None)
+                if node.get("operator") == "is_null":
+                    return expr
+                # Unlike COALESCE(comparison,false), this preserves the btree
+                # range condition, with identical null/negation semantics.
+                return and_(col.is_not(None), expr)
         elif kind in ("gift", "event"):
             facts = Gift.__table__ if kind == "gift" else Event.__table__
             agg = node.get("aggregate")

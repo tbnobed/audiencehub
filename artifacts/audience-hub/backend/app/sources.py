@@ -133,8 +133,16 @@ def update_source(source_id: int, data: SourceUpdate,
     source = get_source(db, source_id)
     if source.kind in {"sftp_jsonl", "snowflake", "zeta_exit"} and data.settings:
         raise HTTPException(422, "Use the encrypted connection endpoint for pull configuration")
+    priority_changed = data.priority is not None and data.priority != source.priority
     for key, value in data.model_dump(exclude_unset=True).items():
         setattr(source, key, value)
+    if priority_changed:
+        db.execute(text("""
+            INSERT INTO trait_dirty_profiles(profile_id)
+            SELECT DISTINCT profile_id FROM source_records
+            WHERE source_id=:id AND profile_id IS NOT NULL
+            ON CONFLICT(profile_id) DO NOTHING
+        """), {"id": source_id})
     db.commit()
     db.refresh(source)
     return source_json(source)

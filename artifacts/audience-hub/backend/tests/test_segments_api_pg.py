@@ -74,7 +74,9 @@ def test_preview_sample_masking_and_validation(db):
     sample = api.sample(body,SimpleNamespace(role="viewer"),db)
     assert sample["items"][0]["email"] != "partner@example.test"
     assert sample["items"][0]["phone"] != "+12145551234"
-    assert sum(r["count"] for r in sample["breakdowns"]["status"]) == 2
+    assert sample["breakdowns"] == {"status": [], "source": []}
+    breakdowns = api.breakdowns(body, SimpleNamespace(role="viewer"), db)
+    assert sum(r["count"] for r in breakdowns["breakdowns"]["status"]) == 2
     with pytest.raises(HTTPException) as error:
         api.preview(api.Preview(definition={"version":1,"root":{"op":"and","rules":[
             {"type":"profile","field":"not_a_column","operator":"eq","value":"anything"}]}}),user,db)

@@ -239,6 +239,8 @@ def recompute_traits(db: Session, *, as_of: date | None = None,
         "profile_ids": profile_ids,
     })
     updated = result.rowcount
+    from app.segments.projection import refresh_projections
+    refresh_projections(db, profile_ids)
     if profile_ids is None:
         db.execute(text("""
             DELETE FROM profile_traits pt

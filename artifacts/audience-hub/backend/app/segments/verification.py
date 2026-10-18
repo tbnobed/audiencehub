@@ -168,7 +168,7 @@ def measure(directory: Path, profiles: int, *, scale="medium", seed_dir=None,
               "templates": [], "seed_sha256": {}, "reference_sql": REFERENCE_SQL,
               "cold_definition": "First preview in a fresh connection pool after fixture preparation; PostgreSQL/OS caches are NOT flushed.",
               "warm_definition": "Median of three further previews in the same session.",
-              "scope": "Preview includes validation/compiler/count and timeout guard; sample includes 25 rows and breakdowns; materialize includes membership/history/audit and commit. Setup excluded."}
+              "scope": "Preview includes validation/compiler/count and timeout guard; sample includes ordered LIMIT 25 and hydration, not optional full-audience breakdowns; materialize includes membership/history/audit and commit. Setup excluded."}
 
     def checkpoint():
         (directory / "segments.json").write_text(json.dumps(report, indent=2, default=str) + "\n")

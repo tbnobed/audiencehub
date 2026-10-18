@@ -59,6 +59,10 @@ def test_audit_source_evidence_null_boolean_imported_models_and_events(db):
               (1,'d2',2,'track','donation','2024-12-04 12:00+00','{"source_code":"T4XWDGT"}'),
               (1,'v1',2,'track','vod_viewed','2026-10-16 12:00+00','{}'),
               (1,'v2',3,'track','Video Watched','2026-10-16 12:00+00','{}')"""))
+    # Imported canonical properties are now projected by the traits pipeline.
+    db.execute(text("INSERT INTO profile_traits(profile_id) SELECT id FROM profiles"))
+    from app.segments.projection import refresh_projections
+    refresh_projections(db)
     definitions = {t["name"]: t["definition"] for t in template_definitions()}
     def ids(name):
         return set(db.scalars(compile_definition(db, definitions[name], date(2026, 10, 17))))

@@ -11,3 +11,4 @@
 - [Zeta replacement scope](zeta-parity-scope.md) — audit-led sequence supersedes generic seed mix; Master ID first, SDK waits, exclusions explicit.
 - [SQL JSON literal bindings](sql-json-literals.md) — compact JSON in SQLAlchemy text can become unintended bind parameters; exercise migrations on PostgreSQL.
 - [Benchmark watchers](benchmark-watchers.md) — restrict source scanning and reload watchers so generated PostgreSQL files cannot stall the preview.
+- [Segment performance](segment-performance.md) — preserve canonical winners and accepted audiences; distinguish limited sampling from full breakdowns and 500k timings from 8M evidence.

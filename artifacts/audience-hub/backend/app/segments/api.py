@@ -147,7 +147,18 @@ def sample_rows(db, ids, user):
 def sample(body: Preview, user: User = viewer, db: Session = session):
     def run():
         query = checked(db, body.definition, now(body))
-        ids = list(db.scalars(query.limit(25)))
+        ids = list(db.scalars(query.order_by(query.selected_columns.id).limit(25)))
+        # Do not aggregate the full audience to display 25 rows. The count is
+        # already supplied by /preview; optional breakdowns have their own path.
+        return {"items": sample_rows(db, ids, user),
+                "breakdowns": {"status": [], "source": []}}
+    return timed(db, run)
+
+
+@router.post("/breakdowns")
+def breakdowns(body: Preview, user: User = viewer, db: Session = session):
+    def run():
+        query = checked(db, body.definition, now(body))
         sub = query.subquery()
         from app.models import ProfileTrait as ProfileTraits
         status = db.execute(select(ProfileTraits.donor_status, func.count()).select_from(
@@ -155,7 +166,7 @@ def sample(body: Preview, user: User = viewer, db: Session = session):
         # Array expansion counts a partner once per represented source.
         sources = db.execute(select(func.unnest(ProfileTraits.source_keys).label("key"), func.count()).select_from(
             sub.join(ProfileTraits, ProfileTraits.profile_id == sub.c.id)).group_by(text("key"))).all()
-        return {"items": sample_rows(db, ids, user), "breakdowns": {
+        return {"breakdowns": {
             "status": [{"key": k or "unknown", "count": n} for k,n in status],
             "source": [{"key": k, "count": n} for k,n in sources]}}
     return timed(db, run)
