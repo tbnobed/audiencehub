@@ -1,0 +1,18 @@
+The production 500k seed passed, but the generated data does not follow the spec. Fix the generator and the Profiles list. Code changes only: commit and push when done. Do not run tests, seeds, imports or benchmarks in Replit; all verification runs on the production server.
+
+1. Sources must be the audit's feeds, not donor_crm/esp/five9. Generate separate source files that overlap on the same people:
+   - people_feed (hourly people file: email or email_md5 only, zeta_cdp_id or zeta_uid)
+   - donor_direct (donor_account_number, name, address, phone, donor fields)
+   - hubspot (hubspot_record_id, email, name)
+   - okta_tbn_plus (okta_customer_id, email, TBN+ plan fields)
+   - donation_events, donation_return_events, order_shipped_events, vod_viewed_events (keyed by donor_account_number, okta_customer_id or email)
+   - model_scores (monthly, keyed by donor_account_number)
+   Remove five9 and esp from the default seed entirely.
+
+2. Records must overlap so identity resolution does real work. The same person appears in 2 to 4 sources with different subsets of keys; about 5% of people appear only as hash-only records; about 3% share a household email with a different donor account (these must create review items, not merges); a few people have two hubspot_record_ids. --profiles N means N real people. Report source record counts versus resulting profiles.
+
+3. Realistic people: first/last names from a name-frequency list, emails derived from names with varied domains (gmail, yahoo, aol, outlook, icloud, a few .org/.edu) while staying fake, US addresses weighted toward the South and Mid-Atlantic, age skew 55+, about 40% with a mobile phone, about 30% with a landline. No "Synthetic Person" names or synthetic-N emails.
+
+4. Profiles list: show master_id (kin_… in mono, copy on hover) under the name instead of "#1". Location shows city, state. Source chips show the real source names.
+
+5. Make sure every enabled source type and every identity key type shows non-zero coverage on the Data Health identity card after a seed.
