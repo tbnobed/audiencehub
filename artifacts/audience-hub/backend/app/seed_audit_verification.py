@@ -40,8 +40,32 @@ def prepare_audience_oracle(db, as_of):
     plan = f"{attr('tbn_plus_subscription')} IN ('basic','premium_monthly','premium_annual')"
     basic = f"{attr('tbn_plus_subscription')}='basic'"
     account = exists("donor_account_number")
-    donation = lambda cutoff: ("p.id IN (SELECT profile_id FROM events WHERE name='donation' "
-                              f"AND occurred_at>=:{cutoff} AND occurred_at<:as_of)")
+    def donation(cutoff):
+        # Independent raw-evidence oracle: do not read last_donation_at or use
+        # the compiler/projection helper to prove its own result.
+        eligible = ""
+        if cutoff in ("app", "recent"):
+            eligible = """
+                AND COALESCE(e.properties->>'is_refund','false')<>'true'
+                AND NOT EXISTS (
+                  SELECT 1 FROM (
+                    SELECT r.profile_id,r.source_id,r.properties AS evidence
+                    FROM events r WHERE r.name='donation_return'
+                    UNION ALL
+                    SELECT g.profile_id,g.source_id,g.attributes AS evidence
+                    FROM gifts g WHERE g.amount<0 OR g.attributes->>'is_refund'='true'
+                  ) returned
+                  WHERE returned.profile_id=e.profile_id AND returned.source_id=e.source_id
+                    AND (returned.evidence->>'original_donation_id' IN (
+                          e.message_id,'gift:'||e.message_id,'donation:'||e.message_id,
+                          'donation:_event:'||e.message_id)
+                      OR returned.evidence->>'original_gift_external_id' IN (
+                          e.message_id,'gift:'||e.message_id,'donation:'||e.message_id,
+                          'donation:_event:'||e.message_id))
+                )
+            """
+        return ("p.id IN (SELECT e.profile_id FROM events e WHERE e.name='donation' "
+                f"AND e.occurred_at>=:{cutoff} AND e.occurred_at<:as_of {eligible})")
     predicates = {
         "All TBN Reference": "master_id IS NOT NULL",
         "Has Active Email": yes("has_active_email"),

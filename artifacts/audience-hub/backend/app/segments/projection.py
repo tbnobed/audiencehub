@@ -21,6 +21,8 @@ PROPERTY_TYPES = {
 
 def refresh_projection(db, ids):
     """One priority selection per batch, rather than per rule per profile."""
+    from app.segments.donations import UPDATE_LAST_DONATION
+    db.execute(text(UPDATE_LAST_DONATION), {"ids": ids})
     assignments = ", ".join(
         f"attr_{key}=v.attr_{key}" for key in PROPERTY_TYPES
     )

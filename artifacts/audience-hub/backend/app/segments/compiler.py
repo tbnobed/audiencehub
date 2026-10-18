@@ -296,6 +296,30 @@ class Compiler:
             where = node.get("where", {})
             if not isinstance(where, dict) or len(where) > 20:
                 fail(path + ".where", "Expected at most twenty filters.")
+            if (kind == "event" and name == "donation" and agg == "exists"
+                    and not where and node.get("operator") in ("is_true", "is_false")):
+                from app.segments.donations import unreturned_donation
+                eligible = unreturned_donation(facts)
+                window = node.get("window")
+                if window and window.get("kind") in ("previous_days", "last_days"):
+                    days = _days(window.get("days"), path + ".window.days")
+                    previous = window["kind"] == "previous_days"
+                    lower = _boundary(self.now.date() - timedelta(
+                        days=days if previous else days - 1), "timestamp")
+                    upper = _boundary(self.now.date() + timedelta(
+                        days=0 if previous else 1), "timestamp")
+                    col = self.active.c.last_donation_at
+                    # A latest donation today/in the future must not hide an
+                    # earlier donation inside a historical/pinned window.
+                    # Only that exceptional branch checks event history.
+                    earlier = select(literal(1)).select_from(facts).where(
+                        facts.c.profile_id == self.active.c.id, *conds, eligible,
+                    ).correlate(self.active).exists()
+                    # Factor out the lower bound so PostgreSQL can use it as
+                    # an index condition, not an OR containing a subplan.
+                    positive = and_(col.is_not(None), col >= lower,
+                                    or_(col < upper, earlier))
+                    return positive if node["operator"] == "is_true" else not_(positive)
             for key, rule in where.items():
                 if not isinstance(rule, dict) or set(rule) - {"operator", "value"}:
                     fail(path + ".where." + key, "Invalid filter.")

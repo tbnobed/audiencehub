@@ -79,6 +79,7 @@ class Profile(Base):
     __tablename__ = "profiles"
     id: Mapped[int] = identity_pk()
     master_id: Mapped[str | None] = mapped_column(Text, unique=True, server_default=text("NULL"))
+    last_donation_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     merged_into_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("profiles.id"))
     email: Mapped[str | None] = mapped_column(CITEXT)
     phone: Mapped[str | None] = mapped_column(Text)
@@ -96,6 +97,7 @@ class Profile(Base):
 
 
 Index("ix_profiles_active_id", Profile.id, postgresql_where=text("merged_into_id IS NULL AND NOT is_deleted"))
+Index("ix_profiles_last_donation_at", Profile.last_donation_at, Profile.id)
 Index("ix_profiles_search_text_trgm", Profile.search_text, postgresql_using="gin",
       postgresql_ops={"search_text": "gin_trgm_ops"})
 

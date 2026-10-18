@@ -105,3 +105,48 @@ population. Correctness PASS does not imply performance PASS or extrapolate
 500k performance to 8M. EXPLAIN ANALYZE executes reads and consumes resources;
 the runner retains its existing statement timeout and never disables read-only
 protection. First execution is not a cold OS/PostgreSQL-cache measurement.
+
+## Long-window donation follow-up
+
+Migration `0037_last_donation_at` adds `profiles.last_donation_at` and a concurrent
+btree index on `(last_donation_at,id)`. It backfills the existing active profiles
+in independently committed batches of 5,000, logs progress, analyzes profiles,
+and can be retried after interruption. Use the same stopped-writer, single
+migration process rollout above; no reset, reseed or reimport is needed.
+
+The full/incremental traits pipeline refreshes this timestamp in the same
+transaction as its other projections. It is the latest **donation event's
+occurred_at**, not a date reconstructed from gifts or an imported last-gift
+property. Donation events need not have a mirrored gift to qualify. Explicit
+returns from either event or gift evidence exclude only their referenced
+donation in the same profile and source. Both original-reference keys are
+recognized, including the raw event message ID and existing `gift:`/`donation:`
+ledger namespaces. Unlinked returns do not invent associations. If every
+donation is returned, the timestamp becomes null; a return of the latest donation
+falls back to the prior unreturned donation. Any explicitly linked return marks
+that donation as returned; this summary does not redefine ledger amounts or
+partial-refund accounting.
+
+Unfiltered `event donation / exists / is_true|is_false` rules with `previous_days`
+or `last_days` windows use indexed timestamp ranges. For example the 720-day
+TBN+ donor/non-donor rules no longer probe donation history for ordinary rows.
+Null timestamps satisfy the non-donor side, and group negation is preserved.
+
+A maximum timestamp alone cannot answer arbitrary historical windows: a newer
+donation today or in the future could hide an older qualifying donation. Only
+when the maximum is at/after the window's exclusive end does the compiler use a
+bounded, non-returned donation history check. This also preserves pinned `as_of`
+queries without requiring another backfill. Normal rows use the range branch;
+benchmark plans will show whether the exceptional subplan was executed.
+
+Rules with event-property/resource filters (including source code, amount and
+fund), non-existence aggregates, other event names, and other window types keep
+their event-table path. The fixed Giving Tuesday audience is not compiled from
+the latest-donation timestamp. The existing read-only 23-audience benchmark
+automatically captures plans for the new branch.
+
+Regression coverage in `test_last_donation_pg.py` covers event-only donations,
+event/ledger returns, source isolation, nulls, incremental clearing, inclusive
+start/exclusive end, future/today/historical cases, and filtered-rule fallback.
+It was added as code only and was **not run in Replit**. Performance and count
+parity still require the production-server verification run.
