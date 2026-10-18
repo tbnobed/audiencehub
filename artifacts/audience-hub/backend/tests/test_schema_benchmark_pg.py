@@ -244,7 +244,11 @@ def test_production_cli_smoke_keeps_public_untouched(admin, tmp_path):
     result = subprocess.run(["kinship", "benchmark", "--segments",
                              "--profiles", "500000", "--as-of", "2025-01-01"],
                             env=env, text=True, stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT, timeout=120)
+                            # The full suite leaves the 50k audit population here.
+                            # This is 23 templates with repeated count/preview/sample
+                            # queries, not one preview. Retain each query's 10s
+                            # production guard; allow the complete CLI to finish.
+                            stderr=subprocess.STDOUT, timeout=600)
     assert result.returncode == 0, result.stdout[-10000:]
     output = next(tmp_path.glob("segments-readonly-*/segments.json"))
     report = json.loads(output.read_text())

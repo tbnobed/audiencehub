@@ -1,0 +1,56 @@
+=> [internal] load local bake definitions                                                                                                                                 0.0s
+ => => reading from stdin 555B                                                                                                                                             0.0s
+ => [internal] load build definition from Dockerfile                                                                                                                       0.0s
+ => => transferring dockerfile: 1.91kB                                                                                                                                     0.0s
+ => [internal] load metadata for docker.io/library/python:3.12-slim-bookworm                                                                                               0.4s
+ => [internal] load metadata for docker.io/library/node:20.20.2-bookworm-slim                                                                                              0.4s
+ => [internal] load .dockerignore                                                                                                                                          0.0s
+ => => transferring context: 229B                                                                                                                                          0.0s
+ => [web  1/14] FROM docker.io/library/node:20.20.2-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0                                  0.4s
+ => => resolve docker.io/library/node:20.20.2-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0                                        0.0s
+ => [internal] load build context                                                                                                                                          0.1s
+ => => transferring context: 1.78MB                                                                                                                                        0.1s
+ => [stage-1  1/14] FROM docker.io/library/python:3.12-slim-bookworm@sha256:34386ef0cb081344d7ec1c103ba398e6e9f64e9ab3a1509accc92a4e24a07258                               0.4s
+ => => resolve docker.io/library/python:3.12-slim-bookworm@sha256:34386ef0cb081344d7ec1c103ba398e6e9f64e9ab3a1509accc92a4e24a07258                                         0.0s
+ => CACHED [stage-1  2/14] RUN apt-get update && apt-get install -y --no-install-recommends libpq5 tini curl   && rm -rf /var/lib/apt/lists/*                              0.0s
+ => CACHED [stage-1  3/14] RUN useradd --create-home --uid 10001 app                                                                                                       0.0s
+ => CACHED [stage-1  4/14] WORKDIR /app                                                                                                                                    0.0s
+ => [stage-1  5/14] COPY backend/pyproject.toml ./backend/                                                                                                                 0.1s
+ => CACHED [web  2/14] WORKDIR /web                                                                                                                                        0.0s
+ => CACHED [web  3/14] RUN npm install --global npm@10.9.9 --no-audit --no-fund   && node --version && npm --version                                                       0.0s
+ => [web  4/14] COPY package.json package-lock.json ./                                                                                                                     0.1s
+ => [stage-1  6/14] COPY backend/app/__init__.py ./backend/app/                                                                                                            0.1s
+ => [web  5/14] COPY scripts/check-package-lock.cjs ./scripts/check-package-lock.cjs                                                                                       0.1s
+ => [stage-1  7/14] RUN pip install --upgrade pip && pip install ./backend                                                                                                28.3s
+ => [web  6/14] RUN node scripts/check-package-lock.cjs                                                                                                                    0.5s
+ => [web  7/14] RUN npm ci --include=dev --bin-links=true --no-audit --no-fund --cache=/tmp/npm-cache   || { cat /tmp/npm-cache/_logs/*-debug-0.log; exit 1; }            12.9s
+ => [web  8/14] RUN test "$(npm --version)" = "10.9.9"   && test -x node_modules/.bin/vite                                                                                 0.8s
+ => [web  9/14] COPY index.html vite.config.ts vite.sdk.config.ts tsconfig.json ./                                                                                         0.1s
+ => [web 10/14] COPY scripts/sdk-build.mjs ./scripts/sdk-build.mjs                                                                                                         0.1s
+ => [web 11/14] COPY sdk/ ./sdk/                                                                                                                                           0.1s
+ => [web 12/14] COPY src/ ./src/                                                                                                                                           0.1s
+ => [web 13/14] COPY public/ ./public/                                                                                                                                     0.1s
+ => [web 14/14] RUN PORT=5000 BASE_PATH=/ npm run build                                                                                                                    9.8s
+ => [stage-1  8/14] COPY backend/ ./backend/                                                                                                                               0.3s
+ => [stage-1  9/14] RUN pip install --no-deps ./backend                                                                                                                    6.1s
+ => [stage-1 10/14] COPY --from=web /web/dist/public ./static                                                                                                              0.1s
+ => [stage-1 11/14] COPY --from=web /web/dist/sdk ./static/sdk                                                                                                             0.1s
+ => [stage-1 12/14] COPY scripts/ ./scripts/                                                                                                                               0.1s
+ => [stage-1 13/14] RUN chmod +x scripts/*.sh && mkdir -p /data/uploads /data/exports   && chown -R app:app /data /app                                                     1.6s
+ => [stage-1 14/14] WORKDIR /app/backend                                                                                                                                   0.1s
+ => exporting to image                                                                                                                                                    22.0s
+ => => exporting layers                                                                                                                                                   15.2s
+ => => exporting manifest sha256:02e572d9fbcd23f9a464877f620082e6ad315ea6d0d9d2445864b360ece746be                                                                          0.0s
+ => => exporting config sha256:3a9518aaf178ed399e6777f05740de3ba61108dc81190fbb74b7b0333e991e3e                                                                            0.0s
+ => => exporting attestation manifest sha256:7d2eef4a23503d4dae68a4b687144a0c72f4eab6f3c4557b5c55b5a40ae5edde                                                              0.0s
+ => => exporting manifest list sha256:365e3f3d053f70286409c735b59a138397f81d864197bb0561f3aa6a830f186f                                                                     0.0s
+ => => naming to docker.io/library/audience-hub:latest                                                                                                                     0.0s
+ => => unpacking to docker.io/library/audience-hub:latest                                                                                                                  6.6s
+ => resolving provenance for metadata file                                                                                                                                 0.0s
+[+] up 5/5
+ ✔ Image audience-hub:latest       Built                                                                                                                                   60.3s
+ ✔ Container audience-hub-db-1     Healthy                                                                                                                                  5.0s
+ ✔ Container audience-hub-backup-1 Running                                                                                                                                  0.0s
+ ✘ Container audience-hub-api-1    Error dependency api failed to start                                                                                                    80.0s
+ ✔ Container audience-hub-worker-1 Recreated                                                                                                                                2.0s
+dependency failed to start: container audience-hub-api-1 is unhealthy

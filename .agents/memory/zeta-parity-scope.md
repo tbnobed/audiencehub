@@ -36,3 +36,8 @@ SDK waits. Support 8M generation arguments but do not run an 8M load.
 **How to apply:** This request authorizes the identity changes needed for
 Master ID despite the earlier pipeline freeze; it does not authorize production
 resets or alterations to unrelated delivery integrations.
+
+Run the 500k full-load acceptance on the production server, not in this
+development environment. Backend regression suites may still run here.
+
+**Why:** The user explicitly reserved the next 500k run for production.
