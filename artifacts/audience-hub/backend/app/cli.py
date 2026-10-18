@@ -102,6 +102,8 @@ def main():
     verify = commands.add_parser("verify-seed", help="Read-only gift, refund and profile reconciliation.")
     verify.add_argument("--timeout-seconds", type=int, default=600,
                         help="Per-query timeout (default: 600 seconds). No data is changed.")
+    verify.add_argument("--as-of", type=date.fromisoformat,
+                        help="Reference date matching seed --as-of (default: today UTC, never the maximum gift date).")
     repair = commands.add_parser(
         "repair-seed", help="Repair only the existing synthetic audit seed (default: read-only dry run).")
     repair.add_argument("--apply", action="store_true", help="Apply atomically; also requires --yes.")
@@ -140,7 +142,7 @@ def main():
                 "maintenance-window locks and query timeout. No partial repair was committed.") from None
     if args.command == "verify-seed":
         from app.verify_seed import verify_seed
-        raise SystemExit(verify_seed(args.timeout_seconds))
+        raise SystemExit(verify_seed(args.timeout_seconds, as_of=args.as_of))
     if args.command == "source-pull":
         from app.source_pulls import run_source, collect, connection_row
         from app.db import engine

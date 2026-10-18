@@ -20,10 +20,11 @@ required audience members take priority if the integer budgets conflict.
   weighted extra gifts, including a small 20+ gift group. Recurring partners get
   a monthly gift in every eligible completed month of the five-year window.
   Additional voluntary gifts are one-time, not extra monthly recurring bills.
-- The last-30-day positive-donation budget is
-  `round(profiles * 2957 * 30 / 7830000)` (about 5,665 at 500k, or 189/day).
-  Repeat gifts are allocated to the **existing** recent recipient cohort; they
-  do not manufacture additional Donors Past 30 Days or TBN App Donors.
+- The last-30-day positive-donation budget is approximately **1.4 per existing
+  recent donor** (about 1,698 for the same 1,213 people at 500k). Protected monthly
+  bills can raise this within the 1.2–1.6 range. This newer requirement supersedes
+  the old 190/day target; it does not change the five-year total. Repeat gifts
+  remain within the existing recent recipient cohort.
 - Body amounts are log-normal, centered to keep the combined median near $50.
   Stratified gift-ordinal quotas allocate 1.5% of donations at $1,000+,
   including 0.05% at $10,000+, with a $50,000 maximum when that tail is populated.
@@ -62,13 +63,34 @@ membership remain fixed, not merely within acceptance tolerance.
 
 ## Seasonality and diagnostics
 
-Date sampling weights November/December at 30% of available annual one-time
-exposure, includes a summer dip and a last-week-of-December spike. Fixed recent
-rates, protected cohort dates and donor inactivity constrain which calendar
-years/months can contain gifts. The amount distribution is sampled independently
-of month; actual dollar shares must be checked, not inferred from date weights.
-Five rolling years span partial boundary calendar years, and a highly lapsed
-population also truncates the later years of most individual histories.
+The calendar is now budgeted **before donor assignment**. Whole-window daily
+weights include 4% underlying annual growth, a summer dip, 30% November/December
+exposure, the annual Giving Tuesday date and a last-week-of-December spike.
+Boundary years receive only their actual days' weighted exposure; they are not
+given full-year budgets. Calendar budgets include mandatory gifts rather than
+adding mandatory gifts on top.
+
+Lapsed partners receive their minimum gifts from the older portion of that
+shared calendar. Their individual last dates become their stopping dates;
+additional gifts cannot move those stops toward the 24-month boundary. The
+active non-single cohort is reserved to carry later calendar slots, rather than
+allocating nearly all repeat-gift capacity to lapsed people. Recurring monthly
+dates remain explicit.
+
+Two existing membership intersections necessarily constrain local dates:
+non-recent TBN+ partners with nonzero imported RFM recency must remain outside
+720 days but inside 730, and recent volume must obey the new per-person budget.
+The allocator includes those protected dates in its budgets; it does not use
+them to truncate the population's entire timeline.
+
+After generating amounts and assigning full linked returns, same-year swaps
+between unreturned one-time gifts balance November/December dollars to 25–35%.
+Swaps preserve the amount multiset, annual gift/dollar totals, all dates, tail
+quotas, return links and recipient cohorts. Both positive-original and
+unreturned-dollar shares are checked. Very small cohorts can make a dollar
+interval impossible because one immutable tail amount dominates a year; they
+retain their amounts and expose the discrepancy in diagnostics. Plans at
+50,000+ people refuse to write CSV files if the full-year acceptance checks fail.
 
 `kinship verify-seed` remains PostgreSQL-enforced read-only. It now prints:
 
@@ -78,12 +100,23 @@ population also truncates the later years of most individual histories.
 - Return count and percent of original donations.
 - November/December share of unreturned one-time dollars per year, observed date
   bounds, and the aggregate share.
+- Positive-original and unreturned gifts/dollars by year, separating one-time
+  and recurring gifts.
+- The largest full-year YoY change in one-time and total positive gift counts.
 
-Distribution figures are diagnostics; the existing PASS/FAIL still refers to
-ledger reconciliation checks, not a claim that realism targets have passed.
+Full years are determined from the UTC reference's five-year window, never
+from the minimum/maximum observed gift date. `verify-seed --as-of YYYY-MM-DD`
+must match an explicitly dated seed; the default reference remains today UTC.
+The command prints a FAIL for every full year's one-time dollar share outside
+25–35%, or full-year one-time/total gift-count change beyond ±25%. Missing full
+years fail too. These failures now produce exit status 1 alongside ledger
+failures. Amount/frequency/tail statistics remain descriptive.
+
 New regression coverage in `test_seed_audit.py` checks exact quotas, protected
 memberships, monthly schedules, one-to-one refunds and imported model/ledger
-consistency, reusing the existing audit seed fixture.
+consistency, as well as annual volume, dollar seasonality and distributed lapsed
+stopping years, reusing the existing audit seed fixture. Pure timeline tests
+cover partial-year exclusion, missing years and inclusive failure thresholds.
 
 **No tests, seeds, imports or benchmarks were run in Replit for this change.**
 The listed targets and algorithm are not production measurements. Verification

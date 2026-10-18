@@ -99,7 +99,8 @@ def test_audit_giving_keeps_memberships_and_models_consistent(giving_ledger):
     cutoff = reference.toordinal() - 30
     recent_rows = [row for row in positive.values()
                    if date.fromisoformat(row["gift_date"]).toordinal() >= cutoff]
-    assert len(recent_rows) == round(result["requested_people"] * 2957 * 30 / 7830000)
+    assert len(recent_rows) == result["giving_targets"]["recent_donations"]
+    assert 1.2 <= len(recent_rows) / n("Donors Past 30 Days") <= 1.6
     assert {r["contact_external_id"] for r in recent_rows} == expected_recent
     actual_recent = {key for key, rows in retained.items()
                      if any(date.fromisoformat(r["gift_date"]).toordinal() >= cutoff for r in rows)}
@@ -158,6 +159,38 @@ def test_audit_seasonal_weights_preserve_year_end_and_summer_dip():
     july = sum(weight for day, weight in zip(days, weights) if day.month == 7)
     january = sum(weight for day, weight in zip(days, weights) if day.month == 1)
     assert july < january
+
+
+def test_audit_calendar_is_balanced_without_changing_gifts(giving_ledger):
+    from collections import defaultdict
+    from app.seed_timeline import timeline_checks
+    result, people, positive, refunds, retained = giving_ledger
+    returned = {row["original_donation_id"] for row in refunds}
+    grouped = defaultdict(lambda: dict(gifts=0, dollars=0, retained_dollars=0,
+                                       year_end=0, gross_year_end=0))
+    for gift in positive.values():
+        day = date.fromisoformat(gift["gift_date"])
+        row = grouped[day.year, gift["is_recurring"] == "true"]
+        row["gifts"] += 1
+        row["dollars"] += gift["cents"]
+        if day.month >= 11:
+            row["gross_year_end"] += gift["cents"]
+        if gift["external_id"] not in returned:
+            row["retained_dollars"] += gift["cents"]
+            if day.month >= 11:
+                row["year_end"] += gift["cents"]
+    rows = [dict(year=year, is_recurring=recurring, **values)
+            for (year, recurring), values in grouped.items()]
+    reference = date.fromisoformat(result["as_of"])
+    verdict = timeline_checks(rows, reference)
+    assert verdict["errors"] == []
+    stops = [date.fromisoformat(person["last_donation_date"])
+             for person in people.values() if person["donor_status"] == "lapsed"]
+    assert len({day.year for day in stops}) >= 3
+    assert sum(731 <= (reference-day).days <= 791 for day in stops) / len(stops) < .35
+    # The calendar plan is checked before writing files and independently
+    # recomputed here from the CSV ledger, including linked return exclusions.
+    assert result["timeline_checks"]["errors"] == []
 
 
 def test_real_import_mapping_accepts_audit_csv(audit):

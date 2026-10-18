@@ -152,7 +152,16 @@ def measure_audit(directory):
                                  proportion=actual/giver_count if giver_count else 0,
                                  tolerance=expected*.2, applicable=True,
                                  passed=abs(actual-expected)<=expected*.2))
-            for name, rate in (("donation", 3000), ("donation_return", 27), ("order_shipped", 171)):
+            recent_rows = count("SELECT count(*) FROM e WHERE name='donation' AND substr(occurred_at,1,10)>=? "
+                                "AND substr(occurred_at,1,10)<?",
+                                (str(reference-timedelta(days=30)), str(reference)))
+            recent_people = observed["Donors Past 30 Days"]
+            rows.append(dict(metric="30 day donation rows", actual=recent_rows, expected=1.4*recent_people,
+                             target_full=1.4*catalog["audiences"]["Donors Past 30 Days"],
+                             proportion=recent_rows/recent_people if recent_people else 0,
+                             tolerance=max(1, .2*recent_people), applicable=True,
+                             passed=abs(recent_rows-1.4*recent_people) <= max(1, .2*recent_people)))
+            for name, rate in (("donation_return", 27), ("order_shipped", 171)):
                 actual = count("SELECT count(*) FROM e WHERE name=? AND substr(occurred_at,1,10)>=? "
                                "AND substr(occurred_at,1,10)<?",
                                (name, str(reference-timedelta(days=30)), str(reference)))

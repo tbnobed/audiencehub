@@ -5,9 +5,10 @@ from sqlalchemy.pool import NullPool
 
 from app.config import get_settings
 from app.readonly_benchmark import readonly_session
+from app.seed_timeline import timeline_checks
 
 
-def verify_seed(timeout_seconds=600):
+def verify_seed(timeout_seconds=600, as_of=None):
     if not 1 <= timeout_seconds <= 14400:
         raise ValueError("--timeout-seconds must be between 1 and 14400")
     url = make_url(get_settings().database_url.replace(
@@ -24,6 +25,7 @@ def verify_seed(timeout_seconds=600):
     try:
         with readonly_session(engine) as db:
             db.execute(text("SET LOCAL TIME ZONE 'UTC'"))
+            reference = as_of or db.scalar(text("SELECT CURRENT_DATE"))
             stats = db.execute(text("""
                 SELECT count(*) AS ledger_rows,
                   count(*) FILTER (WHERE COALESCE(attributes->>'is_refund','false')<>'true') AS gift_count,
@@ -43,13 +45,13 @@ def verify_seed(timeout_seconds=600):
             mismatch = db.scalar(text("""
                 WITH totals AS (
                   SELECT profile_id, sum(amount) AS net FROM gifts
-                  WHERE gift_date IS NULL OR gift_date<=CURRENT_DATE GROUP BY profile_id
+                  WHERE gift_date IS NULL OR gift_date<=:as_of GROUP BY profile_id
                 )
                 SELECT count(*) FROM active_profiles p
                 LEFT JOIN totals g ON g.profile_id=p.id
                 LEFT JOIN profile_traits t ON t.profile_id=p.id
                 WHERE t.profile_id IS NULL OR t.ltv_total IS DISTINCT FROM COALESCE(g.net,0)
-            """))
+            """), {"as_of": reference})
             empty_links = db.scalar(text("""
                 SELECT count(*) FROM active_profiles p
                 WHERE EXISTS (SELECT 1 FROM source_records r JOIN sources s ON s.id=r.source_id
@@ -105,21 +107,34 @@ def verify_seed(timeout_seconds=600):
                   count(*) FILTER(WHERE n>=20) AS frequent_givers
                 FROM retained_counts
             """)).mappings().one()
-            seasonal = db.execute(text("""
-                SELECT extract(year FROM g.gift_date)::int AS year,
-                  count(*) AS gifts,sum(g.amount) AS dollars,
-                  sum(g.amount) FILTER(WHERE extract(month FROM g.gift_date) IN (11,12)) AS year_end,
-                  min(g.gift_date) AS first_date,max(g.gift_date) AS last_date
-                FROM gifts g WHERE g.amount>0 AND NOT g.is_recurring
-                  AND COALESCE(g.attributes->>'is_refund','false')<>'true'
-                  AND NOT EXISTS (
+            annual = db.execute(text("""
+                WITH originals AS (
+                  SELECT g.*, NOT EXISTS (
                     SELECT 1 FROM gifts r WHERE r.source_id=g.source_id AND r.profile_id=g.profile_id
                       AND (r.amount<0 OR r.attributes->>'is_refund'='true')
                       AND (r.attributes->>'original_gift_external_id'=g.external_id
-                           OR r.attributes->>'original_donation_id'=g.external_id))
-                  AND g.gift_date IS NOT NULL
-                GROUP BY extract(year FROM g.gift_date) ORDER BY year
+                           OR r.attributes->>'original_donation_id'=g.external_id)) AS retained
+                  FROM gifts g WHERE g.amount>0 AND g.gift_date IS NOT NULL
+                    AND COALESCE(g.attributes->>'is_refund','false')<>'true'
+                )
+                SELECT extract(year FROM gift_date)::int AS year,
+                  COALESCE(is_recurring,false) AS is_recurring,
+                  count(*) AS gifts,sum(amount) AS dollars,
+                  count(*) FILTER(WHERE retained) AS retained_gifts,
+                  sum(amount) FILTER(WHERE retained) AS retained_dollars,
+                  sum(amount) FILTER(WHERE retained AND extract(month FROM gift_date) IN (11,12)) AS year_end,
+                  sum(amount) FILTER(WHERE extract(month FROM gift_date) IN (11,12)) AS gross_year_end,
+                  min(gift_date) AS first_date,max(gift_date) AS last_date
+                FROM originals GROUP BY extract(year FROM gift_date),COALESCE(is_recurring,false)
+                ORDER BY year,is_recurring
             """)).mappings().all()
+            seasonal = [row for row in annual if not row["is_recurring"]]
+            timeline = timeline_checks(annual, reference)
+            recent = db.execute(text("""
+                SELECT count(*) AS gifts,count(DISTINCT profile_id) AS donors
+                FROM gifts WHERE amount>0 AND COALESCE(attributes->>'is_refund','false')<>'true'
+                  AND gift_date>=CAST(:as_of AS date)-30 AND gift_date<:as_of
+            """), {"as_of": reference}).mappings().one()
             pct = lambda numerator, denominator: 100 * float(numerator or 0) / denominator if denominator else 0
             print(f"Gifts per donor (unreturned): median={distribution['median']}; p95={distribution['p95']}; donors={distribution['donors']:,}")
             print(f"Gifts per donor (all positive originals): median={distribution['gross_median']}; p95={distribution['gross_p95']}")
@@ -129,13 +144,33 @@ def verify_seed(timeout_seconds=600):
             print(f"Gifts at 1,000+: {stats['gifts_1000']:,} ({pct(stats['gifts_1000'],stats['gift_count']):.3f}%); "
                   f"at 10,000+: {stats['gifts_10000']:,} ({pct(stats['gifts_10000'],stats['gift_count']):.3f}%)")
             print(f"Returns: {stats['returns']:,} ({pct(stats['returns'],stats['gift_count']):.3f}% of donations)")
+            print(f"Last 30 days: donations={recent['gifts']:,}; donors={recent['donors']:,}; "
+                  f"gifts_per_donor={recent['gifts']/recent['donors'] if recent['donors'] else 0:.3f}")
+            print(f"Gifts and dollars by year (UTC reference={reference}; full years={timeline['full_years']}):")
+            for year in annual:
+                kind = "recurring" if year["is_recurring"] else "one-time"
+                scope = "FULL" if year["year"] in timeline["full_years"] else "PARTIAL"
+                print(f"  {year['year']} {scope} {kind}: gifts={year['gifts']:,}; dollars={year['dollars']}; "
+                      f"unreturned_gifts={year['retained_gifts']:,}; unreturned_dollars={year['retained_dollars'] or 0}")
+            for kind, change in timeline["largest_count_changes"].items():
+                if change is None:
+                    print(f"Largest full-year YoY change ({kind} count): n/a (fewer than two full years)")
+                else:
+                    previous, current, value = change
+                    detail = "undefined (previous year empty)" if value is None else f"{value:+.2f}%"
+                    print(f"Largest full-year YoY change ({kind} count): {previous}→{current} {detail}")
             print("Nov-Dec share of one-time dollars by year (unreturned gifts; boundary years may be partial):")
             for year in seasonal:
-                print(f"  {year['year']}: {pct(year['year_end'],float(year['dollars'])):.2f}%; "
+                print(f"  {year['year']}: {pct(year['year_end'],float(year['retained_dollars'] or 0)):.2f}% unreturned; "
+                      f"{pct(year['gross_year_end'],float(year['dollars'])):.2f}% positive originals; "
                       f"one-time gifts={year['gifts']:,}; dollars={year['dollars']}; "
                       f"observed={year['first_date']}..{year['last_date']}")
             print(f"Nov-Dec share of one-time dollars, all years: "
-                  f"{pct(sum(float(y['year_end'] or 0) for y in seasonal), sum(float(y['dollars']) for y in seasonal)):.2f}%")
+                  f"{pct(sum(float(y['year_end'] or 0) for y in seasonal), sum(float(y['retained_dollars'] or 0) for y in seasonal)):.2f}%")
+            for error in timeline["errors"]:
+                print(f"FAIL: timeline: {error}")
+            if not timeline["errors"]:
+                print("PASS: full-year gift counts and Nov-Dec one-time dollar shares.")
             print(f"Negative amounts: {stats['negative_amounts']:,}; without refund evidence: {stats['unexplained_negatives']:,}")
             print(f"Invalid/unlinked/over-refunded original gifts: {invalid_returns:,}")
             print(f"Profiles with lifetime giving mismatch or missing traits: {mismatch:,}")
@@ -145,14 +180,14 @@ def verify_seed(timeout_seconds=600):
                 examples = db.execute(text("""
                     WITH totals AS (
                       SELECT profile_id,sum(amount) AS net FROM gifts
-                      WHERE gift_date IS NULL OR gift_date<=CURRENT_DATE GROUP BY profile_id
+                      WHERE gift_date IS NULL OR gift_date<=:as_of GROUP BY profile_id
                     )
                     SELECT p.master_id,p.id,t.ltv_total,COALESCE(g.net,0) AS gift_sum
                     FROM active_profiles p LEFT JOIN totals g ON g.profile_id=p.id
                     LEFT JOIN profile_traits t ON t.profile_id=p.id
                     WHERE t.profile_id IS NULL OR t.ltv_total IS DISTINCT FROM COALESCE(g.net,0)
                     ORDER BY p.id LIMIT 20
-                """)).mappings()
+                """), {"as_of": reference}).mappings()
                 print("Lifetime mismatches (first 20):")
                 for row in examples:
                     print(f"  {row['master_id']} profile={row['id']} lifetime={row['ltv_total']} gift_sum={row['gift_sum']}")
@@ -168,9 +203,9 @@ def verify_seed(timeout_seconds=600):
                 print("Donation-source profiles without gifts (first 20):")
                 for row in examples:
                     print(f"  {row['master_id']} profile={row['id']}")
-            failed = bool(mismatch or empty_links or invalid_returns or
+            failed = bool(timeline["errors"] or mismatch or empty_links or invalid_returns or
                           stats["unexplained_negatives"] or stats["unattached_rows"])
-            print("FAIL: discrepancies found; no changes made." if failed else "PASS: ledger reconciliation checks passed.")
+            print("FAIL: discrepancies found; no changes made." if failed else "PASS: ledger reconciliation and timeline checks passed.")
             return int(failed)
     finally:
         engine.dispose()

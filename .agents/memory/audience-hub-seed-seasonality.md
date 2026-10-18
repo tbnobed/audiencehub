@@ -5,7 +5,7 @@ description: Why a weighted year-end gift generator produces only a modest aggre
 
 In seed acceptance reports, show the November–December share for all gifts and, when explaining the synthetic seasonal weighting, the share for nonrecurring gifts separately. Do not describe the aggregate as a large year-end spike without checking it.
 
-**Why:** The seed weights randomly dated gifts toward November and December, but monthly recurring gifts dominate the gift volume and are spread evenly through the year. In the 50,000-person acceptance run, nonrecurring giving had a clear year-end concentration while the all-gift share was only modestly above a uniform two-month share.
+**Why:** Monthly recurring gifts are spread evenly through the year and can flatten the aggregate uplift. An earlier seed acceptance run showed that the one-time seasonal concentration did not establish the same concentration for all gifts.
 
 **How to apply:** When changing seed generation or reporting annual giving sanity figures, query both populations after import. If a strong aggregate spike is a requirement, change the seed mix deliberately and rerun the clean acceptance load rather than presenting nonrecurring seasonality as the aggregate result.
 
@@ -35,3 +35,18 @@ proportion and as_of anchoring to stay fixed while increasing gift volume.
 do not treat all nonzero imported recency scores as active-in-12-month donors,
 which would silently expand the TBN+ 720-day donor audience. Report actual
 seasonal dollar shares separately from intended date weights.
+
+Budget the whole calendar before assigning gifts to the audit's high-lapsed
+donor mix. Older donors' individually truncated sampling windows must not
+determine population-wide year volumes; active repeat givers must carry later
+years. Preserve donor stopping dates when adding historical repeats.
+
+**Why:** Production accepted totals and all audiences but exposed a roughly 97%
+collapse in gifts after the lapsed cutoff. Per-donor season weights alone did
+not provide plausible population-wide years.
+
+**How to apply:** Check every full calendar year's one-time dollar seasonality
+and adjacent full-year gift counts against reference-date bounds, including
+missing years. Never infer completeness from observed gift maxima. The newer
+recent-frequency requirement is 1.2–1.6 gifts per recent donor and supersedes the
+earlier population-scaled 190/day target; it does not reduce five-year volume.

@@ -240,10 +240,9 @@ def generate_audit_seed(profiles, scale, random_seed, output_dir, as_of):
                               append_date=str(w.end), sensitive=False))
             if giver:
                 lifetime, gifts, lastday, lastamount, lastcode = 0, 0, w.start, 0, ""
-                amount_rng = random.Random(giving.rank[i] ^ 0xA510)
                 for planned in giving.gifts(i):
                     original = donation(i, planned.day, planned.suffix, planned.code,
-                                        amount_cents=giving.amount(amount_rng),
+                                        amount_cents=planned.amount_cents,
                                         is_recurring=planned.is_recurring)
                     if planned.refund_day is not None:
                         donation(i, planned.refund_day, planned.suffix, refund=True, original=original)
@@ -295,11 +294,12 @@ def generate_audit_seed(profiles, scale, random_seed, output_dir, as_of):
                 "mode": "audit", "requested_people": profiles, "random_seed": random_seed,
                 "scale": scale, "denominator": DENOMINATOR,
                 "scale_policy": "Audit ratios and daily rates are invariant across density labels.",
-                "generation_memory": "O(donors) integer gift quotas; CSV rows/identity truth are streamed.",
+                "generation_memory": "O(gifts + donors) calendar plan; CSV rows/identity truth are streamed.",
                 "giving_targets": {"donations": giving.donations, "returns": giving.return_count,
                                    "recent_donations": giving.recent_donations,
                                    "single_givers": len(giving.singles),
                                    "gifts_1000_plus": giving.tail_count, "gifts_10000_plus": giving.major_count},
+                "timeline_checks": giving.timeline,
                 "ground_truth_format": "Compact deterministic identity rule, not an in-memory event dictionary.",
                 "giving_tuesday_in_window": w.start <= GT <= w.end,
                 "source_file_mapping": {

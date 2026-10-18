@@ -127,7 +127,13 @@ def imported_report(db, as_of, requested_profiles, *, split_activity=False):
         actual, expected = count(f"SELECT count(*) FROM audit_people p WHERE {predicate}"), actual_n*fraction
         results.append(dict(metric=name, actual=actual, expected=expected, tolerance=.2*expected,
                             passed=abs(actual-expected)<=.2*expected))
-    for name, daily in (("donation",3000), ("donation_return",27), ("order_shipped",171)):
+    recent_rows = count("SELECT count(*) FROM events WHERE name='donation' AND occurred_at>=:recent AND occurred_at<:as_of")
+    recent_people = count(f"SELECT count(*) FROM audit_people p WHERE {predicates['Donors Past 30 Days']}")
+    expected = 1.4 * recent_people
+    tolerance = max(1, .2 * recent_people)
+    results.append(dict(metric="30 day donation", actual=recent_rows, expected=expected,
+                        tolerance=tolerance, passed=abs(recent_rows-expected) <= tolerance))
+    for name, daily in (("donation_return",27), ("order_shipped",171)):
         actual = count(f"SELECT count(*) FROM events WHERE name='{name}' AND occurred_at>=:recent AND occurred_at<:as_of")
         expected = actual_n*daily*30/7830000
         results.append(dict(metric=f"30 day {name}", actual=actual, expected=expected,
