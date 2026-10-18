@@ -73,7 +73,7 @@ def prepare_audience_oracle(db, as_of):
     return predicates, params
 
 
-def imported_report(db, as_of, requested_profiles):
+def imported_report(db, as_of, requested_profiles, *, split_activity=False):
     from app.seed_audit import TARGETS, DENOMINATOR
     predicates, params = prepare_audience_oracle(db, as_of)
     exists = lambda key: f"NULLIF(attrs->>'{key}','') IS NOT NULL"
@@ -120,10 +120,43 @@ def imported_report(db, as_of, requested_profiles):
     results.append(dict(metric="Synthetic enrichment", actual=enrichment_profiles,
                         expected=expected_enrichment, tolerance=.2*expected_enrichment,
                         passed=abs(enrichment_profiles-expected_enrichment)<=.2*expected_enrichment))
+    invalid_refund_references = 0
+    event_feed_violations = 0
+    if split_activity:
+        invalid_refund_references = count("""
+            SELECT count(*) FROM gifts r LEFT JOIN gifts original
+              ON original.source_id=r.source_id
+              AND original.external_id=r.attributes->>'original_gift_external_id'
+            WHERE (r.amount<0 OR r.attributes->>'is_refund'='true') AND (
+              original.id IS NULL OR original.amount<=0 OR r.amount>=0
+              OR original.profile_id IS DISTINCT FROM r.profile_id
+              OR r.gift_date<original.gift_date OR -r.amount>original.amount
+            )
+        """)
+        invalid_refund_references += count("""
+            SELECT count(*) FROM (
+              SELECT r.source_id,r.attributes->>'original_gift_external_id'
+              FROM gifts r JOIN gifts original ON original.source_id=r.source_id
+                AND original.external_id=r.attributes->>'original_gift_external_id'
+              WHERE r.amount<0
+              GROUP BY r.source_id,r.attributes->>'original_gift_external_id'
+              HAVING -sum(r.amount)>max(original.amount)
+            ) over_refunded
+        """)
+        event_feed_violations = count("""
+            SELECT count(*) FROM events e JOIN sources s ON s.id=e.source_id
+            WHERE s.key IN ('donation_events','vod_viewed_events','people_feed')
+              AND s.key<>CASE WHEN e.name IN ('donation','donation_return') THEN 'donation_events'
+                         WHEN e.name='vod_viewed' THEN 'vod_viewed_events'
+                         ELSE 'people_feed' END
+        """)
     return {"as_of": str(as_of), "profiles": actual_n, "requested_profiles": requested_profiles,
             "unresolved_source_records": pending, "unresolved_facts": unresolved,
             "wrong_enrichment": wrong_enrichment, "metrics": results,
+            "invalid_refund_references": invalid_refund_references,
+            "event_feed_violations": event_feed_violations,
             "passed": all(r["passed"] for r in results) and not (pending or unresolved or wrong_enrichment)
+            and not (invalid_refund_references or event_feed_violations)
             and abs(actual_n-requested_profiles) <= max(25,requested_profiles*.005)}
 
 
@@ -199,7 +232,10 @@ def measure(directory, profiles=50_000, *, scale="small", as_of=None, seed_dir=N
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
     reference = date.fromisoformat(as_of) if isinstance(as_of,str) else as_of or datetime.now(timezone.utc).date()
-    from app.seed import generate_seed, load_generated_files, CSV_FILES, LEGACY_CSV_FILES
+    from app.seed import (
+        generate_seed, load_generated_files, CSV_FILES, PREVIOUS_AUDIT_CSV_FILES,
+        LEGACY_CSV_FILES,
+    )
     from app.seed_audit_report import measure_audit
     from app.imports.service import run_import
     from app.jobs import handlers
@@ -221,6 +257,9 @@ def measure(directory, profiles=50_000, *, scale="small", as_of=None, seed_dir=N
             if stats.get("mode") != "audit" or stats["requested_people"] != profiles or stats["as_of"] != str(reference):
                 raise ValueError("Reused seed must match audit mode, population and as_of")
             filenames = CSV_FILES if stats.get("source_file_mapping") is not None else LEGACY_CSV_FILES
+            if (stats.get("source_file_mapping") is not None
+                    and "people_feed_events.csv" not in stats["source_file_mapping"]):
+                filenames = PREVIOUS_AUDIT_CSV_FILES
             if set(stats.get("files", {})) != set(filenames):
                 raise ValueError("Reused seed must contain the complete matching audit file manifest")
             return {"files": {name: seed_path/name for name in filenames}, "output_dir": seed_path}
@@ -262,7 +301,8 @@ def measure(directory, profiles=50_000, *, scale="small", as_of=None, seed_dir=N
             return result
     bulk("rollups", rollups)
     with Session(engine) as db:
-        report = timed("postgres_oracle", lambda: imported_report(db, reference, profiles))
+        report = timed("postgres_oracle", lambda: imported_report(
+            db, reference, profiles, split_activity="people_feed_events.csv" in generated["files"]))
         from app.dashboards.overview import build_overview
         overview = timed("default_dashboard", lambda: build_overview(
             db,reference-timedelta(days=29),reference,

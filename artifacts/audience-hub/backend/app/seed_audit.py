@@ -37,6 +37,7 @@ AUDIT_FILES = {
     "hubspot.csv": ("hubspot", "contact"),
     "okta_tbn_plus.csv": ("okta_tbn_plus", "contact"),
     "donation_events.csv": ("donation_events", "event"),
+    "people_feed_events.csv": ("people_feed", "event"),
     "vod_viewed_events.csv": ("vod_viewed_events", "event"),
     "model_scores.csv": ("model_scores", "enrichment"),
 }
@@ -75,7 +76,8 @@ def generate_audit_seed(profiles, scale, random_seed, output_dir, as_of):
          "zeta_uid", "donor_account_number", "okta_customer_id", "hubspot_record_id",
          "email_sha256", *FIELDS),
         ("external_id", "contact_external_id", "amount", "currency", "gift_date",
-         "fund", "campaign", "source_code", "channel", "is_recurring", "is_refund"),
+         "fund", "campaign", "source_code", "channel", "is_recurring", "is_refund",
+         "original_donation_id"),
         ("external_id", "contact_external_id", "email", "email_consent", "consent_captured_at",
          "zeta_cdp_id", "zeta_uid", "email_sha256", "hubspot_record_id"),
         ("external_id", "contact_external_id", "message_id", "type", "name",
@@ -91,6 +93,7 @@ def generate_audit_seed(profiles, scale, random_seed, output_dir, as_of):
         "hubspot.csv": headers[2],
         "okta_tbn_plus.csv": headers[2],
         "donation_events.csv": headers[3],
+        "people_feed_events.csv": headers[3],
         "vod_viewed_events.csv": headers[3],
         "model_scores.csv": headers[4],
     }
@@ -113,27 +116,53 @@ def generate_audit_seed(profiles, scale, random_seed, output_dir, as_of):
         def event(i, name, day, props=None, suffix=""):
             eid = f"{name}-{i}-{suffix}"
             stamp = f"{day}T12:00:00Z"
-            filename = "vod_viewed_events.csv" if name == "vod_viewed" else "donation_events.csv"
+            filename = ("vod_viewed_events.csv" if name == "vod_viewed" else
+                        "donation_events.csv" if name in ("donation", "donation_return") else
+                        "people_feed_events.csv")
             write(filename, dict(external_id=eid, contact_external_id=f"crm-{i:08d}",
                          message_id=eid, type="track", name=name, occurred_at=stamp,
                          received_at=stamp, properties=json.dumps(props or {}),
                          context='{"synthetic":true}'))
 
-        def donation(i, day, suffix, code="SYN-GEN", refund=False):
-            amount = round(max(1, rng.lognormvariate(math.log(50), 1.5)), 2)
+        def money(cents):
+            return f"{cents // 100}.{cents % 100:02d}"
+
+        def donation(i, day, suffix, code="SYN-GEN", refund=False, original=None):
+            # CSV and event amounts are USD, not cents. Keep arithmetic in cents
+            # internally; the narrower distribution retains a $50 median.
+            if refund:
+                if (original is None or original["owner"] != i or original["is_refund"] or
+                        original["returned"] or day < original["day"]):
+                    raise ValueError("Return requires this person's unreturned original gift")
+                cents, code = original["cents"], original["code"]
+                original["returned"] = True
+            else:
+                cents = round(max(5, min(1000, rng.lognormvariate(math.log(50), .55))) * 100)
             name = "donation_return" if refund else "donation"
             eid = f"{name}-{i}-{suffix}"
+            gift_id = f"gift:{eid}"
+            props = {"amount": cents / 100, "source_code": code, "fund": "General",
+                     "gift_id": gift_id}
+            if refund:
+                props.update(original_gift_id=original["gift_id"],
+                             original_donation_id=original["gift_id"])
             # CSV event imports do not materialize gifts. Write exactly one ledger
             # row here; the source-pull gift adapter is deliberately not invoked.
-            write("donation_events_gifts.csv", dict(external_id=f"gift:{eid}", contact_external_id=f"crm-{i:08d}",
-                          amount=f"{amount:.2f}", currency="USD", gift_date=str(day),
+            # The gift importer signs explicit refunds negative and preserves
+            # original_donation_id in attributes; CSV carries the exact magnitude.
+            write("donation_events_gifts.csv", dict(external_id=gift_id, contact_external_id=f"crm-{i:08d}",
+                          amount=money(cents), currency="USD", gift_date=str(day),
                           fund="General", campaign="Giving Tuesday 2024" if code in GT_CODES else
                           "Year-End Giving" if code == "SYN-YE" else "General Giving",
                           source_code=code, channel="online",
-                          is_recurring=i < t["Basic Recurring Donors"], is_refund=refund))
-            event(i, name, day, {"amount": amount, "source_code": code, "fund": "General"}, suffix)
-            return amount
+                          is_recurring=i < t["Basic Recurring Donors"], is_refund=refund,
+                          original_donation_id=original["gift_id"] if refund else ""))
+            event(i, name, day, props, suffix)
+            return {"gift_id": gift_id, "owner": i, "day": day, "cents": cents,
+                    "code": code, "returned": False, "is_refund": refund}
 
+        recent_gifts = round(profiles * 3000 * 30 / 7830000)
+        return_gifts = round(profiles * 27 * 30 / 7830000)
         for i in range(profiles):
             giver = i < g
             account = i < g + partner
@@ -214,10 +243,10 @@ def generate_audit_seed(profiles, scale, random_seed, output_dir, as_of):
                     if w.start <= candidate <= w.as_of-timedelta(days=721):
                         day = candidate
                 code = "SYN-YE" if day.month >= 11 else "SYN-GEN"
-                amount = donation(i, day, "history", code)
+                amount = donation(i, day, "history", code)["cents"]
                 lifetime, gifts, lastday, lastamount, lastcode = amount, 1, day, amount, code
                 if i < t["Giving Tuesday 2024"] and w.start <= GT <= w.end:
-                    amount = donation(i, GT, "gt", GT_CODES[i % 4])
+                    amount = donation(i, GT, "gt", GT_CODES[i % 4])["cents"]
                     lifetime += amount
                     gifts += 1
                     if GT >= lastday:
@@ -229,16 +258,24 @@ def generate_audit_seed(profiles, scale, random_seed, output_dir, as_of):
                                app_recent+i-basic-premium if basic+premium <= i <
                                basic+premium+recent-app_recent else None)
                 if recent_rank is not None:
-                    for j in range(recent_rank, round(profiles * 3000 * 30 / 7830000), recent):
+                    for j in range(recent_rank, recent_gifts, recent):
                         day = w.end - timedelta(days=j % 30)
-                        amount = donation(i, day, f"recent-{j}")
+                        original = donation(i, day, f"recent-{j}")
+                        if j < return_gifts:
+                            # Pair before writing the primary contact. Historical
+                            # and GT gifts remain intact, preserving cohort/key
+                            # coverage. Only one current gift is retained in memory.
+                            donation(i, day, f"recent-{j}", refund=True, original=original)
+                            continue
+                        amount = original["cents"]
                         lifetime += amount
                         gifts += 1
                         if day >= lastday:
                             lastday, lastamount, lastcode = day, amount, "SYN-GEN"
-                row.update(last_donation_date=str(lastday), last_donation_amount=lastamount,
-                           last_donation_source=lastcode, lifetime_amount=round(lifetime, 2),
-                           lifetime_avg_donation=round(lifetime/gifts, 2), number_of_donations=gifts)
+                row.update(last_donation_date=str(lastday), last_donation_amount=money(lastamount),
+                           last_donation_source=lastcode, lifetime_amount=money(lifetime),
+                           lifetime_avg_donation=money((2*lifetime+gifts)//(2*gifts)),
+                           number_of_donations=gifts)
             write("donor_direct.csv", row)
             if i < t["Customers with VOD Viewed"]:
                 event(i, "vod_viewed", w.end, {"vod_title_id": "SYN-VOD"})
@@ -256,15 +293,10 @@ def generate_audit_seed(profiles, scale, random_seed, output_dir, as_of):
             if i < t["VOD Optouts"]:
                 event(i, "preference_update", w.end, {"vod_updates": False})
         # Exact total rates, distributed across all 30 days without daily rounding bias.
-        for name, daily in (("donation_return", 27), ("order_shipped", 171)):
-            total = round(profiles * daily * 30 / 7830000)
-            for j in range(total):
-                i = j % max(1, recent)
-                day = w.end - timedelta(days=j % 30)
-                if name == "order_shipped":
-                    event(i, name, day, {"product_id": "SYN-BOOK", "amount": 25}, str(j))
-                elif g:
-                    donation(i, day, f"recent-{j}", refund=name == "donation_return")
+        for j in range(round(profiles * 171 * 30 / 7830000)):
+            i = j % max(1, recent)
+            day = w.end - timedelta(days=j % 30)
+            event(i, "order_shipped", day, {"product_id": "SYN-BOOK", "amount": 25}, str(j))
     metadata = {"as_of": str(w.as_of), "start_date": str(w.start), "end_date": str(w.end),
                 "mode": "audit", "requested_people": profiles, "random_seed": random_seed,
                 "scale": scale, "denominator": DENOMINATOR,

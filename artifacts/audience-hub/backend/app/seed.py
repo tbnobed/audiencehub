@@ -26,6 +26,7 @@ from app.seed_giving import CAMPAIGNS, generate_giving, seed_giver_indices
 SCALE_DENSITY = {"small": 0.5, "medium": 1.0, "large": 2.0}
 CSV_FILES = (
     "people_feed.csv",
+    "people_feed_events.csv",
     "donor_direct.csv",
     "hubspot.csv",
     "okta_tbn_plus.csv",
@@ -35,6 +36,7 @@ CSV_FILES = (
     "model_scores.csv",
 )
 AUDIT_CSV_FILES = CSV_FILES
+PREVIOUS_AUDIT_CSV_FILES = tuple(name for name in CSV_FILES if name != "people_feed_events.csv")
 LEGACY_CSV_FILES = (
     "donor_crm_contacts.csv",
     "giving_platform_gifts.csv",

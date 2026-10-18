@@ -19,9 +19,9 @@ export function ProfilePreview({ id, from, onClose }: { id: number; from: string
     <div className="flex shrink-0 items-start justify-between gap-2 border-b border-line px-4 py-3">
       <div className="min-w-0">
         <p className="text-[10px] font-mono uppercase tracking-[.16em] text-signal">Profile preview</p>
+        {data && <MasterIdChip masterId={data.master_id} testId="button-copy-preview-master-id" />}
         {isLoading ? <Skeleton className="h-5 w-40 mt-1 bg-surface-raised" />
           : <h2 className="kin-heading truncate" data-testid="text-preview-name">{data ? displayJoined([data.first_name, data.last_name], ' ') : 'Profile'}</h2>}
-          {data && <MasterIdChip masterId={data.master_id} testId="button-copy-preview-master-id" />}
       </div>
       <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" aria-label="Close preview" data-testid="button-close-preview" onClick={onClose}><X size={14} /></Button>
     </div>

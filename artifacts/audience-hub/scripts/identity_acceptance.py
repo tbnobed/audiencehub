@@ -43,12 +43,17 @@ FILES = {
 AUDIT_FILES = {
     "donor_direct.csv": "donor_direct",
     "people_feed.csv": "people_feed",
+    "people_feed_events.csv": "people_feed",
     "hubspot.csv": "hubspot",
     "okta_tbn_plus.csv": "okta_tbn_plus",
     "donation_events_gifts.csv": "donation_events",
     "donation_events.csv": "donation_events",
     "vod_viewed_events.csv": "vod_viewed_events",
     "model_scores.csv": "model_scores",
+}
+PREVIOUS_AUDIT_FILES = {
+    name: source for name, source in AUDIT_FILES.items()
+    if name != "people_feed_events.csv"
 }
 DB_BATCH_SIZE = 10_000
 
@@ -59,15 +64,20 @@ def _truth_files(metadata: dict[str, Any]) -> dict[str, str]:
         return FILES
     kinds = {
         "donor_direct.csv": "contact", "people_feed.csv": "contact",
+        "people_feed_events.csv": "event",
         "hubspot.csv": "contact", "okta_tbn_plus.csv": "contact",
         "donation_events_gifts.csv": "gift", "donation_events.csv": "event",
         "vod_viewed_events.csv": "event", "model_scores.csv": "enrichment",
     }
     expected = {name: {"source": source, "record_type": kinds[name]}
                 for name, source in AUDIT_FILES.items()}
-    if mapping != expected or metadata.get("reference_source") != "donor_direct":
-        raise ValueError("Unsupported compact truth source-file/reference contract")
-    return AUDIT_FILES
+    previous = {name: value for name, value in expected.items() if name != "people_feed_events.csv"}
+    if metadata.get("reference_source") == "donor_direct":
+        if mapping == expected:
+            return AUDIT_FILES
+        if mapping == previous:
+            return PREVIOUS_AUDIT_FILES
+    raise ValueError("Unsupported compact truth source-file/reference contract")
 
 
 def _non_whitespace(stream: TextIO) -> str:
@@ -256,7 +266,7 @@ def _expand_compact_truth(path: Path, local: sqlite3.Connection,
             or stats.get("reference_source") != metadata.get("reference_source")
             or set(stats.get("files", {})) != set(files)):
         raise ValueError("Compact truth source manifest does not match generator statistics")
-    primary_source = "donor_direct" if files is AUDIT_FILES else "donor_crm"
+    primary_source = "donor_crm" if files is FILES else "donor_direct"
     patterns = {
         "donor_crm": re.compile(r"crm-(\d+)"),
         "esp": re.compile(r"esp-(\d+)"),
@@ -275,8 +285,14 @@ def _expand_compact_truth(path: Path, local: sqlite3.Connection,
     per_source = {}
     per_file = {}
     for filename, source_key in files.items():
-        pattern = (re.compile(r"gift:(?:donation|donation_return)-(\d+)-.+")
-                   if filename == "donation_events_gifts.csv" else patterns[source_key])
+        if filename == "donation_events_gifts.csv":
+            pattern = re.compile(r"gift:(?:donation|donation_return)-(\d+)-.+")
+        elif filename == "people_feed_events.csv":
+            pattern = re.compile(r"[a-z_]+-(\d+)-.*")
+        elif files is AUDIT_FILES and filename == "donation_events.csv":
+            pattern = re.compile(r"(?:donation|donation_return)-(\d+)-.*")
+        else:
+            pattern = patterns[source_key]
         csv_path = path.with_name(filename)
         if not csv_path.is_file():
             raise ValueError(f"Compact truth CSV is missing: {filename}")
@@ -291,6 +307,9 @@ def _expand_compact_truth(path: Path, local: sqlite3.Connection,
                 raise ValueError(f"Compact truth CSV has missing/duplicate headers: {filename}")
             for row in reader:
                 external_id = row.get("external_id", "")
+                if (filename == "people_feed_events.csv"
+                        and row.get("name") in ("donation", "donation_return", "vod_viewed")):
+                    raise ValueError("Financial/VOD event found in the activity feed")
                 match = pattern.fullmatch(external_id)
                 if not match:
                     raise ValueError(f"Invalid compact truth external ID in {filename}")
@@ -598,7 +617,8 @@ def _split_pattern_counts(local: sqlite3.Connection) -> tuple[int, Counter[str]]
             profiles.add(profile_id)
             if source_key in {"donor_crm", "donor_direct"} and not crm_records:
                 crm_records.append((external_id, profile_id, email, phone))
-            elif source_key in {"esp", "people_feed", "hubspot", "okta_tbn_plus"}:
+            elif (source_key in {"esp", "people_feed", "hubspot", "okta_tbn_plus"}
+                  and external_id.startswith("esp-")):
                 esp_present = True
                 if email:
                     esp_emails.add(email)

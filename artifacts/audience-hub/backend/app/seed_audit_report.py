@@ -15,6 +15,7 @@ def measure_audit(directory):
     directory = Path(directory)
     metadata = json.loads((directory / "generator_stats.json").read_text())
     audit_files = metadata.get("source_file_mapping")
+    split_activity = audit_files is not None and "people_feed_events.csv" in audit_files
     if audit_files is None:
         inputs = (("c", "donor_crm_contacts.csv"), ("g", "giving_platform_gifts.csv"),
                   ("e", "five9_calls.csv"), ("z", "zeta_enrichment.csv"))
@@ -24,6 +25,7 @@ def measure_audit(directory):
         expected = {
             "donor_direct.csv": ("donor_direct", "contact"),
             "people_feed.csv": ("people_feed", "contact"),
+            "people_feed_events.csv": ("people_feed", "event"),
             "hubspot.csv": ("hubspot", "contact"),
             "okta_tbn_plus.csv": ("okta_tbn_plus", "contact"),
             "donation_events_gifts.csv": ("donation_events", "gift"),
@@ -31,13 +33,18 @@ def measure_audit(directory):
             "vod_viewed_events.csv": ("vod_viewed_events", "event"),
             "model_scores.csv": ("model_scores", "enrichment"),
         }
-        if (audit_files != {name: {"source": source, "record_type": kind}
+        expected_mapping = {name: {"source": source, "record_type": kind}
                             for name, (source, kind) in expected.items()}
+        previous_mapping = {name: value for name, value in expected_mapping.items()
+                            if name != "people_feed_events.csv"}
+        if (audit_files not in (expected_mapping, previous_mapping)
                 or metadata.get("reference_source") != "donor_direct"):
             raise ValueError("Unsupported audit source-file/reference contract")
         inputs = (("c", "donor_direct.csv"), ("g", "donation_events_gifts.csv"),
                   ("e", "donation_events.csv"), ("e", "vod_viewed_events.csv"),
                   ("z", "model_scores.csv"))
+        if audit_files == expected_mapping:
+            inputs += (("e", "people_feed_events.csv"),)
         gift_event_key = "'gift:' || e.external_id"
         # Keep the reverse lookup indexed on the unmodified event key.
         event_gift_join = "e.external_id=substr(g.external_id,6) AND substr(g.external_id,1,5)='gift:'"
@@ -48,6 +55,7 @@ def measure_audit(directory):
         db = sqlite3.connect(str(Path(temp) / "oracle.sqlite"))
         try:
             table_columns = {}
+            event_feed_violations = 0
             for table, filename in inputs:
                 with (directory / filename).open(newline="") as handle:
                     reader = csv.DictReader(handle)
@@ -57,8 +65,20 @@ def measure_audit(directory):
                         table_columns[table] = columns
                     elif columns != table_columns[table]:
                         raise ValueError(f"Incompatible split event columns in {filename}")
+                    def file_values():
+                        nonlocal event_feed_violations
+                        for row in reader:
+                            if split_activity and table == "e":
+                                event_name = row.get("name")
+                                expected_file = (
+                                    "donation_events.csv" if event_name in ("donation", "donation_return")
+                                    else "vod_viewed_events.csv" if event_name == "vod_viewed"
+                                    else "people_feed_events.csv"
+                                )
+                                event_feed_violations += filename != expected_file
+                            yield tuple(row[c] for c in columns)
                     db.executemany(f"INSERT INTO {table} VALUES ({','.join('?' for _ in columns)})",
-                                   (tuple(row[c] for c in columns) for row in reader))
+                                   file_values())
             db.commit()
             def count(sql, params=()):
                 return db.execute(sql, params).fetchone()[0]
@@ -157,6 +177,28 @@ def measure_audit(directory):
                 f"SELECT count(*) FROM g LEFT JOIN e ON {event_gift_join} "
                 "WHERE e.external_id IS NULL")
             duplicate_gifts = count("SELECT count(*)-count(DISTINCT external_id) FROM g")
+            invalid_refund_references = 0
+            if split_activity:
+                invalid_refund_references = count("""
+                    SELECT count(*) FROM g r LEFT JOIN g original
+                      ON original.external_id=r.original_donation_id
+                    WHERE r.is_refund='true' AND (
+                      original.external_id IS NULL OR original.is_refund<>'false'
+                      OR original.contact_external_id<>r.contact_external_id
+                      OR r.gift_date<original.gift_date
+                      OR CAST(r.amount AS REAL)<=0
+                      OR CAST(r.amount AS REAL)>CAST(original.amount AS REAL)
+                    )
+                """)
+                invalid_refund_references += count("""
+                    SELECT count(*) FROM (
+                      SELECT r.original_donation_id FROM g r JOIN g original
+                        ON original.external_id=r.original_donation_id
+                      WHERE r.is_refund='true'
+                      GROUP BY r.original_donation_id
+                      HAVING sum(CAST(r.amount AS REAL))>max(CAST(original.amount AS REAL))+0.000001
+                    )
+                """)
             date_violations = count(
                 "SELECT count(*) FROM g WHERE gift_date<? OR gift_date>=?",
                 (metadata["start_date"], str(reference)))
@@ -172,11 +214,14 @@ def measure_audit(directory):
                        "invalid_enrichment": invalid_enrichment,
                        "orphan_rows": orphan_rows, "ledger_mismatches": ledger_mismatches,
                        "duplicate_gifts": duplicate_gifts, "date_violations": date_violations,
+                       "event_feed_violations": event_feed_violations,
+                       "invalid_refund_references": invalid_refund_references,
                        "gift_median": sum(middle)/len(middle) if middle else None,
                        "gift_maximum": count("SELECT max(CAST(amount AS REAL)) FROM g WHERE is_refund='false'"),
                        "event_names": [r[0] for r in db.execute("SELECT DISTINCT name FROM e ORDER BY name")],
                        "passed": all(r["passed"] for r in rows) and not any((
-                           invalid_enrichment, orphan_rows, ledger_mismatches, duplicate_gifts, date_violations))}
+                            invalid_enrichment, orphan_rows, ledger_mismatches, duplicate_gifts, date_violations,
+                            event_feed_violations, invalid_refund_references))}
         finally:
             db.close()
     (directory/"audit_report.json").write_text(json.dumps(summary, indent=2)+"\n")

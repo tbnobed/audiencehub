@@ -99,7 +99,13 @@ def main():
         "--load", action="store_true",
         help="After writing files, call app.importer.import_seed_files(files) if available.",
     )
+    verify = commands.add_parser("verify-seed", help="Read-only gift, refund and profile reconciliation.")
+    verify.add_argument("--timeout-seconds", type=int, default=600,
+                        help="Per-query timeout (default: 600 seconds). No data is changed.")
     args = parser.parse_args()
+    if args.command == "verify-seed":
+        from app.verify_seed import verify_seed
+        raise SystemExit(verify_seed(args.timeout_seconds))
     if args.command == "source-pull":
         from app.source_pulls import run_source, collect, connection_row
         from app.db import engine

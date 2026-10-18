@@ -22,6 +22,7 @@ from app.jobs.queue import enqueue
 
 SEED_SOURCES = {
     "people_feed.csv": ("people_feed", "people_feed", "contact"),
+    "people_feed_events.csv": ("people_feed", "people_feed", "event"),
     "donor_direct.csv": ("donor_direct", "donor_direct", "contact"),
     "hubspot.csv": ("hubspot", "hubspot", "contact"),
     "okta_tbn_plus.csv": ("okta_tbn_plus", "okta_tbn_plus", "contact"),
@@ -29,6 +30,10 @@ SEED_SOURCES = {
     "donation_events.csv": ("donation_events", "donation_events", "event"),
     "vod_viewed_events.csv": ("vod_viewed_events", "vod_viewed_events", "event"),
     "model_scores.csv": ("model_scores", "model_scores", "enrichment"),
+}
+PREVIOUS_AUDIT_SEED_SOURCES = {
+    name: source for name, source in SEED_SOURCES.items()
+    if name != "people_feed_events.csv"
 }
 LEGACY_SEED_SOURCES = {
     "donor_crm_contacts.csv": ("donor_crm", "Donor CRM", "contact"),
@@ -96,6 +101,8 @@ def import_seed_files(files: Mapping[str, Path]) -> list[int]:
     """Create source/import rows, enqueue real import.run jobs, and await completion."""
     if set(files) == set(SEED_SOURCES):
         sources = SEED_SOURCES
+    elif set(files) == set(PREVIOUS_AUDIT_SEED_SOURCES):
+        sources = PREVIOUS_AUDIT_SEED_SOURCES
     elif set(files) == set(LEGACY_SEED_SOURCES):
         sources = LEGACY_SEED_SOURCES
     else:
@@ -123,7 +130,7 @@ def import_seed_files(files: Mapping[str, Path]) -> list[int]:
             rows.close()
         mapping = _mapping(
             headers, record_type,
-            reference_source="donor_direct" if sources is SEED_SOURCES else "donor_crm",
+            reference_source="donor_crm" if sources is LEGACY_SEED_SOURCES else "donor_direct",
         )
         checksum = hashlib.sha256()
         with path.open("rb") as stream:
@@ -134,6 +141,9 @@ def import_seed_files(files: Mapping[str, Path]) -> list[int]:
         if not destination.is_file():
             shutil.copyfile(path, destination)
         with Session(engine) as db:
+            record_types = list(dict.fromkeys(
+                kind for key, _, kind in sources.values() if key == source_key
+            ))
             source_id = db.execute(text("SELECT id FROM sources WHERE key=:key"),
                                    {"key": source_key}).scalar()
             if source_id is None:
@@ -142,10 +152,18 @@ def import_seed_files(files: Mapping[str, Path]) -> list[int]:
                     VALUES (:key, :name, 'csv', :record_types, :priority, true)
                     RETURNING id
                 """), {"key": source_key, "name": source_name,
-                       "record_types": list(dict.fromkeys(
-                           kind for key, _, kind in sources.values() if key == source_key
-                       )),
+                       "record_types": record_types,
                        "priority": len(sources) * 10}).scalar_one()
+            elif sources is not LEGACY_SEED_SOURCES:
+                # Upgrading the prior audit manifest adds event capability to
+                # people_feed without replacing any existing source settings.
+                db.execute(text("""
+                    UPDATE sources SET record_types=ARRAY(
+                        SELECT DISTINCT kind
+                        FROM unnest(record_types || CAST(:types AS text[])) AS kinds(kind)
+                        ORDER BY kind
+                    ) WHERE id=:id AND NOT (record_types @> CAST(:types AS text[]))
+                """), {"id": source_id, "types": record_types})
             previous = db.execute(text("""
                 SELECT id FROM imports WHERE source_id=:source_id AND file_sha256=:digest
                   AND record_type=:record_type AND status='completed' LIMIT 1

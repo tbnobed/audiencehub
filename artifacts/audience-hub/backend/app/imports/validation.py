@@ -217,8 +217,14 @@ def map_and_validate_row(row: dict[str, str], columns: dict[str, Any], record_ty
             refund = _convert(str(values.get("is_refund", "false")), "boolean", options)
             if refund:
                 values.setdefault("attributes", {})["is_refund"] = True
-                if values.get("original_donation_id"):
-                    values["attributes"]["original_donation_id"] = values["original_donation_id"]
+                original_id = values.get("original_donation_id")
+                original_gift_id = values.get("original_gift_external_id")
+                if original_id and original_gift_id and original_id != original_gift_id:
+                    errors.append("Refund original gift references disagree")
+                reference = original_gift_id or original_id
+                if reference:
+                    values["attributes"]["original_donation_id"] = reference
+                    values["attributes"]["original_gift_external_id"] = reference
                 if values.get("amount") is not None:
                     values["amount"] = -abs(values["amount"])
             elif values.get("amount") is not None and values["amount"] < 0:

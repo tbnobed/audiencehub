@@ -57,7 +57,7 @@ TYPE_TARGETS = {
 }
 TYPE_TARGETS["enrichment"].update({"vendor", "license_id", "append_date", "sensitive"})
 TYPE_TARGETS["gift"].add("source_code")
-TYPE_TARGETS["gift"].update({"is_refund", "original_donation_id"})
+TYPE_TARGETS["gift"].update({"is_refund", "original_donation_id", "original_gift_external_id"})
 for _key in ("amount", "fund", "source_code", "product_id", "vod_title_id"):
     ALIASES[_key.replace("_", " ")] = _key
 for _key in ("vendor", "license_id", "append_date", "sensitive"):
