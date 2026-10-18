@@ -4,6 +4,7 @@ from alembic import context
 from sqlalchemy import engine_from_config, pool
 from app.db import database_url
 from app.models import Base
+from app.migration_views import version_apply_guard
 
 config = context.config
 config.set_main_option("sqlalchemy.url", database_url().replace("%", "%%"))
@@ -26,8 +27,14 @@ def run_migrations_online():
             # End the validation-only implicit transaction before Alembic owns
             # its migration transaction.
             connection.rollback()
+        view_guard = version_apply_guard(connection)
+        # The catalog reads above start an implicit transaction.
+        # Alembic must own the actual migration transaction, including atomic
+        # view drops/recreation and the version-table update.
+        connection.rollback()
         context.configure(connection=connection, target_metadata=target_metadata,
-                          version_table_schema=benchmark_schema)
+                          version_table_schema=benchmark_schema,
+                          on_version_apply=view_guard)
         with context.begin_transaction():
             context.run_migrations()
 

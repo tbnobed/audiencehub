@@ -12,3 +12,4 @@
 - [SQL JSON literal bindings](sql-json-literals.md) — compact JSON in SQLAlchemy text can become unintended bind parameters; exercise migrations on PostgreSQL.
 - [Benchmark watchers](benchmark-watchers.md) — restrict source scanning and reload watchers so generated PostgreSQL files cannot stall the preview.
 - [Segment performance](segment-performance.md) — preserve canonical winners and accepted audiences; distinguish limited sampling from full breakdowns and 500k timings from 8M evidence.
+- [Profile view columns](profile-view-columns.md) — PostgreSQL freezes SELECT-star projections; profile schema changes must refresh dependent views through the migration chain.

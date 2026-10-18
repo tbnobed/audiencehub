@@ -150,3 +150,53 @@ event/ledger returns, source isolation, nulls, incremental clearing, inclusive
 start/exclusive end, future/today/historical cases, and filtered-rule fallback.
 It was added as code only and was **not run in Replit**. Performance and count
 parity still require the production-server verification run.
+
+## Profile-view column repair
+
+PostgreSQL freezes a view's `SELECT *` column list at creation. Migration `0037`
+added the physical `profiles.last_donation_at` column but did not expand
+`active_profiles`. Migration `0038_refresh_profile_views` corrects that omission.
+The repository defines only one affected application view, `active_profiles`;
+there are no application-defined materialized views on profiles/traits.
+
+The repair discovers additional profile/trait-backed views and transitive view
+dependencies through PostgreSQL catalogs. It drops them in reverse dependency
+order **without CASCADE**, then recreates them in dependency order in the same
+transaction. `active_profiles` is recreated with the complete physical profile
+column list and its unchanged filter:
+
+```sql
+WHERE merged_into_id IS NULL AND NOT is_deleted
+```
+
+Other views retain their explicit definitions/projections, not an invented
+expansion that might expose sensitive data. Materialized views retain populated
+versus unpopulated state, their access method/storage settings, tablespace and
+index definitions. Owners, relation/column permissions, comments and clustered
+index choices are restored. A populated materialized view is rebuilt from its
+query; budget the corresponding time/space if custom ones exist. Custom view
+triggers/rules are refused before dropping anything; other unsupported
+dependencies cause the non-CASCADE drop to fail and the transaction to roll
+back. DDL lock waits are limited to five seconds.
+
+The Alembic migration chain now snapshots the physical `profiles` and
+`profile_traits` column signatures and checks them after every revision. When
+either changes, it rebuilds these dependent views automatically; it also repairs
+a stale `active_profiles` column list. The final invariant checks column names,
+order, types, type modifiers and collations against `profiles`. This callback
+applies to normal online `alembic upgrade`/`downgrade` execution, not ad hoc SQL
+run outside Alembic. Future migrations must not use DROP CASCADE to work around
+view dependencies or bypass this chain.
+Column removals/type changes that PostgreSQL refuses because of an existing
+dependency still need an explicit pre-DDL view teardown in their own migration;
+a post-revision callback cannot repair a statement that never completed.
+
+Use the same stopped-writer, single-migration rollout commands above. **No
+reset, reseed, imports, index rework on the physical profile table, or backfill
+rerun is needed.** Migration 0038 changes the views, not the previously computed
+timestamps or physical profile/traits rows.
+
+Added server-side tests in `test_profile_view_migrations_pg.py` cover the repaired
+column list, future profile/trait additions, unchanged active/deleted filtering,
+dependent views, populated/unpopulated materialized views, indexes and metadata.
+They have not been executed in Replit.
