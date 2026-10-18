@@ -1,0 +1,17 @@
+The Snowflake source and the Zeta migration import are not usable in the app. If backend code for either exists, finish it; if not, build it. Both must be fully usable from the UI by an admin, with no CLI needed. Code changes only: commit and push. Do not run tests, seeds, imports or benchmarks in Replit; verification runs on the production server.
+
+1. Snowflake source (read-only)
+- Sources page: "Add source", choose type Snowflake.
+- Fields: account identifier, user, role, warehouse, database, schema, key-pair auth (paste private key PEM plus optional passphrase; encrypt with Fernet; never show it again after saving).
+- "Test connection" button: connects, runs SELECT CURRENT_VERSION(), lists accessible tables in the schema, and shows a clear error on failure (auth, network policy, role, warehouse).
+- Mappings per source: choose a table or enter a SQL query; choose target type (people, donation, donation_return, order_shipped, vod_viewed, source_codes, products, vod_titles, model_scores); map columns to canonical fields with auto-match on Zeta field names; choose the cursor column for incremental pulls.
+- "Preview" shows 100 mapped rows and the identity keys found. "Run now" starts an import job with progress on the Imports page. Schedule per mapping: hourly, daily at a time, or monthly.
+- Use snowflake-connector-python with fetch_pandas_batches or result batches streamed into the existing COPY staging path; never load a full table into memory.
+- CLI equivalents for the server: `kinship sources test <id>`, `kinship sources preview <id> <mapping>`, `kinship sources run <id> <mapping>`.
+
+2. Zeta migration import
+- Imports page: "Import Zeta export". Accepts the files Zeta delivers on exit: people export (JSONL or CSV), event exports (donation, donation_return, order_shipped, vod_viewed), resource files (source codes, products, VOD), and ID lookup tables (HubSpot, Okta, donor account to Zeta UID).
+- Auto-detects file type from headers, maps Zeta property names to canonical fields (the catalog already uses Zeta names), stores unknown columns as raw attributes, and keys every row on zeta_cdp_id or zeta_uid so each Zeta profile gets a master_id.
+- Large files: upload via the existing SFTP drop folder as well as browser upload, streamed and resumable.
+- After the import, a parity report: Kinship count versus the Zeta count the user enters for each of the 23 audiences, with the difference and percentage.
+- CLI equivalent: `kinship import-zeta <folder>`.
