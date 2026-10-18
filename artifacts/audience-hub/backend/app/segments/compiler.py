@@ -10,11 +10,12 @@ from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 
 from pydantic import ValidationError
-from sqlalchemy import and_, or_, not_, select, func, literal, table, column, BigInteger
+from sqlalchemy import and_, or_, not_, select, func, literal, table, column, BigInteger, Text, Numeric, Date, DateTime, Boolean, cast
 from app.models import (Profile, ProfileTrait, Gift, Event, Consent, EnrichmentValue,
                         Source, SegmentMembership, Segment)
 from app.segments.registry import field_registry, OPERATORS
 from app.segments.schema import Definition, SegmentValidationError, fail
+from app.models import SourceRecord
 
 
 def pinned_time(db, as_of=None):
@@ -90,6 +91,8 @@ def _predicate(col, typ, node, path, now, enum_values=None):
     op = node.get("operator")
     if op not in OPERATORS[typ]:
         fail(path + ".operator", f"Unsupported operator for {typ}.")
+    if op == "exists":
+        return func.nullif(func.trim(cast(col, Text)), "").is_not(None)
     if op == "is_null":
         return col.is_(None)
     if op == "is_not_null":
@@ -99,6 +102,10 @@ def _predicate(col, typ, node, path, now, enum_values=None):
     if "value" not in node:
         fail(path + ".value", "A value is required.")
     value = node["value"]
+    if op == "within_previous_days":
+        days = _days(value, path + ".value")
+        return and_(col >= _boundary(now.date() - timedelta(days=days), typ),
+                    col < _boundary(now.date(), typ))
     if op in ("in_last_days", "not_in_last_days"):
         days = _days(value, path + ".value")
         expr = and_(col >= _boundary(now.date() - timedelta(days=days - 1), typ),
@@ -139,6 +146,17 @@ def _window(col, typ, window, path, now):
     if not isinstance(window, dict):
         fail(path, "Expected a time window.")
     kind = window.get("kind")
+    if kind in ("previous_days", "previous_years"):
+        if kind == "previous_days":
+            if set(window) - {"kind", "days"}:
+                fail(path, "Unknown window property.")
+            start = now.date() - timedelta(days=_days(window.get("days"), path + ".days"))
+        else:
+            if set(window) != {"kind", "years"} or window["years"] != 5:
+                fail(path, "Only a five-calendar-year window is supported.")
+            from app.seed_dates import seed_window
+            start = seed_window(now.date()).start
+        return and_(col >= _boundary(start, typ), col < _boundary(now.date(), typ))
     if kind == "last_days":
         if set(window) - {"kind", "days"}:
             fail(path, "Unknown window property.")
@@ -189,6 +207,7 @@ class Compiler:
             fail(path, "Maximum fifty rules.")
         kind = node.get("type")
         allowed = {
+            "attribute": {"field", "operator", "value"},
             "profile": {"field", "operator", "value"}, "trait": {"field", "operator", "value"},
             "gift": {"aggregate", "operator", "value", "where", "window"},
             "event": {"aggregate", "operator", "value", "where", "window", "name"},
@@ -199,13 +218,22 @@ class Compiler:
             fail(path + ".type", "Unknown rule type.")
         if set(node) - (allowed[kind] | {"type"}):
             fail(path, "Unknown rule property.")
-        if kind in ("profile", "trait", "enrichment"):
+        if kind in ("profile", "trait", "enrichment", "attribute"):
             entry = next((f for f in self.registry if f["type"] == kind and f["field"] == node.get("field")
                           and (kind != "enrichment" or f.get("source") == node.get("source"))), None)
             if entry is None:
                 fail(path + ".field", "Unknown or unavailable field.")
             typ = entry["data_type"]
-            if kind == "profile":
+            if kind == "attribute":
+                sr = SourceRecord.__table__
+                key = node["field"]
+                value = func.coalesce(sr.c[key], sr.c.attributes[key].astext) if key in ("address1", "address2", "city", "region", "postal_code", "country") else sr.c.attributes[key].astext
+                col = select(value).join(Source, Source.id == sr.c.source_id).where(
+                    sr.c.profile_id == self.active.c.id, value.is_not(None)
+                ).order_by(Source.priority, sr.c.updated_at.desc(), sr.c.id).limit(1).correlate(self.active).scalar_subquery()
+                col = cast(col if typ == "text" else func.nullif(func.trim(col), ""), {"text": Text, "number": Numeric, "date": Date,
+                                 "timestamp": DateTime(timezone=True), "boolean": Boolean}[typ])
+            elif kind == "profile":
                 col = self.active.c[node["field"]]
             elif kind == "trait":
                 if node["field"] == "top_5_percent_12m":
@@ -248,6 +276,17 @@ class Compiler:
             for key, rule in where.items():
                 if not isinstance(rule, dict) or set(rule) - {"operator", "value"}:
                     fail(path + ".where." + key, "Invalid filter.")
+                resource_keys = {"source_codes": "source_code", "products": "product_id", "vod_titles": "vod_title_id"}
+                resource, _, field = key.partition(".")
+                if resource in resource_keys:
+                    if field not in ("key", "name", "series"):
+                        fail(path + ".where." + key, "Unknown resource field.")
+                    ref = table(resource, column("key", Text), column("name", Text), column("series", Text))
+                    conds.append(select(literal(1)).select_from(ref).where(
+                        ref.c.key == facts.c[resource_keys[resource]],
+                        _predicate(ref.c[field], "text", rule, path + ".where." + key, self.now)
+                    ).correlate(facts).exists())
+                    continue
                 if kind == "gift":
                     typ = {"fund": "text", "campaign": "text", "appeal_code": "text", "channel": "text",
                            "amount": "number", "is_recurring": "boolean"}.get(key)
@@ -255,9 +294,9 @@ class Compiler:
                         fail(path + ".where." + key, "Unknown gift filter.")
                     conds.append(_predicate(facts.c[key], typ, rule, path + ".where." + key, self.now))
                 else:
-                    if not key.startswith("properties.") or not key[11:] or len(key) > 200 or rule.get("operator") != "eq":
-                        fail(path + ".where." + key, "Event properties support text equality only.")
-                    conds.append(facts.c.properties[key[11:]].astext == _value(rule.get("value"), "text", path + ".where." + key))
+                    if not key.startswith("properties.") or not key[11:] or len(key) > 200:
+                        fail(path + ".where." + key, "Expected an event property.")
+                    conds.append(_predicate(facts.c.properties[key[11:]].astext, "text", rule, path + ".where." + key, self.now))
             if agg == "exists":
                 col = select(literal(1)).select_from(facts).where(facts.c.profile_id == self.active.c.id, *conds).correlate(self.active).exists()
                 expr = _predicate(col, "boolean", node, path, self.now)

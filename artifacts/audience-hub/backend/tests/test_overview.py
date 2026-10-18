@@ -1,5 +1,5 @@
 """Overview contracts backed by explicitly refreshed, isolated rollup fixtures."""
-from datetime import date
+from datetime import date, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -24,7 +24,7 @@ def test_default_range_with_no_historical_data(db):
     db.commit()
     result = api._dashboard("overview", None, None, db)
     assert result["range"]["to"] == date.today().isoformat()
-    assert result["range"]["from"] == date.today().replace(day=1).isoformat()
+    assert result["range"]["from"] == (date.today() - timedelta(days=364)).isoformat()
     assert result["overview"]["kpis"]["giving"]["value"] == 0
     assert result["overview"]["kpis"]["retention_yoy"]["denominator"] == 0
     assert len(result["overview"]["kpis"]["giving"]["sparkline"]) == 12

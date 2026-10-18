@@ -78,6 +78,7 @@ class ImportBatchDiagnostic(Base):
 class Profile(Base):
     __tablename__ = "profiles"
     id: Mapped[int] = identity_pk()
+    master_id: Mapped[str | None] = mapped_column(Text, unique=True, server_default=text("NULL"))
     merged_into_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("profiles.id"))
     email: Mapped[str | None] = mapped_column(CITEXT)
     phone: Mapped[str | None] = mapped_column(Text)
@@ -182,6 +183,9 @@ class Gift(Base):
     payment_method: Mapped[str | None] = mapped_column(Text)
     is_recurring: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     recurring_plan_id: Mapped[str | None] = mapped_column(Text)
+    source_code: Mapped[str | None] = mapped_column(Text, ForeignKey("source_codes.key"))
+    product_id: Mapped[str | None] = mapped_column(Text, ForeignKey("products.key"))
+    vod_title_id: Mapped[str | None] = mapped_column(Text, ForeignKey("vod_titles.key"))
     attributes: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
@@ -211,6 +215,9 @@ class Event(Base):
     type: Mapped[str] = mapped_column(Text, nullable=False)
     name: Mapped[str] = mapped_column(Text, nullable=False)
     properties: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    source_code: Mapped[str | None] = mapped_column(Text, ForeignKey("source_codes.key"))
+    product_id: Mapped[str | None] = mapped_column(Text, ForeignKey("products.key"))
+    vod_title_id: Mapped[str | None] = mapped_column(Text, ForeignKey("vod_titles.key"))
     context: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     message_id: Mapped[str | None] = mapped_column(Text)
@@ -251,6 +258,10 @@ class EnrichmentValue(Base):
     value_date: Mapped[datetime | None] = mapped_column(Date)
     imported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     license_expires_at: Mapped[datetime | None] = mapped_column(Date)
+    vendor: Mapped[str | None] = mapped_column(Text)
+    license_id: Mapped[str | None] = mapped_column(Text)
+    append_date: Mapped[datetime | None] = mapped_column(Date)
+    sensitive: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
 
 
 Index("ix_enrichment_values_source_key_text", EnrichmentValue.source_id, EnrichmentValue.attribute_key, EnrichmentValue.value_text)
@@ -381,6 +392,7 @@ class Activation(Base):
     __tablename__ = "activations"
     id: Mapped[int] = identity_pk()
     name: Mapped[str] = mapped_column(Text, nullable=False, server_default="Partner activation")
+    attribute_mode: Mapped[str] = mapped_column(Text, nullable=False, server_default="selected")
     timezone: Mapped[str] = mapped_column(Text, nullable=False, server_default="America/Chicago")
     column_order: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, server_default=text("'{}'::text[]"))
     segment_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("segments.id"), nullable=False)

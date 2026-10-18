@@ -70,6 +70,8 @@ def schedule_once(db: Session, task: str, window_key: str, job_type: str,
 
 def tick(db: Session) -> None:
     now = datetime.now(timezone.utc)
+    from app.source_pulls import tick_sources
+    tick_sources(db, now)
     from app.activations.schedule import tick_activations
     tick_activations(db, now)
     schedule_once(db, "activation.exports.retention", now.strftime("%Y-%m-%d"),

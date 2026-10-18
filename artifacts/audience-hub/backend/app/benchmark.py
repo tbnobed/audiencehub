@@ -1,4 +1,4 @@
-"""Isolated synthetic import, trait, dashboard and segment measurements.
+"""Read-only existing-data segment measurements and isolated synthetic benchmarks.
 
 Local mode provisions a disposable PostgreSQL cluster without app credentials.
 Container schema mode uses the configured database only to provision a restricted
@@ -166,11 +166,33 @@ def _measure(directory: Path, gift_rows: int, contact_rows: int, profile: bool) 
 
 
 def run_benchmark(args) -> int:
+    if getattr(args, "audit_segments", False):
+        args.segments = True
     if getattr(args, "segments", False):
         if any(getattr(args, flag, False) for flag in ("traits", "imports", "dashboards", "overview", "test_suite")):
             raise ValueError("--segments cannot be combined with another benchmark mode")
+        isolated = getattr(args, "isolated", False) or getattr(args, "audit_segments", False)
+        if not isolated:
+            invalid = [
+                name for name in ("seed_dir", "scale", "rows")
+                if getattr(args, name, None) is not None
+            ]
+            invalid.extend(name for name in ("profile", "test_filter") if getattr(args, name, None))
+            invalid.extend(getattr(args, "_benchmark_explicit", set()) - set(invalid))
+            for name, default in (("gift_rows", 1_000_000), ("contact_rows", 500_000)):
+                if getattr(args, name, default) != default:
+                    invalid.append(name)
+            if invalid:
+                flags = ", ".join("--" + name.replace("_", "-") for name in sorted(set(invalid)))
+                raise ValueError(f"{flags} requires --isolated; --segments reads existing data by default")
+            # Deliberately before the schema backend and production write guards.
+            # This path never provisions, migrates, seeds or installs templates.
+            from app.readonly_benchmark import run_readonly_segments
+            return run_readonly_segments(args)
         if args.profiles < 1:
             raise ValueError("Segment benchmark requires a positive profile count")
+    if getattr(args, "scale", None) is None:
+        args.scale = "medium"
     if os.environ.get("KINSHIP_BENCHMARK_BACKEND") == "schema":
         from app.schema_benchmark import run_schema_benchmark
         return run_schema_benchmark(args)
@@ -234,8 +256,9 @@ def run_benchmark(args) -> int:
             return test_result.returncode
         if getattr(args, "segments", False):
             env["KINSHIP_BENCHMARK_ISOLATED_TESTS"] = "1"
+            module = "audit_verification" if getattr(args, "audit_segments", False) else "verification"
             result = subprocess.run([sys.executable, "-c",
-                "from pathlib import Path; from app.segments.verification import measure; "
+                f"from pathlib import Path; from app.segments.{module} import measure; "
                 f"measure(Path({str(directory)!r}), {args.profiles}, scale={args.scale!r}, seed_dir={args.seed_dir!r}, as_of={getattr(args, 'as_of', None)!r})"],
                 cwd=backend, env=env, check=False)
             return result.returncode
@@ -274,32 +297,51 @@ def run_benchmark(args) -> int:
         report = json.loads((directory / "results.json").read_text())
         return 0 if all(report["checks"].values()) else 1
     finally:
-        if started:
-            subprocess.run(["pg_ctl", "-D", str(data), "-m", "immediate", "-w", "stop"],
-                           env=env, check=True, stdout=subprocess.DEVNULL)
-        shutil.rmtree(socket_dir)
-        shutil.rmtree(data, ignore_errors=True)
+        try:
+            if started:
+                subprocess.run(["pg_ctl", "-D", str(data), "-m", "immediate", "-w", "stop"],
+                               env=env, check=True, stdout=subprocess.DEVNULL)
+        finally:
+            # A stop error must not skip attempts to remove private artifacts.
+            shutil.rmtree(socket_dir, ignore_errors=True)
+            shutil.rmtree(data, ignore_errors=True)
+            if getattr(args, "segments", False):
+                for child_directory in ("seed", "uploads", "exports"):
+                    shutil.rmtree(directory / child_directory, ignore_errors=True)
+
+
+class _IsolatedOption(argparse.Action):
+    """Track explicitly supplied seed/import knobs even when equal to defaults."""
+    def __call__(self, parser, namespace, values, option_string=None):
+        supplied = set(getattr(namespace, "_benchmark_explicit", ()))
+        supplied.add(self.dest)
+        namespace._benchmark_explicit = supplied
+        setattr(namespace, self.dest, values)
 
 
 def add_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--isolated", action="store_true",
+                        help="With --segments, opt into a fresh synthetic private schema/local database and materialization.")
+    parser.add_argument("--audit-segments", action="store_true",
+                        help="Explicit fresh isolated audit import (default 500k); exception to read-only segments, including materialization.")
     parser.add_argument("--as-of", metavar="YYYY-MM-DD",
                         help="Explicit seed/traits/segment reference date (default today UTC).")
-    parser.add_argument("--segments", action="store_true", help="Six template preview/sample/materialization measurements in isolated PostgreSQL.")
-    parser.add_argument("--scale", choices=("small", "medium", "large"), default="medium",
-                        help="Segment benchmark seed density (default medium; small plausibility uses --profiles 50000 --scale small).")
+    parser.add_argument("--segments", action="store_true", help="Read-only existing app data: all 23 template count/preview/sample timings; no materialization. Use --isolated for synthetic data.")
+    parser.add_argument("--scale", choices=("small", "medium", "large"), default=None, action=_IsolatedOption,
+                        help="Isolated seed density (default medium); requires --isolated with --segments.")
     parser.add_argument("--traits", action="store_true", help="Real medium seed, full trait job and independent reference in isolated PostgreSQL.")
-    parser.add_argument("--seed-dir", help="Reuse matching generated seed files (traits or segments benchmark).")
+    parser.add_argument("--seed-dir", action=_IsolatedOption, help="Reuse matching generated seed files (traits or isolated segments benchmark).")
     parser.add_argument("--dashboards", action="store_true", help="Measure every dashboard in disposable PostgreSQL, no browser.")
-    parser.add_argument("--profiles", type=int, default=500_000, help="Trait/dashboard/segment benchmark population (default 500000).")
+    parser.add_argument("--profiles", type=int, default=500_000, help="Isolated synthetic population (default 500000); ignored by read-only --segments, which reports actual counts.")
     parser.add_argument("--overview", action="store_true", help="Isolated overview scale benchmark.")
     parser.add_argument("--imports", action="store_true", help="Explicitly run isolated import benchmark.")
-    parser.add_argument("--rows", type=int, help="Override both row counts.")
-    parser.add_argument("--gift-rows", type=int, default=1_000_000)
-    parser.add_argument("--contact-rows", type=int, default=500_000)
+    parser.add_argument("--rows", type=int, action=_IsolatedOption, help="Override both row counts.")
+    parser.add_argument("--gift-rows", type=int, default=1_000_000, action=_IsolatedOption)
+    parser.add_argument("--contact-rows", type=int, default=500_000, action=_IsolatedOption)
     parser.add_argument("--profile", action="store_true", help="Write cProfile files and cumulative top 20.")
     parser.add_argument("--test-suite", action="store_true",
                         help="Run backend pytest suite instead of imports, in the disposable database.")
-    parser.add_argument("--test-filter", default="", help="Optional pytest -k expression for isolated tests.")
+    parser.add_argument("--test-filter", default="", action=_IsolatedOption, help="Optional pytest -k expression for isolated tests.")
     parser.add_argument("--output-dir", default=".cache/kinship-benchmarks")
 
 

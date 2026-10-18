@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterator
 from uuid import uuid4
 
-from sqlalchemy import text
+from sqlalchemy import event, text
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -168,8 +168,9 @@ def _restore_converted(converted: dict[str, Any]) -> dict[str, Any]:
     for key in ("occurred_at", "received_at", "captured_at"):
         if isinstance(values.get(key), str):
             values[key] = datetime.fromisoformat(values[key])
-    if isinstance(values.get("gift_date"), str):
-        values["gift_date"] = date.fromisoformat(values["gift_date"])
+    for key in ("gift_date", "append_date"):
+        if isinstance(values.get(key), str):
+            values[key] = date.fromisoformat(values[key])
     if isinstance(values.get("amount"), str):
         values["amount"] = Decimal(values["amount"])
     for key, (kind, value) in values.get("enrichments", {}).items():
@@ -289,7 +290,9 @@ def _attribute_values(mapped: dict[str, Any]) -> dict[str, Any]:
         attrs["email_raw"] = mapped["email_raw"]
     if mapped.get("enrichments"):
         attrs["_import_enrichments"] = {
-            key: {"data_type": kind, "value": _json_value(value)}
+            key: {"data_type": kind, "value": _json_value(value),
+                  **{name: _json_value(mapped.get(name)) for name in
+                     ("vendor", "license_id", "append_date", "sensitive")}}
             for key, (kind, value) in mapped["enrichments"].items()
         }
     if mapped.get("consent"):
@@ -370,6 +373,11 @@ def _upsert_source_records(db: Session, source_id: int, import_id: int,
         if previous:
             consent = previous["attributes"].get("_import_consent", {})
             incoming = row["attributes"].get("_import_consent")
+            row = {**row, "attributes": {**previous["attributes"], **row["attributes"]}}
+            for key in ("email_norm", "phone_e164", "first_name", "last_name",
+                        "address1", "address2", "city", "region", "postal_code", "country"):
+                if row.get(key) is None and previous.get(key) is not None:
+                    row[key] = previous[key]
             if consent and (not incoming or not consent_wins(consent, incoming, authoritative, authoritative)):
                 row = {**row, "attributes": {
                     **row["attributes"], "_import_consent": consent,
@@ -386,11 +394,17 @@ def _upsert_source_records(db: Session, source_id: int, import_id: int,
            CAST(:attributes AS jsonb), :raw_hash, :last_import_id
         FROM {stage} WHERE true
         ON CONFLICT (source_id, external_id) DO UPDATE SET
-          email_norm=EXCLUDED.email_norm, phone_e164=EXCLUDED.phone_e164,
-          first_name=EXCLUDED.first_name, last_name=EXCLUDED.last_name,
-          address1=EXCLUDED.address1, address2=EXCLUDED.address2, city=EXCLUDED.city,
-          region=EXCLUDED.region, postal_code=EXCLUDED.postal_code, country=EXCLUDED.country,
-          attributes=CASE
+          email_norm=COALESCE(EXCLUDED.email_norm,source_records.email_norm),
+          phone_e164=COALESCE(EXCLUDED.phone_e164,source_records.phone_e164),
+          first_name=COALESCE(EXCLUDED.first_name,source_records.first_name),
+          last_name=COALESCE(EXCLUDED.last_name,source_records.last_name),
+          address1=COALESCE(EXCLUDED.address1,source_records.address1),
+          address2=COALESCE(EXCLUDED.address2,source_records.address2),
+          city=COALESCE(EXCLUDED.city,source_records.city),
+          region=COALESCE(EXCLUDED.region,source_records.region),
+          postal_code=COALESCE(EXCLUDED.postal_code,source_records.postal_code),
+          country=COALESCE(EXCLUDED.country,source_records.country),
+          attributes=source_records.attributes || CASE
             WHEN source_records.attributes ? '_import_consent' AND (
               NOT (EXCLUDED.attributes ? '_import_consent') OR NOT consent_candidate_wins(
                 source_records.attributes #>> '{_import_consent,status}',
@@ -546,27 +560,35 @@ def _register_enrichments(db: Session, source_id: int, records: list[dict[str, A
             insert_by_key[(row["profile_id"], key)] = {
                 "profile_id": row["profile_id"], "source_id": source_id, "key": key,
                 "data_type": data_type, "value": value,
+                "vendor": row["values"].get("vendor"),
+                "license_id": row["values"].get("license_id"),
+                "append_date": row["values"].get("append_date"),
+                "sensitive": row["values"].get("sensitive", False),
             }
     insert_rows = list(insert_by_key.values())
     if not insert_rows:
         return
     copy_upsert(db, """
         INSERT INTO enrichment_values
-          (profile_id, source_id, attribute_key, value_text, value_num, value_bool, value_date, imported_at)
+          (profile_id, source_id, attribute_key, value_text, value_num, value_bool, value_date, imported_at,
+           vendor, license_id, append_date, sensitive)
         SELECT
           :profile_id, :source_id, :key,
            CASE WHEN :data_type IN ('text','enum') THEN CAST(:value AS text) END,
            CASE WHEN :data_type='number' THEN CAST(:value AS numeric) END,
            CASE WHEN :data_type='boolean' THEN CAST(:value AS boolean) END,
-           CASE WHEN :data_type='date' THEN CAST(:value AS date) END, now()
+           CASE WHEN :data_type='date' THEN CAST(:value AS date) END, now(),
+           :vendor, :license_id, :append_date, :sensitive
         FROM {stage} WHERE true
         ON CONFLICT (profile_id, source_id, attribute_key) DO UPDATE SET
           value_text=EXCLUDED.value_text, value_num=EXCLUDED.value_num,
-          value_bool=EXCLUDED.value_bool, value_date=EXCLUDED.value_date, imported_at=now()
+          value_bool=EXCLUDED.value_bool, value_date=EXCLUDED.value_date, imported_at=now(),
+          vendor=EXCLUDED.vendor, license_id=EXCLUDED.license_id,
+          append_date=EXCLUDED.append_date, sensitive=EXCLUDED.sensitive
     """, [{
         **item, "value": None if item["value"] is None else str(_json_value(item["value"]))
     } for item in insert_rows],
-        "profile_id bigint, source_id bigint, key text, data_type text, value text")
+        "profile_id bigint, source_id bigint, key text, data_type text, value text, vendor text, license_id text, append_date date, sensitive boolean")
 
 
 def _upsert_consents(db: Session, source_id: int, records: list[dict[str, Any]]) -> None:
@@ -633,7 +655,23 @@ def run_import(import_id: int, progress_callback: Callable[[dict[str, Any]], Non
     with ExitStack() as stack:
         if db is None:
             db = stack.enter_context(Session(engine))
-        return _run_import(import_id, progress_callback, db)
+        # In-process CLI callers have no worker lifecycle context. Set the
+        # import budget on every checkpoint transaction, including connections
+        # acquired again after a commit. LOCAL settings never leak into the pool.
+        timeout = str(get_settings().bulk_statement_timeout_seconds * 1000)
+
+        def import_budget(_session, _transaction, connection):
+            connection.execute(text(
+                "SELECT set_config('statement_timeout', :timeout, true)"
+            ), {"timeout": timeout})
+
+        event.listen(db, "after_begin", import_budget)
+        try:
+            if db.in_transaction():
+                import_budget(db, None, db.connection())
+            return _run_import(import_id, progress_callback, db)
+        finally:
+            event.remove(db, "after_begin", import_budget)
 
 
 def _run_import(import_id: int, progress_callback=None, db: Session | None = None) -> dict[str, Any]:
@@ -797,6 +835,22 @@ def _run_import(import_id: int, progress_callback=None, db: Session | None = Non
                 identities.add((values.get("email_norm"), values.get("phone_e164")))
 
             identity_checks = _identifiers_blocked_batch(db, identities, pepper)
+            from app.identity.master import SYSTEM_KEYS
+            identity_hashes = {}
+            for line, _, converted, values in batch_rows:
+                if not converted["errors"]:
+                    attrs = values.get("attributes", {})
+                    identity_hashes[line] = {
+                        (key, _identity_hash(pepper, str(attrs[key]).strip()))
+                        for key in (*SYSTEM_KEYS, "email_md5", "email_sha256") if attrs.get(key)
+                    }
+            candidates = sorted({pair for pairs in identity_hashes.values() for pair in pairs})
+            blocked_identity = set(db.execute(text("""
+              SELECT s.type,s.value_hash FROM suppressions s
+              JOIN unnest(CAST(:types AS text[]),CAST(:hashes AS text[])) k(kind,hash)
+                ON s.type=k.kind AND s.value_hash=k.hash WHERE s.reason='deletion_request'
+            """), {"types": [x[0] for x in candidates],
+                   "hashes": [x[1] for x in candidates]}).all()) if candidates else set()
             # Source-scoped tombstones also reject transactional/external-only
             # replay whose contact address was intentionally omitted.
             source_key = db.scalar(text("SELECT key FROM sources WHERE id=:id"),
@@ -829,7 +883,8 @@ def _run_import(import_id: int, progress_callback=None, db: Session | None = Non
                     normalized_count += 1
                 identity_key = (values.get("email_norm"), values.get("phone_e164"))
                 deletion_blocked, blocklisted, email_opted_out = identity_checks[identity_key]
-                if deletion_blocked or blocked_external.intersection(external_hashes.get(line, set())):
+                if (deletion_blocked or blocked_external.intersection(external_hashes.get(line, set()))
+                        or blocked_identity.intersection(identity_hashes.get(line, set()))):
                     rejected += 1
                     diagnostic_sink.write({"row": line, "severity": "error",
                                       "message": "Identifier has a deletion-request suppression; row was not imported"})
@@ -837,6 +892,8 @@ def _run_import(import_id: int, progress_callback=None, db: Session | None = Non
                 if blocklisted:
                     values["email_norm"] = None
                     values["phone_e164"] = None
+                    for hash_key in ("email_md5", "email_sha256"):
+                        values.get("attributes", {}).pop(hash_key, None)
                     diagnostic_sink.write({"row": line, "severity": "warning",
                                       "message": "Blocklisted identifier excluded from identity matching"})
                     warning_count += 1

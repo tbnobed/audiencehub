@@ -46,7 +46,12 @@ def quintiles(values: dict, descending: bool = False) -> dict:
 
 
 def reference(db, sample: list[int], as_of: date) -> dict:
-    """Raw rows only: Python aggregation and global donor ranking, no trait SQL."""
+    """Raw rows only: Python aggregation and global donor ranking, no trait SQL.
+
+    Explicit refund entries contribute signed monetary totals and activity, not
+    gift frequency, donation recency, recurring status, or gross gift averages.
+    A refund-only profile is not part of the RFM donor population.
+    """
     from sqlalchemy import text
     active = set(db.execute(text(
         "SELECT id FROM profiles WHERE merged_into_id IS NULL AND NOT is_deleted"
@@ -63,8 +68,9 @@ def reference(db, sample: list[int], as_of: date) -> dict:
         if p not in active or (g["gift_date"] and g["gift_date"] > as_of):
             continue
         count, amount, last = population.get(p, (0, Decimal(0), None))
-        day = g["gift_date"]
-        population[p] = (count + 1, amount + g["amount"],
+        refund = str((g["attributes"] or {}).get("is_refund", False)).lower() == "true"
+        day = None if refund else g["gift_date"]
+        population[p] = (count + int(not refund), amount + g["amount"],
                          max(last, day) if last and day else last or day)
         if p in selected:
             gifts[p].append(dict(g))
@@ -79,37 +85,40 @@ def reference(db, sample: list[int], as_of: date) -> dict:
         "SELECT r.profile_id,s.key FROM source_records r JOIN sources s ON s.id=r.source_id "
         "WHERE r.profile_id=ANY(:ids)"), {"ids": sample}):
         sources[p].add(key)
+    donors = {p: values for p, values in population.items() if values[0] > 0}
     ranks = [
-        quintiles({p: (as_of - v[2]).days if v[2] else None for p, v in population.items()}),
-        quintiles({p: v[0] for p, v in population.items()}, True),
-        quintiles({p: v[1] for p, v in population.items()}, True),
+        quintiles({p: (as_of - v[2]).days if v[2] else None for p, v in donors.items()}),
+        quintiles({p: v[0] for p, v in donors.items()}, True),
+        quintiles({p: v[1] for p, v in donors.items()}, True),
     ]
     result = {}
     for p in sample:
         gs, es = gifts[p], events[p]
-        days = sorted(g["gift_date"] for g in gs if g["gift_date"])
+        donations = [g for g in gs if str((g["attributes"] or {}).get("is_refund", False)).lower() != "true"]
+        days = sorted(g["gift_date"] for g in donations if g["gift_date"])
         recent = [g for g in gs if g["gift_date"] and g["gift_date"] >= as_of - timedelta(days=364)]
         recent_events = [e for e in es if e["occurred_at"] >= end - timedelta(days=30)]
-        amounts = [g["amount"] for g in gs]
+        amounts = [g["amount"] for g in donations]
         engagements = [(datetime.combine(g["gift_date"], daytime(), timezone.utc), g["id"], g["source_key"])
                        for g in gs if g["gift_date"]]
         engagements += [(e["occurred_at"], e["id"], e["source_key"]) for e in es]
         scores = [r.get(p) for r in ranks]
         result[p] = dict(
-            gift_count_total=len(gs), ltv_total=sum(amounts, Decimal(0)),
+            gift_count_total=len(donations), ltv_total=sum((g["amount"] for g in gs), Decimal(0)),
             gift_amount_12m=sum((g["amount"] for g in recent), Decimal(0)),
-            gift_count_12m=len(recent), first_gift_date=days[0] if days else None,
+            gift_count_12m=sum(g["gift_date"] is not None and g["gift_date"] >= as_of - timedelta(days=364)
+                               for g in donations), first_gift_date=days[0] if days else None,
             last_gift_date=days[-1] if days else None,
             largest_gift_amount=max(amounts) if amounts else None,
             avg_gift_amount=(sum(amounts) / len(amounts)).quantize(Decimal(".01"), rounding=ROUND_HALF_UP) if amounts else None,
-            is_recurring_active=any(g["is_recurring"] and g["gift_date"] and g["gift_date"] >= as_of - timedelta(days=44) for g in gs),
+            is_recurring_active=any(g["is_recurring"] and g["gift_date"] and g["gift_date"] >= as_of - timedelta(days=44) for g in donations),
             days_since_last_gift=(as_of - days[-1]).days if days else None,
             donor_status=donor_status(days, as_of),
             rfm_recency=scores[0], rfm_frequency=scores[1], rfm_monetary=scores[2],
             rfm_score="".join(map(str, scores)) if scores[0] is not None else None,
             event_count_30d=len(recent_events),
             last_event_at=max((e["occurred_at"] for e in es), default=None),
-            video_views_30d=sum(e["name"] == "Video Watched" for e in recent_events),
+            video_views_30d=sum(e["name"] in {"Video Watched", "vod_viewed"} for e in recent_events),
             last_engagement_channel=max(engagements)[2] if engagements else None,
             source_keys=sorted(sources[p]),
         )
@@ -142,6 +151,7 @@ def measure(directory: Path, profiles: int, seed_dir: str | None = None, *,
         raise ValueError("as_of must be a date or an ISO YYYY-MM-DD string")
     pinned = as_of or datetime.now(timezone.utc).date()
     report = dict(requested_people=profiles, scale="medium", random_seed=20250308,
+                  verification_scope="small-population-smoke" if profiles < 1000 else "population-acceptance",
                   as_of=str(pinned), timings={}, python=platform.python_version(),
                   cpu_count=os.cpu_count(), cpu_quota=Path("/sys/fs/cgroup/cpu.max").read_text().strip(),
                   memory_limit=Path("/sys/fs/cgroup/memory.max").read_text().strip(),

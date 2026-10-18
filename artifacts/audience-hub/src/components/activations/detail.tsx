@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { toast } from '@/hooks/use-toast';
 import { useActivation, useActivationActions, useActivationRuns, activationDownloadUrl } from '@/hooks/use-activations';
 import type { Activation, ActivationRun } from '@/lib/activations';
-import { DEACTIVATE_COPY, plural, describeSchedule, elapsedMs, fmtDuration, fmtInt, isAdsType, isLive, runPhase, toggleActiveBody } from './logic';
+import { DEACTIVATE_COPY, plural, describeSchedule, elapsedMs, fmtDuration, fmtInt, isAdsType, isLive, manifestSummary, runPhase, shortHash, toggleActiveBody } from './logic';
 import { ConfirmDialog, Funnel, RunStatus, Section, SkeletonRows, TypeBadge, apiToast, when } from './shared';
 
 /** fetchApi requests root-relative /api paths without the app base, so the anchor uses the identical URL (same origin, cookie auth). */
@@ -106,9 +106,11 @@ function RunHistory({ runs, onRerun, rerunDisabled }: { runs: ReturnType<typeof 
 
 function RunRow({ r, open, toggle, onRerun, rerunDisabled }: { r: ActivationRun; open: boolean; toggle: () => void; onRerun: () => void; rerunDisabled: boolean }) {
   const failed = runPhase(r.status) === 'failed';
+  const ms = manifestSummary(r.manifest);
+  const hasDetail = !!r.error || !!r.manifest || !!r.file_sha256;
   return <>
     <tr className="h-10 border-t border-line hover:bg-surface-raised/50" data-testid={`row-run-${r.id}`}>
-      <td className="px-3">{r.error && <button onClick={toggle} aria-expanded={open} aria-label="Show error" data-testid={`button-expand-run-${r.id}`}>{open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}</button>}</td>
+      <td className="px-3">{hasDetail && <button onClick={toggle} aria-expanded={open} aria-label={r.error ? 'Show error' : 'Show delivery details'} data-testid={`button-expand-run-${r.id}`}>{open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}</button>}</td>
       <td className="px-2 font-mono">#{r.id}</td>
       <td className="px-2"><RunStatus status={r.status} testId={`status-run-${r.id}`} /></td>
       <td className="px-2 text-ink-muted">{r.triggered_by}</td>
@@ -116,9 +118,15 @@ function RunRow({ r, open, toggle, onRerun, rerunDisabled }: { r: ActivationRun;
       <td className="px-2 font-mono tabular-nums">{fmtDuration(elapsedMs(r))}</td>
       <td className="px-2 py-1">{isLive(r) && !r.profiles_selected ? <span className="text-ink-muted text-[11px]">{runPhase(r.status) === 'queued' ? 'Waiting for worker…' : 'Materializing…'}</span> : <Funnel run={r} compact />}</td>
       <td className="px-2">{r.revoked ? <span className="text-ink-muted text-[11px]" title="File expired or revoked">expired</span>
-        : r.downloadable ? <a href={downloadHref(r.id)} className="text-signal inline-flex items-center gap-1 text-[11px]" data-testid={`link-download-run-${r.id}`}><Download size={11} /> CSV</a> : <span className="text-ink-muted">—</span>}</td>
+        : r.downloadable ? <a href={downloadHref(r.id)} className="text-signal inline-flex items-center gap-1 text-[11px]" data-testid={`link-download-run-${r.id}`}><Download size={11} /> CSV</a> : <span className="text-ink-muted">—</span>}
+        {ms && <div className="text-[10px] text-ink-muted font-mono" data-testid={`text-manifest-${r.id}`}>{plural(ms.files, 'file')} · manifest</div>}</td>
       <td className="px-2">{(failed || !isLive(r)) && <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" disabled={rerunDisabled} onClick={onRerun} data-testid={`button-rerun-${r.id}`}><RotateCcw size={11} /> Re-run</Button>}</td>
     </tr>
+    {open && (r.manifest || r.file_sha256) && <tr className="border-t border-line bg-surface-raised/40" data-testid={`row-run-detail-${r.id}`}><td /><td colSpan={8} className="px-2 py-2 text-[11px] space-y-1">
+      {r.file_sha256 && <div className="font-mono"><span className="text-ink-muted">file sha256 </span><span className="break-all select-all" title={r.file_sha256}>{r.file_sha256}</span></div>}
+      {r.manifest && <div><span className="text-ink-muted">manifest.json · run {r.manifest.run_id} · v{r.manifest.version} · {fmtInt(ms?.rows)} rows</span>
+        <table className="mt-1 font-mono text-[11px]"><tbody>{r.manifest.files.map(f => <tr key={f.name}><td className="pr-3">{f.name}</td><td className="pr-3 text-right tabular-nums">{fmtInt(f.row_count)} rows</td><td className="pr-3 text-right tabular-nums">{fmtInt(f.bytes)} B</td><td className="text-ink-muted" title={f.sha256}>{shortHash(f.sha256)}</td></tr>)}</tbody></table></div>}
+    </td></tr>}
     {open && r.error && <tr className="border-t border-line"><td /><td colSpan={8} className="px-2 py-2"><pre className="font-mono text-[11px] text-danger whitespace-pre-wrap flex gap-2"><FileWarning size={12} className="shrink-0 mt-0.5" />{r.error}</pre></td></tr>}
   </>;
 }

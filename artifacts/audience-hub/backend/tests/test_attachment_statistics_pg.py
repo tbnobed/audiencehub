@@ -43,7 +43,8 @@ def test_attachment_prerequisite_statistics(db, monkeypatch, tmp_path, people):
     statements = [part.strip() for part in recorder.sql.split(";") if part.strip()]
     local = db.get_bind()
     monkeypatch.setattr(app.importer, "engine", local)
-    files = generate_seed(profiles=people, scale="medium", output_dir=tmp_path / "seed")["files"]
+    files = generate_seed(profiles=people, scale="medium", output_dir=tmp_path / "seed",
+                          mode="legacy")["files"]
     evidence = {"people": people, "variants": {}}
 
     def drain(bind, **kwargs):

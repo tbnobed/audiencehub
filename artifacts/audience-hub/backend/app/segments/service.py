@@ -120,10 +120,35 @@ def materialize_for_activation(db, segment_id, as_of=None):
     return materialize(db, segment_id, as_of)
 
 
-def ensure_templates(db):
-    from app.segments.templates import template_definitions
+def ensure_templates(db, definitions=None):
+    from app.segments.templates import template_definitions, legacy_template_definitions
     graph_lock(db)
-    for template in template_definitions():
+    if definitions is None:
+        legacy = {t["key"]: t for t in legacy_template_definitions()}
+        available = [t for t in template_definitions() if db.scalar(
+            select(Segment.id).where(Segment.template_key == t["key"])) is None]
+        referenced = set()
+        for definition in db.scalars(select(Segment.definition)):
+            referenced.update(references(definition))
+        for saved in db.scalars(select(Segment).where(Segment.template_key.in_(legacy))):
+            original = legacy[saved.template_key]
+            # Reuse only untouched, never-materialized bootstrap drafts. Anything
+            # edited, activated, owned or referenced remains a normal saved audience.
+            untouched = (
+                saved.status == "draft" and saved.created_by is None
+                and saved.last_materialized_at is None and saved.id not in referenced
+                and saved.name == original["name"] and saved.description == original["description"]
+                and saved.definition == original["definition"]
+            )
+            saved.template_key = None
+            if untouched and available:
+                replacement = available.pop(0)
+                saved.template_key = replacement["key"]
+                saved.name = replacement["name"]
+                saved.description = replacement["description"]
+                saved.definition = replacement["definition"]
+        db.flush()
+    for template in definitions if definitions is not None else template_definitions():
         if db.scalar(select(Segment.id).where(Segment.template_key == template["key"])) is None:
             db.add(Segment(template_key=template["key"], name=template["name"],
                            description=template["description"], definition=template["definition"],

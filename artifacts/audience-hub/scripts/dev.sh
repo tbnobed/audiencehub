@@ -34,7 +34,7 @@ export PYTHONPATH="$PWD/backend"
 npm run build:sdk
 cd backend
 python3 -m alembic upgrade head
-python3 -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000 &
+python3 -m uvicorn app.main:app --reload --reload-dir "$PWD/app" --host 127.0.0.1 --port 8000 &
 api_pid=$!
 python3 -m app.worker &
 worker_pid=$!

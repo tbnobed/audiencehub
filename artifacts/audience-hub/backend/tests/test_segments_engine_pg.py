@@ -134,9 +134,8 @@ def test_segments_engine_limits_templates_and_registry(db):
     with pytest.raises(SegmentValidationError):
         rows(db,nested)
     templates = template_definitions()
-    assert len(templates) == 6
+    assert len(templates) == 23
     for template in templates:
-        assert "donor" not in template["name"].lower()
         validate_definition(db,template["definition"],PIN)
         list(db.scalars(compile_definition(db,template["definition"],PIN)))
     assert any(f["source"] == "crm" for f in field_registry(db)["fields"] if f["type"]=="enrichment")

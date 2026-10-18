@@ -50,7 +50,8 @@ def reset_engine():
 
 def test_reset_requires_acknowledgement_and_production_force(monkeypatch, capsys):
     assert set(RETAINED_TABLES) == {
-        "users", "sources", "enrichment_attributes", "admin_settings"
+        "users", "sources", "enrichment_attributes", "admin_settings",
+        "master_id_registry", "source_connections", "canonical_field_catalog",
     }
     monkeypatch.setenv("APP_ENV", "production")
     with pytest.raises(ValueError, match="without --yes"):
@@ -58,6 +59,12 @@ def test_reset_requires_acknowledgement_and_production_force(monkeypatch, capsys
     with pytest.raises(ValueError, match="without --force AND --yes"):
         reset_demo(None, yes=True)
     assert "users" in capsys.readouterr().out
+
+
+def test_pull_reset_inventory_is_explicit_and_disjoint():
+    assert {"source_import_receipts", "source_codes", "products", "vod_titles"} <= set(DATA_TABLES)
+    assert "source_connections" in RETAINED_TABLES
+    assert not set(DATA_TABLES) & set(RETAINED_TABLES)
 
 
 @pytest.mark.skipif(os.environ.get("KINSHIP_BENCHMARK_ISOLATED_TESTS") != "1",
@@ -161,3 +168,79 @@ def test_reset_refuses_busy_dataset_without_deleting_rows(reset_engine):
     reset_demo(reset_engine, yes=True)
     with reset_engine.connect() as conn:
         assert conn.scalar(text("SELECT count(*) FROM profiles")) == 0
+
+
+def seed_pull_reset_data(engine):
+    from sqlalchemy import text
+    from app.activations.security import encrypt
+    ciphertext = encrypt({"private_key": "test-only-key", "user": "test-reader"})
+    with engine.begin() as conn:
+        source_id = conn.scalar(text("""INSERT INTO sources(key,name,kind,record_types)
+            VALUES ('reset-pull','Reset pull','snowflake',ARRAY['contact','resource']) RETURNING id"""))
+        conn.execute(text("""INSERT INTO source_connections(source_id,credentials,config,state)
+            VALUES (:id,:secret,'{"mappings":[{"id":"people","feed":"people","table":"PEOPLE"}]}',
+            CAST(:state AS jsonb))"""),
+                     {"id": source_id, "secret": ciphertext,
+                      "state": '{"cursors":{"people":"123"},"pending":{"batch_id":123,"manifests":[]}}'})
+        import_id = conn.scalar(text("""INSERT INTO imports(source_id,filename,file_path,record_type,status)
+            VALUES (:id,'reset.csv','/not-read/reset.csv','contact','completed') RETURNING id"""),
+                                {"id": source_id})
+        conn.execute(text("""INSERT INTO source_import_receipts(source_id,digest,record_type,import_id,completed)
+            VALUES (:source,'test-digest','contact',:import,true)"""),
+                     {"source": source_id, "import": import_id})
+        for table in ("source_codes", "products", "vod_titles"):
+            conn.execute(text(f"INSERT INTO {table}(key,name) VALUES ('reset-reference','Reset reference')"))
+        conn.execute(text("""INSERT INTO gifts(source_id,external_id,amount,gift_date,attributes)
+            VALUES (:source,'reset-gift',10,'2026-01-01','{"source_code":"reset-reference"}')"""),
+                     {"source": source_id})
+        conn.execute(text("""INSERT INTO events(source_id,type,name,occurred_at,properties)
+            VALUES (:source,'track','vod_viewed','2026-01-01',
+                    '{"vod_title_id":"reset-reference","product_id":"reset-reference"}')"""),
+                     {"source": source_id})
+    return source_id, ciphertext
+
+
+def test_reset_clears_pull_receipts_resources_and_state_preserves_encrypted_config(reset_engine):
+    from sqlalchemy import text
+    from app.activations.security import decrypt
+    source_id, ciphertext = seed_pull_reset_data(reset_engine)
+    reset_demo(reset_engine, yes=True)
+    with reset_engine.connect() as conn:
+        for table in ("imports", "source_import_receipts", "gifts", "events", "source_codes", "products", "vod_titles"):
+            assert conn.scalar(text(f"SELECT count(*) FROM {table}")) == 0
+        row = conn.execute(text("SELECT credentials,config,state FROM source_connections WHERE source_id=:id"),
+                           {"id": source_id}).mappings().one()
+        assert bytes(row["credentials"]) == ciphertext
+        assert decrypt(row["credentials"])["private_key"] == "test-only-key"
+        assert row["config"] == {"mappings": [{"id": "people", "feed": "people", "table": "PEOPLE"}]}
+        assert row["state"] == {}
+        assert conn.scalar(text("SELECT count(*) FROM canonical_field_catalog")) > 0
+
+
+def test_reset_busy_connection_table_leaves_receipts_and_state_untouched(reset_engine):
+    from sqlalchemy import text
+    source_id, _ = seed_pull_reset_data(reset_engine)
+    with reset_engine.connect() as blocker:
+        blocker.execute(text("LOCK TABLE source_connections IN ACCESS SHARE MODE"))
+        with pytest.raises(RuntimeError, match="dataset table is busy"):
+            reset_demo(reset_engine, yes=True)
+        assert blocker.scalar(text("SELECT count(*) FROM source_import_receipts")) == 1
+        assert blocker.scalar(text("SELECT state->'cursors'->>'people' FROM source_connections WHERE source_id=:id"),
+                              {"id": source_id}) == "123"
+        assert blocker.scalar(text("SELECT count(*) FROM gifts")) == 1
+        blocker.rollback()
+
+
+def test_reset_refuses_cli_source_mutex_without_deleting(reset_engine):
+    from sqlalchemy import text
+    source_id, _ = seed_pull_reset_data(reset_engine)
+    with reset_engine.connect().execution_options(isolation_level="AUTOCOMMIT") as blocker:
+        blocker.execute(text("SELECT pg_advisory_lock(hashtext(:key))"), {"key": f"source-pull:{source_id}"})
+        try:
+            with pytest.raises(RuntimeError, match="source pull is busy"):
+                reset_demo(reset_engine, yes=True)
+            assert blocker.scalar(text("SELECT count(*) FROM source_import_receipts")) == 1
+            assert blocker.scalar(text("SELECT state ? 'pending' FROM source_connections WHERE source_id=:id"),
+                                  {"id": source_id}) is True
+        finally:
+            blocker.execute(text("SELECT pg_advisory_unlock(hashtext(:key))"), {"key": f"source-pull:{source_id}"})

@@ -29,11 +29,11 @@ def setup(db):
 def test_templates_idempotent_and_preserve_edits(db):
     ensure_templates(db)
     templates = list(db.scalars(select(Segment)))
-    assert len(templates) == 6
+    assert len(templates) == 23
     templates[0].name = "My editable partners"
     db.flush()
     ensure_templates(db)
-    assert len(list(db.scalars(select(Segment)))) == 6
+    assert len(list(db.scalars(select(Segment)))) == 23
     assert templates[0].name == "My editable partners"
 
 

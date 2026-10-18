@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
+from app.canonical import FIELDS, canonical_name
 
 
 RECORD_TYPES = ("contact", "gift", "event", "enrichment", "consent")
@@ -54,7 +55,20 @@ TYPE_TARGETS = {
     "enrichment": {"external_id", "contact_external_id", "email", "phone"},
     "consent": {"contact_external_id", "email", "phone", "channel", "status", "captured_at"},
 }
+TYPE_TARGETS["enrichment"].update({"vendor", "license_id", "append_date", "sensitive"})
+TYPE_TARGETS["gift"].add("source_code")
+TYPE_TARGETS["gift"].update({"is_refund", "original_donation_id"})
+for _key in ("amount", "fund", "source_code", "product_id", "vod_title_id"):
+    ALIASES[_key.replace("_", " ")] = _key
+for _key in ("vendor", "license_id", "append_date", "sensitive"):
+    ALIASES[_key.replace("_", " ")] = _key
 ENRICHMENT_TYPES = {"text", "number", "boolean", "date", "enum"}
+
+for _identity_key in ("donor_account_number", "hubspot_record_id", "okta_customer_id",
+                      "zeta_cdp_id", "zeta_uid", "email_md5", "email_sha256"):
+    ALIASES[_identity_key.replace("_", " ")] = "attributes." + _identity_key
+ALIASES["mobile phone"] = "phone"
+ALIASES["last mobile phone"] = "phone"
 
 
 def _header_key(value: str) -> str:
@@ -67,7 +81,12 @@ def suggest_mapping(headers: list[str], record_type: str) -> dict[str, object]:
         raise ValueError(f"Unsupported record type: {record_type}")
     mapping: dict[str, object] = {}
     for header in headers:
-        target = ALIASES.get(_header_key(header))
+        target = header if header in TYPE_TARGETS[record_type] else ALIASES.get(_header_key(header))
+        if record_type == "event" and target in {"amount", "fund", "source_code", "product_id", "vod_title_id"}:
+            mapping[header] = "properties." + target
+            continue
+        if record_type == "contact" and target not in TYPE_TARGETS["contact"] and canonical_name(header) in FIELDS:
+            target = "attributes." + canonical_name(header)
         if target in TYPE_TARGETS[record_type] or (
             record_type == "contact" and target and target.startswith("attributes.")
         ):

@@ -1,0 +1,31 @@
+{
+  "source": "User-supplied Zeta segment catalog, October 17 2026",
+  "denominator": 7807899,
+  "tolerance": {"relative": 0.20, "absolute_records": 25, "rule": "max"},
+  "giving_tuesday_date": "2024-12-03",
+  "audiences": {
+    "All TBN Reference": 7807899,
+    "Has Active Email": 4475258,
+    "Active (120 days)": 2902186,
+    "TBN Plus Subscription": 2086797,
+    "TBN Plus Free Users": 2050476,
+    "TBN Plus Premium": 36321,
+    "Premium Upgraders": 8770,
+    "TBN App Non-Donors": 1920005,
+    "TBN App Donors": 16855,
+    "Basic Donors": 72100,
+    "Basic Recurring Donors": 4658,
+    "Basic One-Time Donors": 11177,
+    "RFM TBN All Donor Reference": 1759625,
+    "RFM Lapsed Donors": 1608292,
+    "Partner Names Non-Donors": 597638,
+    "Donors Past 30 Days": 18943,
+    "Living Legacy Prospects V2": 788,
+    "Giving Tuesday 2024": 704,
+    "Mobile Subscribed": 89201,
+    "Call Center SMS Opt-ins": 149575,
+    "SMS Opt-Out Date Exists": 39305,
+    "VOD Optouts": 1819797,
+    "Customers with VOD Viewed": 1414204
+  }
+}

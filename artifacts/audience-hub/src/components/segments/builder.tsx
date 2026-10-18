@@ -29,6 +29,8 @@ export function SegmentBuilder({ id }: { id?: number }) {
   const delta = useSegmentDelta();
   const fields = useMemo(() => fieldsQ.data?.fields ?? [], [fieldsQ.data]);
   const giftValues = fieldsQ.data?.gift_values ?? {};
+  const resourceFilters = fieldsQ.data?.resource_filters;
+  const eventNames = fieldsQ.data?.event_names;
   const segments = useMemo(() => allQ.data?.items ?? [], [allQ.data]);
   const existing = segmentQ.data;
   const archived = existing?.status === 'archived';
@@ -53,7 +55,7 @@ export function SegmentBuilder({ id }: { id?: number }) {
   // Validation: client mirror + last server error (with node path when the API provides one).
   const [serverIssue, setServerIssue] = useState<Issue | null>(null);
   const [nameError, setNameError] = useState('');
-  const clientIssues = useMemo(() => fields.length ? validate(draft.definition, fields) : [], [draft.definition, fields]);
+  const clientIssues = useMemo(() => fields.length ? validate(draft.definition, fields, resourceFilters) : [], [draft.definition, fields]);
   const ruleCount = countRules(draft.definition.root);
 
   // 800 ms debounce for live preview; null = do not query (no fake counts).
@@ -158,7 +160,7 @@ export function SegmentBuilder({ id }: { id?: number }) {
         <TabsContent value="rules" className="mt-2">
           {fieldsQ.isLoading ? <div className="flex flex-col gap-2">{Array.from({ length: 4 }, (_, i) => <Skeleton key={i} className="h-12 w-full bg-surface-raised" />)}</div>
             : <div className="rounded-sm border border-line bg-surface p-2">
-              <TreeEditor def={draft.definition} onChange={definition => setDraft(d => ({ ...d, definition }))} fields={fields} giftValues={giftValues} segments={segments} currentId={id}
+              <TreeEditor def={draft.definition} onChange={definition => setDraft(d => ({ ...d, definition }))} fields={fields} giftValues={giftValues} resourceFilters={resourceFilters} eventNames={eventNames} segments={segments} currentId={id}
                 readOnly={readOnly} issues={issues} deltas={deltas} requestDelta={requestDelta} segmentName={segmentName} />
               {issues.filter(i => !/^root\.rules/.test(i.path) && i.path !== 'root').map((i, k) => <p key={k} role="alert" className="mt-2 text-[11px] font-mono text-danger">{i.path}: {i.message}</p>)}
               {issues.filter(i => i.path === 'root').map((i, k) => <p key={k} role="alert" className="mt-2 text-[11px] font-mono text-danger">{i.path}: {i.message}</p>)}

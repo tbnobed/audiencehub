@@ -87,7 +87,7 @@ def next_run(expression, zone, now=None):
 def tick_activations(db, now):
     from sqlalchemy import select, text
     from app.models import Activation, ActivationRun, ScheduledRun
-    from app.activations.service import enqueue_run
+    from app.activations.service import enqueue_run, audit
     for activation in db.scalars(select(Activation).where(Activation.is_active, Activation.schedule.is_not(None))):
         if not matches(activation.schedule, activation.timezone, now):
             continue
@@ -97,11 +97,23 @@ def tick_activations(db, now):
         db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:key))"), {"key": f"{task}:{window}"})
         if db.get(ScheduledRun, (task, window)):
             continue
+        if db.scalar(text("""SELECT EXISTS(SELECT 1 FROM audit_log
+          WHERE action='activation.schedule_failed' AND entity_type='activation'
+          AND entity_id=:id AND details->>'window'=:window)"""),
+          {"id": str(activation.id), "window": window}):
+            continue
         try:
             run, job = enqueue_run(db, activation.id, triggered_by="schedule",
                                   dedupe_key=f"schedule:{task}:{window}")
         except ValueError:
-            # An archived audience/destination prevents selection. Do not send.
+            # Preserve a durable alert even if validation failed before enqueue.
+            failed = ActivationRun(activation_id=activation.id, status="failed",
+                                   triggered_by="schedule", finished_at=now,
+                                   error="Scheduled activation could not be queued; verify destination credentials, audience and export approvals.")
+            db.add(failed)
+            db.flush()
+            audit(db, "activation.schedule_failed", "activation", activation.id,
+                  run_id=failed.id, window=window)
             continue
         db.add(ScheduledRun(task=task, window_key=window, job_id=job.id))
     # Queue recovery terminates a crashed single-attempt delivery job. Keep the

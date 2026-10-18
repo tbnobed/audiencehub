@@ -64,6 +64,7 @@ def timeout_ms(job_type):
     settings = get_settings()
     seconds = {
         "import.run": settings.bulk_statement_timeout_seconds,
+        "source.pull": settings.bulk_statement_timeout_seconds,
         "identity.resolve_batch": settings.bulk_statement_timeout_seconds,
         "ingestion.resolve": settings.bulk_statement_timeout_seconds,
         "traits.recompute": settings.bulk_statement_timeout_seconds,

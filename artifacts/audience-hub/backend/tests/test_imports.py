@@ -90,12 +90,14 @@ def test_enrichment_requires_declared_typed_attribute_and_identifier():
             "Email Address": "email",
             "HH Income": {"enrichment": "hh_income_band", "data_type": "enum"},
             "Score": {"enrichment": "donor_propensity_score", "data_type": "number"},
+            "vendor": "vendor", "license_id": "license_id", "append_date": "append_date",
         },
         "enrichment",
-        ["Email Address", "HH Income", "Score"],
+        ["Email Address", "HH Income", "Score", "vendor", "license_id", "append_date"],
     )
     result = map_and_validate_row(
-        {"Email Address": "donor@example.org", "HH Income": "high", "Score": "0.73"},
+        {"Email Address": "donor@example.org", "HH Income": "high", "Score": "0.73",
+         "vendor": "test-provider", "license_id": "test-license", "append_date": "2026-01-02"},
         mapping,
         "enrichment",
     )
@@ -145,9 +147,10 @@ def test_row_validation_does_not_mutate_saved_mapping_options():
         ("gift", ["external_id", "contact_external_id", "amount", "gift_date"],
          {"external_id": "gift-1", "contact_external_id": "crm-1",
           "amount": "25.00", "gift_date": "2025-01-01"}),
-        ("enrichment", ["external_id", "contact_external_id", "hh_income_band"],
+        ("enrichment", ["external_id", "contact_external_id", "hh_income_band", "vendor", "license_id", "append_date"],
          {"external_id": "zeta-1", "contact_external_id": "crm-1",
-          "hh_income_band": "75k_149k"}),
+          "hh_income_band": "75k_149k", "vendor": "test-provider",
+          "license_id": "test-license", "append_date": "2026-01-02"}),
     ):
         mapping = _mapping(headers, record_type)
         original = {"columns": dict(mapping["columns"]), "options": dict(mapping["options"])}
@@ -175,9 +178,9 @@ def test_stable_row_hash_generates_deterministic_natural_keys_for_reimport():
     assert _external_id("event", {"raw_hash": "a" * 64}) == "auto:" + "a" * 64
 
 
-def test_gmail_email_normalization_collapses_dots_and_plus_tags():
-    assert normalize_email(" First.Last+monthly@Gmail.com ") == "firstlast@gmail.com"
-    assert normalize_email(" First.Last+monthly@GMAIL.TEST ") == "firstlast@gmail.test"
+def test_email_normalization_preserves_dots_and_plus_tags():
+    assert normalize_email(" First.Last+monthly@Gmail.com ") == "first.last+monthly@gmail.com"
+    assert normalize_email(" First.Last+monthly@GMAIL.TEST ") == "first.last+monthly@gmail.test"
     assert normalize_email("first.last@other.test") is None
 
 
@@ -304,7 +307,7 @@ def test_event_upsert_includes_mapped_fields_and_remains_idempotent():
 def test_hard_bounce_registers_email_hmac_and_has_privacy_safe_detection():
     pepper = "test-pepper"
     email = normalize_email("Bounced.User+esp@example.org")
-    assert email == "bounced.user@example.org"
+    assert email == "bounced.user+esp@example.org"
     assert _is_hard_bounce({"attributes": {"hard_bounce": " true "}})
     assert not _is_hard_bounce({"attributes": {"hard_bounce": "false"}})
 

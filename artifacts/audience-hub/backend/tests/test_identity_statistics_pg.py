@@ -33,7 +33,8 @@ def test_fresh_five_file_identity_statistics_and_full_traits(db, monkeypatch, tm
     local = db.get_bind()
     monkeypatch.setattr(app.db, "engine", local)
     monkeypatch.setattr(app.importer, "engine", local)
-    files = generate_seed(profiles=500, scale="medium", output_dir=tmp_path / "seed")["files"]
+    files = generate_seed(profiles=500, scale="medium", output_dir=tmp_path / "seed",
+                          mode="legacy")["files"]
     evidence = {}
     started = time.perf_counter()
 

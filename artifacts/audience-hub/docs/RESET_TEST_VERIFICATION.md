@@ -1,5 +1,32 @@
 # Reset-test isolation and verification
 
+## Pull sources and audited resources
+
+`reset-demo --yes` is a destructive dataset reset, not a configuration reset.
+It truncates source import receipts **together with** imports/identity batches,
+events, gifts, and source-code/product/VOD resource rows, with no `CASCADE`.
+The one transaction clears `source_connections.state` to `{}`: all incremental
+cursors and pending recovery manifests are discarded. The next configured pull
+therefore starts without a cursor and can replay its retained upstream history.
+Scheduled jobs, run history, and their receipts are also cleared.
+
+Source connection rows, their Fernet ciphertext bytes, feed mappings, schedules,
+source definitions, canonical field catalog, users, and the never-reused Master ID
+registry remain intact. No remote source data is changed. Reset does not wipe
+upload files; the existing upload-retention policy governs those files.
+
+Every dataset table **and** `source_connections` is locked with `NOWAIT` before
+any state update or truncation. Running jobs, busy tables (including readers of
+source connections), and active source-pull advisory locks held by CLI processes
+refuse the entire operation without changing cursors, receipts, or data.
+The production `--force --yes` guard remains mandatory; unknown public tables
+and unreviewed foreign keys fail closed rather than causing cascading deletion.
+
+Focused PostgreSQL reset tests use a freshly created disposable database only,
+behind `KINSHIP_BENCHMARK_ISOLATED_TESTS=1`. They verify ciphertext/configuration
+preservation, receipt/resource deletion, cursor/recovery clearing, and rollback
+when connection-table locks or CLI source mutexes are busy.
+
 ## Root cause
 
 The intermittent reset failure was reproduced in a fresh disposable PostgreSQL

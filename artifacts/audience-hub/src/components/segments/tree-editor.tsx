@@ -7,7 +7,7 @@ import { FieldPicker, RuleControls } from './rule-editor';
 export type DeltaState = { status: 'loading' } | { status: 'ok'; delta: number } | { status: 'error'; message: string };
 
 type Ctx = {
-  def: SegmentDefinition; onChange: (d: SegmentDefinition) => void; fields: SegmentField[]; giftValues: Record<string, string[]>;
+  def: SegmentDefinition; onChange: (d: SegmentDefinition) => void; fields: SegmentField[]; giftValues: Record<string, string[]>; resourceFilters?: Record<string, string>; eventNames?: string[];
   segments: Segment[]; currentId?: number; readOnly: boolean; issues: Issue[]; deltas: Record<string, DeltaState>;
   requestDelta: (path: string) => void; drag: Path | null; setDrag: (p: Path | null) => void; segmentName: (id: number) => string | undefined;
 };
@@ -64,7 +64,7 @@ function RuleNode({ ctx, rule, path }: { ctx: Ctx; rule: SegmentRule; path: Path
     <NodeChrome ctx={ctx} path={path} kind="rule">
       <div className="flex flex-wrap items-center gap-1">
         <FieldPicker fields={ctx.fields} value={field} disabled={ctx.readOnly} testId={`${testId}-field`} onPick={f => ctx.onChange(updateNode(ctx.def, path, () => ruleFromField(f)))} />
-        <RuleControls rule={rule} field={field} fields={ctx.fields} giftValues={ctx.giftValues} segments={ctx.segments} currentId={ctx.currentId}
+        <RuleControls rule={rule} field={field} fields={ctx.fields} giftValues={ctx.giftValues} resourceFilters={ctx.resourceFilters} eventNames={ctx.eventNames} segments={ctx.segments} currentId={ctx.currentId}
           onChange={r => ctx.onChange(updateNode(ctx.def, path, () => r))} disabled={ctx.readOnly} issueAt={issueAt} testId={testId} />
       </div>
       <p className="mt-1 text-[11px] text-ink-muted truncate" title={describeRule(rule, ctx.fields, ctx.segmentName)}>{describeRule(rule, ctx.fields, ctx.segmentName)}</p>

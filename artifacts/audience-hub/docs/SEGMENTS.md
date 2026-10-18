@@ -119,7 +119,74 @@ Do not bypass the lock timeout or force-terminate production sessions blindly.
 - Enrichment rule excludes expired values.
 - Materialize computes adds/removes correctly across two runs.
 
-## Prebuilt segment templates (seeded, editable)
+## Benchmark modes
+
+```sh
+# Default: existing app database, read-only, all 23 current template definitions
+kinship benchmark --segments
+kinship benchmark --segments --as-of 2025-01-01
+
+# Explicit synthetic exception: private schema or local private database
+kinship benchmark --segments --isolated --profiles 50000 --scale small
+
+# Explicit fresh audit exception: all 23 identity/materialization checks
+kinship benchmark --audit-segments --profiles 500000 --scale medium
+```
+
+The default `--segments` path uses the configured application database, including
+a valid `APP_ENV=production` configuration. It bypasses the **isolated benchmark**
+dispatch/production guard, not application authentication or configuration
+validation. `KINSHIP_BENCHMARK_BACKEND=schema` does not change that default.
+No production query is required to test dispatch.
+
+The read-only runner creates a dedicated, unpooled connection without application
+worker-registration hooks. Startup sets `default_transaction_read_only=on`;
+`SET TRANSACTION READ ONLY` precedes the first application query, followed by
+repeatable-read isolation. One UTC reference instant and one snapshot cover the run.
+The transaction is always rolled back and the connection disposed on failure.
+It performs no seeding, migrations, template installation/updates, temporary
+tables, materialization, job enqueueing, audit writes or exports. PostgreSQL
+rejects attempted INSERT/UPDATE/DELETE and CREATE TEMP TABLE, not just a Python
+convention. Other application writers can still change data outside its snapshot.
+
+The report is `segments.json` under a unique `segments-readonly-*` directory in
+`KINSHIP_BENCHMARK_OUTPUT` or `--output-dir`. It records actual total and active
+profile counts; the default or explicitly supplied `--profiles 500000` **does not**
+resize or describe existing data and is recorded as ignored. Each of the 23
+code-defined templates has a count, count/preview/sample `first_ms`, three
+`warm_ms` values and `warm_median_ms`, with materialization explicitly marked
+`skipped` because the run is read-only. Empty audiences are legitimate.
+Saved/edited application definitions are not overwritten or installed.
+
+Count timings execute the compiled count query; preview timings also compile;
+sample timings include the API-equivalent 25-row read and full status/source
+breakdown SQL, but exclude HTTP transport. No sample contact fields are saved.
+“First” is the first execution for that operation/template, **not** cold OS or
+PostgreSQL buffers; count precedes preview and sample. Per-statement timeouts
+are 10 seconds. A template error is explicit in the report and returns a failing
+exit status; other templates are still attempted through read-only savepoints.
+
+`--seed-dir`, `--scale`, import row-count flags and profiling/test filters are
+rejected with read-only `--segments` (even if a supplied value equals a default).
+Use `--isolated` to opt into synthetic preparation. Other benchmark modes cannot
+be combined with segments. `--segments --isolated` preserves the historical
+six-template synthetic benchmark; `--audit-segments` is an explicitly named
+fresh-data exception, defaults to 500,000 people, and does not require an extra
+`--isolated` flag. Its seeding, migration and materialization writes are confined
+to the generated private schema/database. Schema/role and generated seed data
+are cleaned up after workload failure or handled interruption; cleanup failures
+are surfaced as failed receipts, never claimed successful. Local private mode
+still refuses `APP_ENV=production`. Shared-server schema mode retains its
+restricted-role privilege checks; neither mode flushes caches or restarts the
+application database. SIGKILL/host loss cannot guarantee cleanup.
+
+Safety tests: `test_readonly_benchmark.py` uses no database; the private-socket
+`test_readonly_benchmark_pg.py` verifies write and temp-table refusal, unchanged
+durable table counts for the full run, and that transaction protection precedes
+queries. Run PostgreSQL tests only through the existing disposable test harness,
+never with the running application's database URL.
+
+## Historical six-template isolated benchmark
 
 1. Lapsed donors, LTV ≥ $500 (reactivation).
 2. New donors in the last 90 days (welcome series).

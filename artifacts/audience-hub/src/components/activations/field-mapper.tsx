@@ -5,7 +5,7 @@ import { Input } from '@/components/ui/input';
 import type { Destination, ExportField, MappingValue } from '@/lib/activations';
 import { PRESETS, allowedFields, enforceLocked, lockedSource, fieldId, fieldToValue, presetRows, rowId, valueLabel, type MapRow } from './logic';
 
-const GROUPS: { kind: ExportField['kind']; label: string }[] = [{ kind: 'profile', label: 'Profile' }, { kind: 'trait', label: 'Traits' }, { kind: 'enrichment', label: 'Enrichment' }];
+const GROUPS: { kind: ExportField['kind']; label: string }[] = [{ kind: 'profile', label: 'Profile' }, { kind: 'canonical', label: 'Imported first-party (canonical)' }, { kind: 'trait', label: 'Kinship computed traits' }, { kind: 'enrichment', label: 'Vendor enrichment' }];
 const DND = 'application/x-kin-field';
 
 export function FieldMapper({ rows, onChange: rawChange, fields, destination }: { rows: MapRow[]; onChange: (r: MapRow[]) => void; fields: ExportField[]; destination: Destination | null }) {
@@ -37,7 +37,7 @@ export function FieldMapper({ rows, onChange: rawChange, fields, destination }: 
           {list.map(f => <div key={fieldId(f)} draggable onDragStart={e => { e.dataTransfer.setData(DND, fieldId(f)); e.dataTransfer.effectAllowed = 'copy'; }}
             className="group flex items-center gap-1.5 h-7 px-1.5 rounded-sm hover:bg-surface-raised cursor-grab text-[12px]" data-testid={`field-${f.kind}-${f.key}`}>
             <GripVertical size={11} className="text-ink-muted shrink-0" /><span className="truncate flex-1">{f.label}</span>
-            {f.source && <span className="font-mono text-[10px] text-ink-muted">{f.source}</span>}{f.pii && <Lock size={10} className="text-warn" aria-label="PII" />}
+            {f.source && <span className="font-mono text-[10px] text-ink-muted">{f.source}</span>}{f.sensitive && <span className="text-[10px] text-warn">Sensitive</span>}{f.pii && <Lock size={10} className="text-warn" aria-label="PII" />}
             {!fixed && <button type="button" className="opacity-0 group-hover:opacity-100 focus:opacity-100 text-signal" aria-label={`Add ${f.label} as column`} onClick={() => add(fieldToValue(f), f.key)} data-testid={`button-add-field-${f.key}`}><Plus size={12} /></button>}
           </div>)}
         </div>; })}

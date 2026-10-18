@@ -17,6 +17,16 @@ The audit's mostly-lapsed imported RFM population supersedes the earlier
 35–45% active demo mix. Keep imported RFM distinct from Kinship-computed RFM.
 Preserve UTC-relative seed history. Do not invent missing real audience counts.
 
+The user subsequently supplied all audience counts: use denominator 7,807,899
+and tolerance `max(20% of scaled expected count, 25 records)`. The authoritative
+catalog is recorded in `artifacts/audience-hub/docs/ZETA_AUDIENCE_TARGETS.json`.
+Giving Tuesday is explicitly December 3, 2024, an intentional exception to
+otherwise relative dates. Unmerge must be built, with per-side merge provenance
+for identifiers, events, gifts and trait sources, not merely documented.
+
+**Why:** The user clarified these acceptance rules and explicitly required
+reversible merge/unmerge before continuing.
+
 Email/SMS sending, journeys, web overlays, AI tools and Zeta insight products
 are out of scope. Existing Google/Meta destinations stay unchanged; the M6 JS
 SDK waits. Support 8M generation arguments but do not run an 8M load.

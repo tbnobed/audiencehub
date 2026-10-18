@@ -6,6 +6,18 @@ class SegmentTraitsRefreshRequired(ValueError):
 
 
 def run(job_type: str, payload: dict, job_id: int | None = None) -> None:
+    if job_type == "source.pull":
+        from app.source_pulls import run_source
+        from app.source_connectors import SourceError
+        from app.identity.locking import IdentityResolutionDeferred
+        from app.jobs.lifecycle import OwnershipLost
+        try:
+            run_source(int(payload["source_id"]), feed=payload.get("feed"), job_id=job_id)
+        except (IdentityResolutionDeferred, OwnershipLost):
+            raise
+        except Exception:
+            raise SourceError("Source pull failed; retry resumes committed checkpoints. Verify canonical data and connection configuration.") from None
+        return
     if job_type == "ingestion.resolve":
         from app.ingestion.jobs import run_resolution
         run_resolution(int(payload["source_id"]), job_id=job_id)
@@ -77,8 +89,11 @@ def run(job_type: str, payload: dict, job_id: int | None = None) -> None:
         with Session(engine) as db:
             acquire_resolver_lock(db)
             batch_id = payload.get("batch_id")
+            if db.scalar(text("""SELECT EXISTS(SELECT 1 FROM source_connections
+                WHERE state ? 'pending')""")):
+                raise IdentityResolutionDeferred("Identity waits for source pull recovery.")
             if db.scalar(text("""SELECT EXISTS(SELECT 1 FROM jobs
-                WHERE type='import.run' AND status IN ('queued','running'))""")):
+                WHERE type IN ('import.run','source.pull') AND status IN ('queued','running'))""")):
                 raise IdentityResolutionDeferred("Identity waits for the import barrier.")
             if not batch_id and payload.get("import_id"):
                 batch_id = db.scalar(text("SELECT identity_batch_id FROM imports WHERE id=:id"),

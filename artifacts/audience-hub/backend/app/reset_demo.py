@@ -10,9 +10,12 @@ from sqlalchemy.exc import OperationalError
 # Keep this allowlist in sync with migrations. Never use CASCADE: a new FK from a
 # retained table must make the operation fail, not quietly destroy configuration.
 DATA_TABLES = (
-    "audit_log", "client_errors", "scheduled_runs", "jobs", "imports", "import_batch_diagnostics", "identity_batches",
+    "audit_log", "client_errors", "scheduled_runs", "jobs", "source_import_receipts",
+    "imports", "import_batch_diagnostics", "identity_batches",
     "profiles", "source_records", "ingestion_receipts",
     "identifiers", "identifier_blocklist", "profile_merges", "gifts", "events",
+    "source_codes", "products", "vod_titles",
+    "identity_merge_journal", "identity_reviews", "identity_xref", "master_id_aliases",
     "consents", "suppressions", "enrichment_values", "profile_traits",
     "trait_snapshots", "trait_dirty_profiles", "segment_membership",
     "segment_counts", "segments", "activation_runs", "activations",
@@ -22,7 +25,8 @@ DATA_TABLES = (
     "dashboard_kpis", "dashboard_cache",
 )
 RETAINED_TABLES = (
-    "users", "sources", "enrichment_attributes", "admin_settings",
+    "users", "sources", "enrichment_attributes", "admin_settings", "master_id_registry",
+    "source_connections", "canonical_field_catalog",
 )
 KNOWN_TABLES = frozenset((*DATA_TABLES, *RETAINED_TABLES, "alembic_version"))
 
@@ -61,6 +65,8 @@ def reset_demo(engine: Engine, *, yes: bool = False, force: bool = False) -> Non
     print("Reset scope (rows and identities): " + ", ".join(DATA_TABLES))
     print("Preserved (including source settings; per-import mappings are erased): "
           + ", ".join(RETAINED_TABLES))
+    print("Source connections preserve encrypted credentials/configuration; incremental cursors "
+          "and pending pull recovery state are cleared atomically with receipts.")
     print("Guard: APP_ENV=production requires both --force and --yes; "
           "all environments require --yes. Running jobs or busy tables block reset.")
     if not yes:
@@ -100,7 +106,14 @@ def reset_demo(engine: Engine, *, yes: bool = False, force: bool = False) -> Non
             # No CASCADE; PostgreSQL verifies every FK, including new ones from
             # protected tables, and rolls back every table if anything fails.
             tables = ", ".join("public." + name for name in DATA_TABLES)
-            conn.execute(text(f"LOCK TABLE {tables} IN ACCESS EXCLUSIVE MODE NOWAIT"))
+            conn.execute(text(f"LOCK TABLE {tables}, public.source_connections IN ACCESS EXCLUSIVE MODE NOWAIT"))
+            # CLI pulls also hold this advisory mutex, even while waiting on
+            # remote I/O with no active database transaction or running job.
+            for source_id in conn.execute(text("SELECT source_id FROM public.source_connections")).scalars():
+                if not conn.scalar(text("SELECT pg_try_advisory_xact_lock(hashtext(:key))"),
+                                   {"key": f"source-pull:{source_id}"}):
+                    raise RuntimeError("Refusing reset-demo: a source pull is busy. Stop source pull processes before retrying.")
+            conn.execute(text("UPDATE public.source_connections SET state='{}'::jsonb,updated_at=now()"))
             conn.execute(text(f"TRUNCATE TABLE {tables} RESTART IDENTITY"))
     except OperationalError as exc:
         if getattr(exc.orig, "sqlstate", None) == "55P03":
@@ -109,4 +122,4 @@ def reset_demo(engine: Engine, *, yes: bool = False, force: bool = False) -> Non
                 "Stop workers and other writers before retrying.\n" + busy_sessions(engine)
             ) from exc
         raise
-    print("Dataset reset complete. Users, sources, source definitions and admin settings preserved.")
+    print("Dataset reset complete. Users, sources, encrypted connections and admin settings preserved; source cursors and recovery state cleared.")

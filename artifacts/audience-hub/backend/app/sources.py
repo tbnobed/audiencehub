@@ -12,7 +12,7 @@ from app.db import session_scope
 from app.models import Source, User
 
 router = APIRouter(prefix="/api/sources", tags=["sources"])
-RECORD_TYPES = {"contact", "gift", "event", "enrichment", "consent"}
+RECORD_TYPES = {"contact", "gift", "event", "enrichment", "consent", "resource"}
 
 
 class SourceCreate(BaseModel):
@@ -37,8 +37,8 @@ class SourceCreate(BaseModel):
     @field_validator("kind")
     @classmethod
     def valid_kind(cls, value: str) -> str:
-        if value not in {"csv", "event_api"}:
-            raise ValueError("Kind must be csv or event_api")
+        if value not in {"csv", "event_api", "sftp_jsonl", "snowflake", "zeta_exit"}:
+            raise ValueError("Unsupported source kind")
         return value
 
     @field_validator("record_types")
@@ -47,6 +47,23 @@ class SourceCreate(BaseModel):
         if len(values) != len(set(values)) or not set(values) <= RECORD_TYPES:
             raise ValueError("Invalid or duplicate record type")
         return values
+
+    @field_validator("settings")
+    @classmethod
+    def safe_settings(cls, value: dict) -> dict:
+        # Pull config and secrets belong exclusively in /connection; settings
+        # are historically readable by viewers and cannot hold credentials.
+        def check(item):
+            if isinstance(item, dict):
+                for key, child in item.items():
+                    if any(word in key.lower() for word in ("password", "secret", "credential", "private_key", "token")):
+                        raise ValueError("Use the encrypted connection endpoint for credentials")
+                    check(child)
+            elif isinstance(item, list):
+                for child in item:
+                    check(child)
+        check(value)
+        return value
 
 
 class SourceUpdate(BaseModel):
@@ -60,6 +77,7 @@ class SourceUpdate(BaseModel):
     is_active: bool | None = None
 
     _valid_types = field_validator("record_types")(SourceCreate.valid_types.__func__)
+    _safe_settings = field_validator("settings")(SourceCreate.safe_settings.__func__)
 
 
 def source_json(source: Source) -> dict:
@@ -95,6 +113,8 @@ def read_source(source_id: int, user: User = Depends(require_role("viewer")),
 @router.post("", status_code=201)
 def create_source(data: SourceCreate, user: User = Depends(require_role("admin")),
                   db: Session = Depends(session_scope)):
+    if data.kind in {"sftp_jsonl", "snowflake", "zeta_exit"} and data.settings:
+        raise HTTPException(422, "Use the encrypted connection endpoint for pull configuration")
     source = Source(**data.model_dump())
     db.add(source)
     try:
@@ -111,6 +131,8 @@ def update_source(source_id: int, data: SourceUpdate,
                   user: User = Depends(require_role("admin")),
                   db: Session = Depends(session_scope)):
     source = get_source(db, source_id)
+    if source.kind in {"sftp_jsonl", "snowflake", "zeta_exit"} and data.settings:
+        raise HTTPException(422, "Use the encrypted connection endpoint for pull configuration")
     for key, value in data.model_dump(exclude_unset=True).items():
         setattr(source, key, value)
     db.commit()
@@ -122,7 +144,7 @@ def update_source(source_id: int, data: SourceUpdate,
 def delete_source(source_id: int, user: User = Depends(require_role("admin")),
                   db: Session = Depends(session_scope)):
     source = get_source(db, source_id)
-    for table in ("imports", "source_records", "gifts", "events", "enrichment_values", "ingestion_receipts"):
+    for table in ("imports", "source_records", "gifts", "events", "enrichment_values", "ingestion_receipts", "source_import_receipts"):
         count = db.scalar(text(f"SELECT EXISTS(SELECT 1 FROM {table} WHERE source_id = :id)"), {"id": source_id})
         if count:
             raise HTTPException(409, "Source has data; deactivate it instead of deleting its history")
@@ -166,3 +188,7 @@ def event_tail(source_id: int, cursor: int | None = None, limit: int = 50,
               "occurred_at": e.occurred_at.isoformat(), "received_at": e.received_at.isoformat(),
               "timestamp_clamped": bool(e.context.get("timestamp_clamped"))} for e in events[:limit]]
     return {"items": items, "next_cursor": items[-1]["id"] if len(events) > limit else None}
+
+
+from app.source_api import router as connection_router
+router.include_router(connection_router)

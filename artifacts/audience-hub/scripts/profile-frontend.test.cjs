@@ -28,6 +28,7 @@ function loadPage(response, dev = false) {
     requests.push({ url, options });
     if (url === '/api/traits') return new Response(JSON.stringify(fixture.catalog));
     if (url === '/api/client-errors') return new Response('{}');
+    if (url === '/api/schema/canonical') return new Response(JSON.stringify({ fields: {}, events: [], resources: [] }));
     assert.equal(url, `/api/profiles/${response.id}`, 'unexpected API request');
     return new Response(JSON.stringify(response.body), { status: response.status });
   };

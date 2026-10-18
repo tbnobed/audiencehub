@@ -33,9 +33,9 @@ def settings():
 @pytest.mark.parametrize(
     "raw,expected",
     [
-        ("  User.Name+Tag@GMAIL.COM  ", "username@gmail.com"),
-        (" First.Last+campaign@googlemail.com ", "firstlast@gmail.com"),
-        (" Person.Name+tag@example.org ", "person.name@example.org"),
+        ("  User.Name+Tag@GMAIL.COM  ", "user.name+tag@gmail.com"),
+        (" First.Last+campaign@googlemail.com ", "first.last+campaign@googlemail.com"),
+        (" Person.Name+tag@example.org ", "person.name+tag@example.org"),
         ("person@example.org", "person@example.org"),
         ("not-an-email", None),
         ("missing-domain@", None),
@@ -48,12 +48,12 @@ def test_email_normalization(raw, expected, settings):
 
 def test_configured_gmail_style_domains(settings):
     settings.gmail_style_domains = "gmail.com,googlemail.com,example.org"
-    assert normalize_email("A.B+tag@example.org", settings) == "ab@example.org"
+    assert normalize_email("A.B+tag@example.org", settings) == "a.b+tag@example.org"
 
 
 def test_reserved_seed_gmail_domain_is_valid_and_normalized(settings):
     settings.gmail_style_domains = "gmail.com,googlemail.com,gmail.test"
-    assert normalize_email("  A.B+seed@GMAIL.TEST  ", settings) == "ab@gmail.test"
+    assert normalize_email("  A.B+seed@GMAIL.TEST  ", settings) == "a.b+seed@gmail.test"
     assert normalize_email("a.b@other.test", settings) is None
 
 
@@ -113,8 +113,7 @@ def test_seeded_ten_thousand_address_fast_slow_equivalence(settings):
         except EmailNotValidError:
             expected = None
         assert normalization.validated_email(raw) == expected, raw
-        # The existing identity and CSV import callers differ only in their
-        # lower/casefold choice and provider-specific canonicalization.
+        # Validation remains unchanged; identity normalization is trim + lower.
         assert (normalize_email(raw, settings) is None) == (expected is None), raw
 
 
@@ -133,7 +132,11 @@ def test_mapped_row_exposes_single_canonical_email_for_import(monkeypatch):
     )
     assert calls == ["First.Last+newsletter@GMAIL.COM"]
     assert mapped["values"]["email_raw"] == calls[0]
-    assert mapped["values"]["email_norm"] == "firstlast@gmail.com"
+    assert mapped["values"]["email_norm"] == "first.last+newsletter@gmail.com"
+    import hashlib
+    normalized = mapped["values"]["email_norm"].encode()
+    assert mapped["values"]["attributes"]["email_md5"] == hashlib.md5(normalized).hexdigest()
+    assert mapped["values"]["attributes"]["email_sha256"] == hashlib.sha256(normalized).hexdigest()
 
 
 @pytest.mark.parametrize(

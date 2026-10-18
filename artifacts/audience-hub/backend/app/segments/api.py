@@ -104,7 +104,10 @@ def serialize(db, row):
 
 @router.get("/fields")
 def fields(user: User = viewer, db: Session = session):
-    return field_registry(db)
+    result = field_registry(db)
+    if user.role == "viewer":
+        result["fields"] = [field for field in result["fields"] if not field.get("sensitive")]
+    return result
 
 
 @router.get("/typeahead")

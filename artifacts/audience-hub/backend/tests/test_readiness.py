@@ -28,7 +28,7 @@ def _versioned_engine(*revisions):
 
 def test_ready_at_dynamic_script_head(monkeypatch):
     heads = main.migration_script().get_heads()
-    assert heads and "0028_event_ingestion" in heads
+    assert heads and all(main.migration_script().get_revision(head) for head in heads)
     engine = _versioned_engine(*heads)
     monkeypatch.setattr(main, "engine", engine)
     try:
@@ -91,9 +91,10 @@ def test_ready_fails_explicitly_when_scripts_unavailable(monkeypatch, tmp_path):
 
 
 def test_installed_app_finds_scripts_from_backend_cwd(monkeypatch, tmp_path):
+    expected = main.migration_script().get_heads()
     monkeypatch.setattr(main, "__file__", str(tmp_path / "installed" / "app" / "main.py"))
     monkeypatch.chdir(Path(__file__).resolve().parents[1])
-    assert main.migration_script().get_heads() == ["0028_event_ingestion"]
+    assert main.migration_script().get_heads() == expected
 
 
 def test_system_reports_actual_database_revision():

@@ -3,6 +3,8 @@ import { fetchApi } from '@/lib/api';
 
 export type ProfileItem = {
   id: number;
+  /** Public Master ID; optional until master-identity-core ships the contract. */
+  master_id?: string | null;
   first_name: string | null;
   last_name: string | null;
   email: string | null;
@@ -27,6 +29,8 @@ export type ProfileDetail = ProfileItem & {
   merges: any[];
   enrichment: any[];
   consents: any[];
+  /** Survivorship-resolved first-party attributes; sensitive keys omitted for viewers. */
+  canonical_attributes?: Record<string, unknown>;
 };
 
 export function useProfiles(params: {
@@ -66,5 +70,27 @@ export function useProfile(id: number) {
     queryKey: ['profiles', id],
     queryFn: () => fetchApi(`/api/profiles/${id}`) as Promise<ProfileDetail>,
     enabled: !!id,
+  });
+}
+
+export type CanonicalFieldMeta = {
+  data_type: 'text' | 'number' | 'boolean' | 'date' | 'timestamp';
+  group: string;
+  sensitive: boolean;
+  model_date?: string;
+};
+
+export type CanonicalSchema = {
+  fields: Record<string, CanonicalFieldMeta>;
+  events: string[];
+  resources: string[];
+};
+
+/** Server omits sensitive fields for viewers; never request them separately. */
+export function useCanonicalSchema() {
+  return useQuery({
+    queryKey: ['schema-canonical'],
+    queryFn: () => fetchApi('/api/schema/canonical') as Promise<CanonicalSchema>,
+    staleTime: 300000,
   });
 }

@@ -9,3 +9,5 @@
 - [Milestone order](milestone-order.md) — build M7 activation, consent and deletion before M6 event ingestion and SDK.
 - [Development key stability](development-key-stability.md) — encryption and suppression keys must survive restarts; never restore per-start random fallbacks.
 - [Zeta replacement scope](zeta-parity-scope.md) — audit-led sequence supersedes generic seed mix; Master ID first, SDK waits, exclusions explicit.
+- [SQL JSON literal bindings](sql-json-literals.md) — compact JSON in SQLAlchemy text can become unintended bind parameters; exercise migrations on PostgreSQL.
+- [Benchmark watchers](benchmark-watchers.md) — restrict source scanning and reload watchers so generated PostgreSQL files cannot stall the preview.

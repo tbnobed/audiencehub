@@ -82,7 +82,7 @@ def identity_import_running(db: Session) -> bool:
               ON j.payload->>'import_id' = i.id::text
             WHERE j.type='import.run' AND j.status='running'
               AND i.record_type IN ('contact', 'consent', 'enrichment')
-        )
+        ) OR EXISTS (SELECT 1 FROM jobs WHERE type='source.pull' AND status='running')
     """)))
 
 

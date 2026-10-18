@@ -9,12 +9,26 @@ export const MAX_RULES = 50;
 export const GIFT_WHERE: Record<string, 'text' | 'number' | 'boolean'> = {
   fund: 'text', campaign: 'text', appeal_code: 'text', channel: 'text', amount: 'number', is_recurring: 'boolean',
 };
-export const VALUELESS = new Set(['is_null', 'is_not_null', 'is_true', 'is_false']);
+/** Resource join filters (gift/event where). Mirrors backend registry resource_filters; the server re-validates. */
+export const RESOURCE_WHERE: Record<string, string> = {
+  'source_codes.key': 'text', 'source_codes.name': 'text', 'products.key': 'text', 'products.name': 'text',
+  'vod_titles.key': 'text', 'vod_titles.name': 'text', 'vod_titles.series': 'text',
+};
+/** Backend OPERATORS['text'] — resource predicates compile with the text type. */
+export const RESOURCE_OPS = ['eq', 'neq', 'in', 'not_in', 'contains', 'starts_with', 'is_null', 'is_not_null'];
+const RESOURCE_NAMES: Record<string, string> = { source_codes: 'Source code', products: 'Product', vod_titles: 'VOD title' };
+export function resourceLabel(key: string): string {
+  const [res, field] = key.split('.');
+  return `${RESOURCE_NAMES[res] ?? res} ${field ?? ''}`.trim();
+}
+export const isResourceKey = (key: string, filters: Record<string, string> = RESOURCE_WHERE) => Object.prototype.hasOwnProperty.call(filters, key);
+export const VALUELESS = new Set(['is_null', 'is_not_null', 'is_true', 'is_false', 'exists']);
 export const OP_LABEL: Record<string, string> = {
   eq: 'is', neq: 'is not', in: 'is any of', not_in: 'is none of', contains: 'contains', starts_with: 'starts with',
   is_null: 'is empty', is_not_null: 'is present', gt: '>', gte: '≥', lt: '<', lte: '≤', between: 'between',
   before: 'before', after: 'after', in_last_days: 'in last N days', not_in_last_days: 'not in last N days',
   is_true: 'is true', is_false: 'is false',
+  exists: 'exists (nonblank)', within_previous_days: 'in previous N complete days',
 };
 
 export const blankDefinition = (): SegmentDefinition => ({ version: 1, root: { op: 'and', rules: [] } });
@@ -104,7 +118,7 @@ export function defaultValue(op: string, dataType: string): unknown {
   if (VALUELESS.has(op)) return undefined;
   if (op === 'in' || op === 'not_in') return [];
   if (op === 'between') return dataType === 'number' ? [0, 100] : ['', ''];
-  if (op === 'in_last_days' || op === 'not_in_last_days') return 30;
+  if (op === 'in_last_days' || op === 'not_in_last_days' || op === 'within_previous_days') return 30;
   if (dataType === 'number') return 0;
   return '';
 }
@@ -154,21 +168,22 @@ function checkValue(rule: SegmentRule, type: string, p: string, out: Issue[]) {
   } else if (op === 'between') {
     if (!Array.isArray(v) || v.length !== 2) out.push({ path: p + '.value', message: 'Enter a start and end.' });
     else { v.forEach((x, i) => one(x, `${p}.value[${i}]`)); if (v.every(x => isNum(x) || isDate(x)) && String(v[0]) !== '' && (isNum(v[0]) ? (v[0] as number) > (v[1] as number) : String(v[0]) > String(v[1]))) out.push({ path: p + '.value', message: 'Start must not be after end.' }); }
-  } else if (op === 'in_last_days' || op === 'not_in_last_days') {
+  } else if (op === 'in_last_days' || op === 'not_in_last_days' || op === 'within_previous_days') {
     if (!Number.isInteger(v) || (v as number) < 1 || (v as number) > 36600) out.push({ path: p + '.value', message: 'Days must be 1–36600.' });
   } else one(v, p + '.value');
 }
 function checkWindow(w: unknown, p: string, out: Issue[]) {
   if (w == null) return;
   const win = w as Record<string, unknown>;
-  if (win.kind === 'last_days') { if (!Number.isInteger(win.days) || (win.days as number) < 1) out.push({ path: p + '.days', message: 'Days must be a whole number ≥ 1.' }); }
+  if (win.kind === 'last_days' || win.kind === 'previous_days') { if (!Number.isInteger(win.days) || (win.days as number) < 1) out.push({ path: p + '.days', message: 'Days must be a whole number ≥ 1.' }); }
+  else if (win.kind === 'previous_years') { if (win.years !== 5) out.push({ path: p + '.years', message: 'Use five calendar years.' }); }
   else if (win.kind === 'between') { if (!isDate(win.from) || !isDate(win.to)) out.push({ path: p, message: 'Pick both window dates.' }); else if (String(win.from) > String(win.to)) out.push({ path: p, message: 'Window start is after end.' }); }
   else if (win.kind === 'before' || win.kind === 'after') { if (!isDate(win.date)) out.push({ path: p + '.date', message: 'Pick a window date.' }); }
   else out.push({ path: p + '.kind', message: 'Unknown window kind.' });
 }
 
 /** Client-side mirror of compiler checks so analysts see node paths before a round trip. */
-export function validate(def: SegmentDefinition, fields: SegmentField[]): Issue[] {
+export function validate(def: SegmentDefinition, fields: SegmentField[], resourceFilters: Record<string, string> = RESOURCE_WHERE): Issue[] {
   const out: Issue[] = [];
   if (def.version !== 1) out.push({ path: 'version', message: 'Only version 1 is supported.' });
   if (!isGroup(def.root)) return [...out, { path: 'root', message: 'Root must be a group.' }];
@@ -196,7 +211,12 @@ export function validate(def: SegmentDefinition, fields: SegmentField[]): Issue[
       const where = (r.where ?? {}) as Record<string, { operator?: string; value?: unknown }>;
       for (const [k, cond] of Object.entries(where)) {
         const at = `${p}.where.${k}`;
-        if (r.type === 'event') { if (!k.startsWith('properties.') || k.length <= 11) out.push({ path: at, message: 'Use a property key.' }); else if (cond?.operator !== 'eq' || typeof cond.value !== 'string' || !cond.value) out.push({ path: at, message: 'Enter a property value.' }); continue; }
+        if (isResourceKey(k, resourceFilters)) {
+          if (!RESOURCE_OPS.includes(String(cond?.operator))) { out.push({ path: at, message: 'Unsupported operator for resource filter.' }); continue; }
+          checkValue({ type: 'x', operator: cond?.operator, value: cond?.value }, 'text', at, out);
+          continue;
+        }
+        if (r.type === 'event') { if (!k.startsWith('properties.') || k.length <= 11) out.push({ path: at, message: 'Use a property key.' }); else checkValue({ type: 'x', operator: cond?.operator, value: cond?.value }, 'text', at, out); continue; }
         const t = GIFT_WHERE[k];
         if (!t) { out.push({ path: at, message: 'Unknown gift filter.' }); continue; }
         if (t === 'boolean') { if (!['is_true', 'is_false'].includes(String(cond?.operator))) out.push({ path: at, message: 'Choose yes or no.' }); continue; }
@@ -239,6 +259,8 @@ export function describeCondition(op: string | undefined, v: unknown, field?: st
     case 'before': return `before ${v}`; case 'after': return `after ${v}`;
     case 'in_last_days': return `in the last ${v} days`; case 'not_in_last_days': return `not in the last ${v} days`;
     case 'is_true': return 'is true'; case 'is_false': return 'is false';
+    case 'exists': return 'exists (nonblank)';
+    case 'within_previous_days': return `in the previous ${v} complete UTC days`;
     default: return `${op ?? '?'} ${fmt(v)}`;
   }
 }
@@ -246,6 +268,8 @@ export function describeWindow(w: unknown): string {
   const win = w as Record<string, unknown> | undefined;
   if (!win) return 'all time';
   if (win.kind === 'last_days') return `in the last ${win.days} days`;
+  if (win.kind === 'previous_days') return `in the previous ${win.days} complete UTC days`;
+  if (win.kind === 'previous_years') return `in the previous ${win.years} calendar years`;
   if (win.kind === 'between') return `between ${win.from} and ${win.to}`;
   if (win.kind === 'before') return `before ${win.date}`;
   if (win.kind === 'after') return `after ${win.date}`;
@@ -257,14 +281,14 @@ export function describeRule(r: SegmentRule, fields: SegmentField[], segmentName
   switch (r.type) {
     case 'gift': {
       const where = Object.entries((r.where ?? {}) as Record<string, { operator?: string; value?: unknown }>)
-        .map(([k, c]) => k === 'is_recurring' ? (c.operator === 'is_true' ? 'recurring' : 'one-time') : `${k.replace('_', ' ')} ${describeCondition(c.operator, c.value, k)}`).join(', ');
+        .map(([k, c]) => isResourceKey(k) ? `${resourceLabel(k)} ${describeCondition(c.operator, c.value)}` : k === 'is_recurring' ? (c.operator === 'is_true' ? 'recurring' : 'one-time') : `${k.replace('_', ' ')} ${describeCondition(c.operator, c.value, k)}`).join(', ');
       const scope = `${where ? ` (${where})` : ''} ${describeWindow(r.window)}`;
       if (r.aggregate === 'exists') return r.operator === 'is_false' ? `gave no gift${scope}` : `gave at least one gift${scope}`;
       const noun = r.aggregate === 'count' ? 'gift count' : `${r.aggregate} gift amount`;
       return `${noun}${scope} ${describeCondition(r.operator, r.value, r.aggregate === 'count' ? undefined : 'amount')}`;
     }
     case 'event': {
-      const props = Object.entries((r.where ?? {}) as Record<string, { value?: unknown }>).map(([k, c]) => `${k.slice(11)} = "${c.value}"`).join(', ');
+      const props = Object.entries((r.where ?? {}) as Record<string, { value?: unknown }>).map(([k, c]) => isResourceKey(k) ? `${resourceLabel(k)} ${describeCondition((c as { operator?: string }).operator, c.value)}` : `${k.slice(11)} = "${c.value}"`).join(', ');
       const name = `"${r.name || '…'}"${props ? ` (${props})` : ''}`;
       if (r.aggregate === 'exists') return `${r.operator === 'is_false' ? 'never had' : 'had'} ${name} ${describeWindow(r.window)}`;
       return `${name} count ${describeWindow(r.window)} ${describeCondition(r.operator, r.value)}`;

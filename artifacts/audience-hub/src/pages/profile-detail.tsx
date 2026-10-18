@@ -16,6 +16,9 @@ import { displayValue, displayDate, displayAmount, displayNumber, displayJoined,
 import { ProfileSectionBoundary } from '@/components/ProfileSectionBoundary';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ConsentEditor } from '@/components/privacy/consent-editor';
+import { MasterIdChip } from '@/components/profiles/master-id-chip';
+import { MasterIdentityPanel } from '@/components/identity/master-identity-panel';
+import { CanonicalAttributes } from '@/components/profiles/canonical-attributes';
 import { ActivityTimeline } from '@/components/profiles/activity-timeline';
 
 export default function ProfileDetail() {
@@ -90,6 +93,7 @@ export default function ProfileDetail() {
               {displayValue(profile.donor_status)}
             </Badge>
             <button type="button" data-testid="button-copy-profile-id" className="font-mono text-[11px] text-muted-foreground border border-border rounded px-2 py-1 flex items-center gap-1 hover:text-primary" title="Copy profile ID" onClick={async () => { await navigator.clipboard.writeText(String(profile.id)); setCopied(true); setTimeout(() => setCopied(false), 2000); }}>ID: {profile.id} {copied ? <Check size={12} /> : <Copy size={12} />}</button>
+            <MasterIdChip masterId={profile.master_id} />
           </div>
           <div className="flex items-center gap-4 mt-2 text-sm text-muted-foreground">
             <span className="flex items-center"><Mail className="h-3 w-3 mr-1" /> {displayValue(profile.email)}</span>
@@ -106,7 +110,7 @@ export default function ProfileDetail() {
       <ProfileSectionBoundary {...boundary} section="Profile statistics">{() => <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
         {[
           ['Donor status', displayValue(profile.donor_status).replaceAll('_', ' ')],
-          ['RFM score', displayValue(profile.traits.rfm_score)],
+          ['Computed RFM', displayValue(profile.traits.rfm_score)],
           ['Lifetime giving', displayAmount(profile.traits.ltv_total)],
           ['Last gift', displayDate(profile.traits.last_gift_date)],
         ].map(([label, value]) => <div key={label} className="border border-line bg-surface rounded px-3 py-3"><div className="text-[10px] uppercase tracking-wider text-ink-muted">{label}</div><div className="font-mono text-lg text-ink mt-1" data-testid={`value-${label.toLowerCase().replaceAll(' ', '-')}`}>{value}</div></div>)}
@@ -164,7 +168,7 @@ export default function ProfileDetail() {
               </Card>
               <Card>
                 <CardHeader className="pb-2">
-                  <CardTitle className="text-sm font-medium text-muted-foreground">RFM Score</CardTitle>
+                  <CardTitle className="text-sm font-medium text-muted-foreground">Computed RFM</CardTitle>
                 </CardHeader>
                 <CardContent>
                   <div className="text-3xl font-bold font-mono tracking-tight text-primary">
@@ -214,6 +218,7 @@ export default function ProfileDetail() {
                 </div>
               </CardContent>
             </Card>}</ProfileSectionBoundary>
+            <ProfileSectionBoundary {...boundary} section="Imported attributes panel">{() => <CanonicalAttributes values={record(rawProfile.canonical_attributes)} hideSensitive={false} />}</ProfileSectionBoundary>
             <ProfileSectionBoundary {...boundary} section="Computed traits panel">{() => <Card>
               <CardHeader className="pb-3"><CardTitle className="text-sm">Computed traits</CardTitle><CardDescription>Current values from the trait engine. Hover a label for its definition.</CardDescription></CardHeader>
               <CardContent className="grid grid-cols-2 lg:grid-cols-4 gap-px bg-line p-px">
@@ -358,6 +363,7 @@ export default function ProfileDetail() {
               </Card>
             </div>
             
+            <MasterIdentityPanel masterId={profile.master_id} profileId={profile.id} />
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center text-base"><Database className="h-4 w-4 mr-2" /> Source Records</CardTitle>

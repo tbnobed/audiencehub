@@ -380,7 +380,7 @@ def test_unprocessed_other_source_files_are_streamed_for_normalized_identifiers(
     uploads = tmp_path / "uploads"; uploads.mkdir()
     monkeypatch.setattr(get_settings(), "upload_dir", str(uploads))
     raw = uploads / "not-yet-processed.csv"
-    raw.write_text("email\n" + (" ERASE+historic@EXAMPLE.ORG \n" if where == "upload" else "keep@example.org\n"))
+    raw.write_text("email\n" + (" ERASE@EXAMPLE.ORG \n" if where == "upload" else "keep@example.org\n"))
     error = uploads / "diagnostics.csv"
     error.write_text("record_number,message\n2," + ("erase@example.org" if where == "diagnostic" else "Clean") + "\n")
     iid = db.scalar(text("""INSERT INTO imports(source_id,filename,file_path,error_file_path,record_type)

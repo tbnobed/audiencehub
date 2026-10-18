@@ -194,7 +194,7 @@ def measure(directory: Path, profiles: int, *, scale="medium", seed_dir=None,
         else:
             generated = setup("generate_seed", lambda: generate_seed(
                 profiles=profiles, scale=scale, random_seed=20250308,
-                output_dir=directory / "seed", as_of=pinned))
+                output_dir=directory / "seed", as_of=pinned, mode="legacy"))
         for name, path in generated["files"].items():
             with Path(path).open("rb") as stream:
                 report["seed_sha256"][name] = hashlib.file_digest(stream, "sha256").hexdigest()
@@ -224,7 +224,8 @@ def measure(directory: Path, profiles: int, *, scale="medium", seed_dir=None,
         with Session(engine) as db:
             db.execute(text("UPDATE jobs SET status='cancelled' WHERE status='queued'"))
             setup("traits", lambda: recompute_traits(db, as_of=pinned))
-            ensure_templates(db)
+            from app.segments.templates import legacy_template_definitions
+            ensure_templates(db, legacy_template_definitions())
             db.execute(text("UPDATE segments SET status='active'"))
             db.commit()
             report["population"] = {table: db.scalar(text(f"SELECT count(*) FROM {table}"))

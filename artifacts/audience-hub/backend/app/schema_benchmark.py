@@ -169,18 +169,29 @@ def isolated_schema(url, cleanup_state=None):
                         connection.exec_driver_sql(f'DROP ROLE IF EXISTS "{schema}"')
                     if cleanup_state is not None:
                         cleanup_state["cleanup"] = "complete"
+            except BaseException as exc:
+                if cleanup_state is not None:
+                    cleanup_state.update(cleanup="failed", cleanup_error=type(exc).__name__)
+                raise
             finally:
                 admin.dispose()
 
 
 def run_schema_benchmark(args):
-    segments = getattr(args, "segments", False)
+    segments = getattr(args, "segments", False) or getattr(args, "audit_segments", False)
+    if segments and not (getattr(args, "isolated", False) or getattr(args, "audit_segments", False)):
+        # Direct callers must have the same safe default as CLI dispatch.
+        from app.benchmark import run_benchmark
+        return run_benchmark(args)
+    if getattr(args, "scale", None) is None:
+        args.scale = "medium"
     if bool(args.traits) == bool(segments) or args.imports or args.dashboards or args.overview or args.test_suite:
         raise ValueError("Existing-container schema mode requires exactly one of --traits or --segments")
     if args.profiles < 1:
         raise ValueError("Benchmark requires a positive profile count")
-    if not segments and args.profiles < 1000:
-        raise ValueError("Trait reference requires at least 1000 generated people (use 1500 or more)")
+    # The raw-row oracle compares min(1000, resolved population). Small explicit
+    # fixtures are useful production-configured correctness smokes, not scale
+    # acceptance measurements; the trait report labels that distinction.
     from app.config import get_settings
     directory = Path(os.environ.get("KINSHIP_BENCHMARK_OUTPUT", args.output_dir)) / (("segments-" if segments else "traits-") + secrets.token_hex(12))
     directory.mkdir(parents=True, mode=0o700)
@@ -210,8 +221,9 @@ def run_schema_benchmark(args):
             receipt.update(schema=schema, cleanup="pending")
             (directory / "isolation.json").write_text(json.dumps(receipt))
             print(f"Isolated schema benchmark: {schema}; evidence: {directory}", flush=True)
+            segment_module = "audit_verification" if getattr(args, "audit_segments", False) else "verification"
             workload = (
-                "from pathlib import Path; from app.segments.verification import measure; "
+                f"from pathlib import Path; from app.segments.{segment_module} import measure; "
                 f"measure(Path({str(directory)!r}), {args.profiles}, scale={args.scale!r}, seed_dir={args.seed_dir!r}, as_of={getattr(args, 'as_of', None)!r})"
                 if segments else
                 "from pathlib import Path; from app.traits.verification import measure; "
@@ -239,8 +251,10 @@ def run_schema_benchmark(args):
                             child.wait(timeout=10)
         return 0
     finally:
-        (directory / "isolation.json").write_text(json.dumps(receipt))
-        for child_directory in ("seed", "uploads", "exports"):
-            shutil.rmtree(directory / child_directory, ignore_errors=True)
-        for signum, handler in previous_handlers.items():
-            signal.signal(signum, handler)
+        try:
+            (directory / "isolation.json").write_text(json.dumps(receipt))
+        finally:
+            for child_directory in ("seed", "uploads", "exports"):
+                shutil.rmtree(directory / child_directory, ignore_errors=True)
+            for signum, handler in previous_handlers.items():
+                signal.signal(signum, handler)

@@ -13,7 +13,7 @@ from app.models import Activation, ActivationRun, Destination, Segment, User
 from app.activations import fields, schedule, security, service
 
 router = APIRouter(prefix="/api", tags=["activations"])
-TYPES = {"csv", "google_customer_match", "meta_custom_audience", "webhook"}
+TYPES = {"csv", "google_customer_match", "meta_custom_audience", "webhook", "sftp"}
 
 
 class DestinationWrite(BaseModel):
@@ -24,6 +24,7 @@ class DestinationWrite(BaseModel):
     is_active: bool = True
     signing_secret: str | None = Field(default=None, max_length=4096)
     headers: dict[str, str] | None = None
+    credentials: dict | None = None
 
 
 class DestinationPatch(BaseModel):
@@ -34,6 +35,7 @@ class DestinationPatch(BaseModel):
     is_active: bool | None = None
     signing_secret: str | None = Field(default=None, max_length=4096)
     headers: dict[str, str] | None = None
+    credentials: dict | None = None
 
 
 class ActivationWrite(BaseModel):
@@ -44,10 +46,12 @@ class ActivationWrite(BaseModel):
     field_mapping: dict = Field(default_factory=dict)
     required_consent: str | None = None
     schedule: str | None = Field(default=None, max_length=100)
-    timezone: str = Field(default="America/Chicago", max_length=100)
+    timezone: str = Field(default="America/New_York", max_length=100)
+    attribute_mode: str = "selected"
     is_active: bool = True
     consent_override: bool = False
     override_note: str | None = Field(default=None, max_length=500)
+    sensitive_fields: list[str] | None = None
 
 
 class ActivationPatch(BaseModel):
@@ -62,6 +66,8 @@ class ActivationPatch(BaseModel):
     is_active: bool | None = None
     consent_override: bool = False
     override_note: str | None = Field(default=None, max_length=500)
+    sensitive_fields: list[str] | None = None
+    attribute_mode: str | None = None
 
 
 def require(db, model, identifier):
@@ -75,12 +81,13 @@ def destination_json(row):
     secrets = security.decrypt(row.secret_encrypted)
     secret = secrets.get("signing_secret", "")
     return {"id": row.id, "name": row.name, "type": row.type, "config": row.config,
-            "is_active": row.is_active, "has_secret": bool(secret),
+            "is_active": row.is_active, "has_secret": bool(secret or secrets.get("credentials")),
+            "has_credentials": bool(secrets.get("credentials")),
             "secret_last4": secret[-4:] if secret else None,
             "header_names": sorted(secrets.get("headers", {})), "created_at": row.created_at}
 
 
-def run_json(row):
+def run_json(row, db=None, user=None):
     result = {name: getattr(row, name) for name in (
         "id", "activation_id", "status", "started_at", "finished_at", "created_at",
         "profiles_selected", "profiles_excluded_consent", "profiles_excluded_suppressed",
@@ -90,7 +97,18 @@ def run_json(row):
         downloadable = True
     except ValueError:
         downloadable = False
+    snapshot = security.decrypt(row.snapshot_encrypted) if row.snapshot_encrypted else {}
+    if snapshot.get("sensitive_fields"):
+        downloadable = downloadable and user is not None and user.role == "admin"
+    if snapshot.get("config", {}).get("export_kind") == "crosswalk":
+        downloadable = downloadable and user is not None and user.role == "admin"
     result.update(downloadable=downloadable, revoked=row.revoked_at is not None)
+    result["file_sha256"] = row.file_sha256
+    receipt = db.scalar(select(service.AuditLog).where(
+        service.AuditLog.entity_type == "activation_run",
+        service.AuditLog.entity_id == str(row.id),
+        service.AuditLog.action == "export.manifest").order_by(service.AuditLog.id.desc()).limit(1)) if db else None
+    result["manifest"] = receipt.details["manifest"] if receipt else None
     # The public run contract has four states. A cancelled delivery is a failed
     # run with its explicit cancellation/revocation reason, never a success.
     if result["status"] == "cancelled":
@@ -98,24 +116,34 @@ def run_json(row):
     return result
 
 
-def activation_json(db, row):
+def activation_json(db, row, user=None):
     segment, destination = db.get(Segment, row.segment_id), db.get(Destination, row.destination_id)
     last = db.scalar(select(ActivationRun).where(ActivationRun.activation_id == row.id).order_by(ActivationRun.id.desc()).limit(1))
     result = {name: getattr(row, name) for name in (
         "id", "name", "segment_id", "destination_id", "field_mapping", "required_consent",
-        "schedule", "timezone", "is_active", "created_by")}
+        "schedule", "timezone", "is_active", "created_by", "attribute_mode")}
     result.update(segment_name=segment.name if segment else "Unavailable audience",
                   destination_name=destination.name if destination else "Unavailable destination",
                   destination_type=destination.type if destination else None,
-                  last_run=run_json(last) if last else None,
+                  last_run=run_json(last, db, user) if last else None,
                   next_run_at=schedule.next_run(row.schedule, row.timezone) if row.is_active else None)
     result["field_mapping"] = service.ordered_mapping(row)
     return result
 
 
-def validate_destination(kind, config, secrets):
+def validate_destination(kind, config, secrets, enabled=True):
+    if kind == "snowflake":
+        raise ValueError("Snowflake export writer is unsupported; configure SFTP or CSV.")
     if kind not in TYPES:
         raise ValueError("Unsupported destination type.")
+    if kind == "sftp":
+        from app.activations.sftp import validate
+        validate(config, secrets.get("credentials", {}), enabled)
+        if type(config.get("include_pii", True)) is not bool or config.get("delimiter", ",") != ",":
+            raise ValueError("SFTP exports require CSV comma delimiter and boolean include_pii.")
+        if set(secrets) - {"credentials"}:
+            raise ValueError("SFTP accepts only key-auth credentials.")
+        return
     if set(config) - {"delimiter", "include_pii", "url", "batch_size", "mode", "allow_internal_network"}:
         raise ValueError("Unsupported destination configuration.")
     for key in ("include_pii", "allow_internal_network"):
@@ -158,8 +186,15 @@ def save_destination(db, row, body, user):
             secrets["signing_secret"] = values["signing_secret"]
     if "headers" in values:
         secrets["headers"] = values["headers"] or {}
+    if "credentials" in values:
+        if values["credentials"] is not None and not isinstance(values["credentials"], dict):
+            raise HTTPException(422, "Credentials must be an object.")
+        if values["credentials"] is None:
+            secrets.pop("credentials", None)
+        else:
+            secrets["credentials"] = values["credentials"]
     try:
-        validate_destination(kind, config, secrets)
+        validate_destination(kind, config, secrets, values.get("is_active", row.is_active if row else True))
     except ValueError as error:
         raise HTTPException(422, str(error)) from None
     if row is None:
@@ -175,7 +210,8 @@ def save_destination(db, row, body, user):
     db.flush()
     service.audit(db, "destination.save", "destination", row.id, user.id,
                   allow_internal_network=config.get("allow_internal_network", False),
-                  destination_type=kind)
+                  destination_type=kind, approved_purpose=bool(config.get("approved_purpose")),
+                  crosswalk=config.get("export_kind") == "crosswalk")
     db.commit()
     return destination_json(row)
 
@@ -212,6 +248,19 @@ def archive_destination(identifier: int, db: Session = Depends(session_scope), u
 @router.post("/destinations/{identifier}/test")
 def test_destination(identifier: int, db: Session = Depends(session_scope), user: User = Depends(require_role("admin"))):
     row = require(db, Destination, identifier)
+    if row.type == "sftp":
+        from app.activations.sftp import connection_config, validate
+        from app.identity.filedrop import connect, FiledropError
+        credentials = security.decrypt(row.secret_encrypted).get("credentials", {})
+        try:
+            validate(row.config, credentials)
+            with connect(connection_config(row.config, credentials)) as remote:
+                remote.stat(row.config["output_dir"])
+        except (ValueError, OSError, FiledropError):
+            raise HTTPException(422, "SFTP connection test failed; verify key, host-key pin and output directory.") from None
+        service.audit(db, "destination.test", "destination", row.id, user.id)
+        db.commit()
+        return {"delivered": True, "mode": "connection_only"}
     if row.type != "webhook" or not row.is_active:
         raise HTTPException(422, "Only active webhook destinations can receive test pings.")
     secrets = security.decrypt(row.secret_encrypted)
@@ -229,12 +278,31 @@ def test_destination(identifier: int, db: Session = Depends(session_scope), user
 
 @router.get("/activations/fields")
 def export_fields(db: Session = Depends(session_scope), user: User = Depends(require_role("analyst"))):
-    return {"fields": fields.registry(db)}
+    return {"fields": fields.registry(db, user.role)}
+
+
+@router.get("/activation-alerts")
+def activation_alerts(db: Session = Depends(session_scope), user: User = Depends(require_role("analyst"))):
+    rows = db.scalars(select(ActivationRun).where(ActivationRun.status == "failed").order_by(
+        ActivationRun.id.desc()).limit(100))
+    return {"items": [{"id": f"activation-run-{row.id}", "run_id": row.id,
+                      "activation_id": row.activation_id, "severity": "error",
+                      "message": row.error or "Activation delivery failed.",
+                      "created_at": row.finished_at or row.created_at} for row in rows]}
+
+
+@router.post("/activations/bootstrap")
+def bootstrap_activations(db: Session = Depends(session_scope), user: User = Depends(require_role("admin"))):
+    from app.activations.bootstrap import bootstrap
+    result = bootstrap(db)
+    service.audit(db, "activation.bootstrap", "activation", "references", user.id, created=result["created"])
+    db.commit()
+    return result
 
 
 @router.get("/activations")
 def activations(db: Session = Depends(session_scope), user: User = Depends(require_role("analyst"))):
-    return {"items": [activation_json(db, row) for row in db.scalars(select(Activation).order_by(Activation.id.desc()))]}
+    return {"items": [activation_json(db, row, user) for row in db.scalars(select(Activation).order_by(Activation.id.desc()))]}
 
 
 def save_activation(db, row, body, user):
@@ -242,17 +310,31 @@ def save_activation(db, row, body, user):
     creating = row is None
     prior_consent = row.required_consent if row is not None else None
     prior_destination = row.destination_id if row is not None else None
+    if row is not None and user.role != "admin":
+        previous = require(db, Destination, row.destination_id)
+        if previous.config.get("export_kind") == "crosswalk":
+            raise HTTPException(403, "Crosswalk activations are restricted to admins.")
     if creating:
         row = Activation(name=body.name, segment_id=body.segment_id, destination_id=body.destination_id,
-                         timezone="America/Chicago", is_active=True, field_mapping={}, created_by=user.id)
-    for key in ("name", "segment_id", "destination_id", "timezone", "is_active", "field_mapping"):
+                         timezone="America/New_York", is_active=True, field_mapping={}, created_by=user.id,
+                         attribute_mode="selected")
+    for key in ("name", "segment_id", "destination_id", "timezone", "is_active", "field_mapping", "attribute_mode"):
         if key in values:
             if values[key] is None:
                 raise HTTPException(422, "Activation fields cannot be null.")
             setattr(row, key, values[key])
     segment, destination = require(db, Segment, row.segment_id), require(db, Destination, row.destination_id)
-    if segment.status != "active" or not destination.is_active:
+    if destination.config.get("export_kind") == "crosswalk" and user.role != "admin":
+        raise HTTPException(403, "Crosswalk activations are restricted to admins.")
+    if segment.status != "active" or (row.is_active and not destination.is_active):
         raise HTTPException(422, "Choose an active audience and destination.")
+    if row.attribute_mode not in ("selected", "all"):
+        raise HTTPException(422, "attribute_mode must be selected or all.")
+    if row.attribute_mode == "all" and destination.type in service.ADS:
+        raise HTTPException(422, "Ad destinations require selected provider columns.")
+    if destination.config.get("export_kind") == "crosswalk" and row.is_active:
+        if not (values.get("required_consent", row.required_consent)):
+            raise HTTPException(422, "Crosswalk exports require an explicit consent channel.")
     if "required_consent" in values:
         row.required_consent = values["required_consent"]
     elif creating or (row.required_consent is None and "destination_id" in values):
@@ -281,7 +363,18 @@ def save_activation(db, row, body, user):
         row.column_order = list(row.field_mapping)
     try:
         schedule.validate(row.schedule, row.timezone)
-        fields.validate_mapping(db, row.field_mapping, destination.config.get("include_pii", True))
+        mapping = service.activation_mapping(db, row, destination.type)
+        selected = fields.sensitive_fields(db, mapping)
+        explicit = values.get("sensitive_fields")
+        if explicit is not None:
+            if user.role != "admin":
+                raise HTTPException(403, "Only admins can explicitly select sensitive export fields.")
+            if sorted(set(explicit)) != selected:
+                raise ValueError("Explicit sensitive selection must match exactly the sensitive fields in the mapping.")
+        elif selected:
+            service.sensitive_approval(db, row.id, row.segment_id, row.destination_id, mapping, row.required_consent)
+        fields.validate_mapping(db, mapping, destination.config.get("include_pii", True),
+                                sensitive_selected=selected)
         service.validate_provider_mapping(destination.type, row.field_mapping)
         if destination.type in service.ADS:
             allowed = set(service.GOOGLE_MAP if destination.type == "google_customer_match" else service.META_MAP)
@@ -294,13 +387,18 @@ def save_activation(db, row, body, user):
     if creating:
         db.add(row)
     db.flush()
+    if explicit is not None:
+        service.audit(db, "activation.sensitive_approval", "activation", row.id, user.id,
+                      fields=selected, fingerprint=service.approval_fingerprint(
+                          row.segment_id, row.destination_id, mapping, row.required_consent))
+        db.flush()
     if override and not preserved_override:
         # Do not put free-form notes (which can contain PII) in the audit log.
         service.audit(db, "activation.consent_override", "activation", row.id, user.id,
                       required_consent=row.required_consent, note_provided=True)
     service.audit(db, "activation.save", "activation", row.id, user.id)
     db.commit()
-    return activation_json(db, row)
+    return activation_json(db, row, user)
 
 
 @router.post("/activations")
@@ -310,7 +408,7 @@ def create_activation(body: ActivationWrite, db: Session = Depends(session_scope
 
 @router.get("/activations/{identifier}")
 def get_activation(identifier: int, db: Session = Depends(session_scope), user: User = Depends(require_role("analyst"))):
-    return activation_json(db, require(db, Activation, identifier))
+    return activation_json(db, require(db, Activation, identifier), user)
 
 
 @router.patch("/activations/{identifier}")
@@ -329,6 +427,10 @@ def archive_activation(identifier: int, db: Session = Depends(session_scope), us
 
 @router.post("/activations/{identifier}/run")
 def start_run(identifier: int, db: Session = Depends(session_scope), user: User = Depends(require_role("analyst"))):
+    activation = require(db, Activation, identifier)
+    destination = require(db, Destination, activation.destination_id)
+    if destination.config.get("export_kind") == "crosswalk" and user.role != "admin":
+        raise HTTPException(403, "Crosswalk exports are restricted to admins.")
     try:
         run, job = service.enqueue_run(db, identifier, user.id)
     except ValueError as error:
@@ -341,7 +443,7 @@ def start_run(identifier: int, db: Session = Depends(session_scope), user: User 
 @router.get("/activations/{identifier}/runs")
 def runs(identifier: int, db: Session = Depends(session_scope), user: User = Depends(require_role("analyst"))):
     require(db, Activation, identifier)
-    return {"items": [run_json(row) for row in db.scalars(select(ActivationRun).where(
+    return {"items": [run_json(row, db, user) for row in db.scalars(select(ActivationRun).where(
         ActivationRun.activation_id == identifier).order_by(ActivationRun.id.desc()).limit(100))]}
 
 
@@ -355,6 +457,21 @@ def download(run_id: int, db: Session = Depends(session_scope), user: User = Dep
     try:
         privacy_shared(download_db)
         row = require(download_db, ActivationRun, run_id)
+        snapshot = security.decrypt(row.snapshot_encrypted) if row.snapshot_encrypted else {}
+        if snapshot.get("config", {}).get("export_kind") == "crosswalk" and user.role != "admin":
+            raise HTTPException(403, "Crosswalk downloads are restricted to admins.")
+        selected = fields.sensitive_fields(download_db, snapshot.get("mapping", {}))
+        # Check current metadata as well as frozen metadata; classifications can
+        # become stricter after a file was generated.
+        if selected or snapshot.get("sensitive_fields"):
+            if user.role != "admin":
+                raise HTTPException(403, "Sensitive export downloads are restricted to admins.")
+            try:
+                service.verify_snapshot_approval(download_db, row, snapshot)
+            except ValueError as error:
+                raise HTTPException(403, str(error)) from None
+            service.audit(db, "export.sensitive_download", "activation_run", run_id, user.id,
+                          fields=sorted(set(selected) | set(snapshot.get("sensitive_fields", []))))
         path = service.safe_file(row)
         file = os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW), "rb")
         service.audit(db, "export.download", "activation_run", run_id, user.id)

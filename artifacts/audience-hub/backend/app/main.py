@@ -26,6 +26,8 @@ from app.segments.api import router as segments_router
 from app.activations.api import router as activations_router
 from app.privacy.api import router as privacy_router
 from app.ingestion.api import router as ingestion_router
+from app.identity.api import router as identity_router
+from app.resources import router as resources_router
 
 
 @asynccontextmanager
@@ -47,6 +49,8 @@ app.include_router(segments_router)
 app.include_router(activations_router)
 app.include_router(privacy_router)
 app.include_router(ingestion_router)
+app.include_router(identity_router)
+app.include_router(resources_router)
 app.include_router(dev.router)
 app.include_router(oidc.router)
 app.include_router(sources_router)

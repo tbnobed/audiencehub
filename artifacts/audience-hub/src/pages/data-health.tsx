@@ -14,6 +14,8 @@ import { format } from 'date-fns';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 import { toast } from '@/hooks/use-toast';
 import { useNavigate } from 'react-router-dom';
+import { ActivationAlertsCard } from '@/components/activations/activation-alerts-card';
+import { IdentityHealthCard } from '@/components/identity/identity-health-card';
 
 export default function DataHealth() {
   const { data, isLoading } = useDataHealth();
@@ -69,6 +71,9 @@ export default function DataHealth() {
           Monitor identity resolution engine, data anomalies, and import quality.
         </p>
       </div>
+
+      {user?.role !== 'viewer' && <ActivationAlertsCard />}
+      <IdentityHealthCard />
 
       {!!data.privacy_segment_reviews?.length && <Card>
         <CardHeader>

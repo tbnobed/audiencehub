@@ -76,21 +76,8 @@ def normalize_email(value: object, settings: Settings | None = None) -> str | No
     if email is None:
         return None
 
-    email = email.lower()
-    local, domain = email.rsplit("@", 1)
-    configured = _settings(settings).gmail_style_domains
-    gmail_domains = {
-        item.strip().lower()
-        for item in (configured.split(",") if isinstance(configured, str) else configured)
-        if item and item.strip()
-    }
-    if domain == "googlemail.com":
-        domain = "gmail.com"
-    if domain in gmail_domains or domain == "gmail.com":
-        local = local.split("+", 1)[0].replace(".", "")
-    else:
-        local = local.split("+", 1)[0]
-    return f"{local}@{domain}"
+    # Exact audited rule: do not collapse provider aliases, dots or plus tags.
+    return str(value).strip().lower()
 
 
 def normalize_phone(value: object, settings: Settings | None = None) -> str | None:

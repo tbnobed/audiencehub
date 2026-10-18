@@ -1,10 +1,17 @@
-export type DestinationType = 'csv' | 'google_customer_match' | 'meta_custom_audience' | 'webhook';
-export type MappingValue = { kind: 'profile' | 'trait' | 'enrichment' | 'constant'; key?: string; source?: string; value?: string };
+export type DestinationType = 'csv' | 'google_customer_match' | 'meta_custom_audience' | 'webhook' | 'sftp';
+export type ExportKind = 'audience' | 'crosswalk';
+export type AttributeMode = 'selected' | 'all';
+/** Write-only SFTP key-auth credentials. Never returned by the API; never cached client-side. */
+export type SftpCredentials = { host: string; port: number; username: string; private_key: string; private_key_passphrase?: string; host_key_sha256: string };
+export type MappingValue = { kind: 'profile' | 'canonical' | 'trait' | 'enrichment' | 'constant'; key?: string; source?: string; value?: string };
 export type FieldMapping = Record<string, MappingValue>;
-export type DestinationConfig = { delimiter?: string; include_pii?: boolean; url?: string; batch_size?: number; mode?: 'full' | 'delta'; allow_internal_network?: boolean };
-export type Destination = { id: number; name: string; type: DestinationType; config: DestinationConfig; is_active: boolean; has_secret: boolean; secret_last4: string | null; header_names: string[]; created_at: string };
-export type DestinationWrite = { name: string; type: DestinationType; config: DestinationConfig; is_active?: boolean; signing_secret?: string; headers?: Record<string, string> };
-export type Activation = { id: number; name: string; segment_id: number; segment_name: string; destination_id: number; destination_name: string; destination_type: DestinationType; field_mapping: FieldMapping; required_consent: string | null; schedule: string | null; timezone: string; is_active: boolean; created_by: number | null; last_run: ActivationRun | null; next_run_at: string | null };
-export type ActivationWrite = { name: string; segment_id: number; destination_id: number; field_mapping: FieldMapping; required_consent?: string | null; schedule?: string | null; timezone?: string; is_active?: boolean; consent_override?: boolean; override_note?: string };
-export type ActivationRun = { id: number; activation_id: number; status: string; started_at: string | null; finished_at: string | null; created_at: string; profiles_selected: number; profiles_excluded_consent: number; profiles_excluded_suppressed: number; profiles_excluded_missing_fields: number; profiles_sent: number; error: string | null; triggered_by: string; downloadable: boolean; revoked: boolean };
-export type ExportField = { key: string; label: string; kind: 'profile' | 'trait' | 'enrichment'; source?: string; pii: boolean };
+export type DestinationConfig = { delimiter?: string; include_pii?: boolean; url?: string; batch_size?: number; mode?: 'full' | 'delta'; allow_internal_network?: boolean; output_dir?: string; gzip?: boolean; export_kind?: ExportKind; approved_purpose?: string };
+export type Destination = { id: number; name: string; type: DestinationType; config: DestinationConfig; is_active: boolean; has_secret: boolean; has_credentials?: boolean; secret_last4: string | null; header_names: string[]; created_at: string };
+export type DestinationWrite = { name: string; type: DestinationType; config: DestinationConfig; is_active?: boolean; signing_secret?: string; headers?: Record<string, string>; credentials?: SftpCredentials | null };
+export type Activation = { id: number; name: string; segment_id: number; segment_name: string; destination_id: number; destination_name: string; destination_type: DestinationType; field_mapping: FieldMapping; required_consent: string | null; schedule: string | null; timezone: string; is_active: boolean; created_by: number | null; last_run: ActivationRun | null; next_run_at: string | null; attribute_mode?: AttributeMode };
+export type ActivationWrite = { name: string; segment_id: number; destination_id: number; field_mapping: FieldMapping; required_consent?: string | null; schedule?: string | null; timezone?: string; is_active?: boolean; consent_override?: boolean; override_note?: string; sensitive_fields?: string[]; attribute_mode?: AttributeMode };
+export type ActivationRun = { id: number; activation_id: number; status: string; started_at: string | null; finished_at: string | null; created_at: string; profiles_selected: number; profiles_excluded_consent: number; profiles_excluded_suppressed: number; profiles_excluded_missing_fields: number; profiles_sent: number; error: string | null; triggered_by: string; downloadable: boolean; revoked: boolean; file_sha256?: string | null; manifest?: RunManifest | null };
+export type RunManifest = { version: number; run_id: number; files: { name: string; row_count: number; sha256: string; bytes: number }[] };
+export type ActivationAlert = { id: string; run_id: number; activation_id: number; severity: 'error'; message: string; created_at: string };
+export type BootstrapResult = { created: number[]; unavailable: string[] };
+export type ExportField = { key: string; label: string; kind: 'profile' | 'canonical' | 'trait' | 'enrichment'; source?: string; pii: boolean; sensitive?: boolean };

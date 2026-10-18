@@ -15,11 +15,30 @@ from app.auth.deps import require_role
 from app.db import session_scope
 from app.models import AuditLog, IdentifierBlocklist, User
 from app.traits.registry import TRAITS
+from app.canonical import canonical_attributes, canonical_name, FIELDS
 
 router = APIRouter(tags=["profiles"])
 
 _EMAIL_RE = re.compile(r"(?i)\b[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b")
 _PHONE_RE = re.compile(r"(?<!\w)(?:\+?\d[\d().\-\s]{7,}\d)(?!\w)")
+_REDACTED = "[redacted]"
+# Schema-aware masking is required: opaque IDs/hashes cannot be recognized by
+# contact regexes. Normalize snake/camel/legacy names before checking them.
+_PRIVATE_IDENTITY_FIELDS = {
+    "donoraccountnumber", "donoraccount", "hubspotrecordid", "oktacustomerid",
+    "zetacdpid", "zetauid", "emailmd5", "emailsha256", "md5", "sha256",
+    "customidentifier", "customidentifiers", "externalid", "keyvalue",
+    "identifiervalue", "identifier", "identifiers", "identitykeys",
+    "systemkeys", "crosswalk",
+}
+
+
+def _identity_field(key: Any) -> bool:
+    normalized = re.sub(r"[^a-z0-9]", "", str(key).lower())
+    return (normalized in _PRIVATE_IDENTITY_FIELDS
+            or normalized.endswith("s") and normalized[:-1] in _PRIVATE_IDENTITY_FIELDS
+            or normalized.endswith("identifier")
+            or normalized.endswith("identifiers"))
 
 
 def _mask_email(value: str) -> str:
@@ -35,7 +54,18 @@ def _mask_phone(value: str) -> str:
 def _json_safe(value: Any, *, mask_pii: bool = False) -> Any:
     """Normalize DB values and recursively mask contact data for viewer responses."""
     if isinstance(value, dict):
-        return {key: _json_safe(item, mask_pii=mask_pii) for key, item in value.items()}
+        identifier = "value" in value and ("type" in value or "key_type" in value)
+        return {
+            key: (_REDACTED if mask_pii and (
+                _identity_field(key) and key != "identifiers"
+                or identifier and key == "value"
+            ) and item is not None else _json_safe(item, mask_pii=mask_pii))
+            for key, item in value.items()
+            if not mask_pii or (
+                canonical_name(str(key)) != "inmate"
+                and not re.search(r"religio|politic|military|veteran", str(key), re.I)
+            )
+        }
     if isinstance(value, (list, tuple)):
         return [_json_safe(item, mask_pii=mask_pii) for item in value]
     if isinstance(value, (datetime, date)):
@@ -70,7 +100,14 @@ def list_profiles(
     clauses = ["p.merged_into_id IS NULL", "p.is_deleted = false"]
     params: dict[str, Any] = {"limit": page_size, "offset": (page - 1) * page_size}
     if search and search.strip():
-        clauses.append("p.search_text % :search")
+        if search.strip().lower().startswith("kin_"):
+            clauses.append("""(p.master_id=:search OR p.master_id IN (
+                WITH RECURSIVE aliases(id) AS (
+                    SELECT survivor_id FROM master_id_aliases WHERE retired_id=:search
+                    UNION SELECT a.survivor_id FROM master_id_aliases a JOIN aliases b ON a.retired_id=b.id
+                ) SELECT id FROM aliases))""")
+        else:
+            clauses.append("p.search_text % :search")
         params["search"] = search.strip()
     if source_id is not None:
         clauses.append(
@@ -101,7 +138,7 @@ def list_profiles(
     """), params).scalar_one()
     order = "similarity(p.search_text, :search) DESC, p.id" if search and search.strip() else "p.id"
     items = _rows(db, f"""
-        SELECT p.id, p.first_name, p.last_name, p.email, p.phone, p.city, p.region,
+        SELECT p.id, p.master_id, p.first_name, p.last_name, p.email, p.phone, p.city, p.region,
                p.country, p.first_seen_at, p.last_seen_at,
                COALESCE(pt.donor_status, 'prospect') AS donor_status,
                COALESCE(
@@ -150,7 +187,7 @@ def profile_detail(
 ):
     profile = _profile_or_404(db, profile_id)
     scalar_fields = (
-        "id", "merged_into_id", "email", "phone", "first_name", "last_name",
+        "id", "master_id", "merged_into_id", "email", "phone", "first_name", "last_name",
         "address1", "city", "region", "postal_code", "country", "first_seen_at",
         "last_seen_at", "donor_status",
     )
@@ -197,7 +234,8 @@ def profile_detail(
     enrichment = _rows(db, """
         SELECT ev.source_id, s.key AS source_key, s.name AS source_name,
                ev.attribute_key, ev.value_text, ev.value_num, ev.value_bool,
-               ev.value_date, ev.imported_at, ev.license_expires_at
+               ev.value_date, ev.imported_at, ev.license_expires_at,
+               ev.vendor, ev.license_id, ev.append_date, ev.sensitive
         FROM enrichment_values ev JOIN sources s ON s.id=ev.source_id
         WHERE ev.profile_id=:id
           AND (ev.license_expires_at IS NULL OR ev.license_expires_at >= CURRENT_DATE)
@@ -212,11 +250,27 @@ def profile_detail(
 
     result = {key: profile[key] for key in scalar_fields}
     result["traits"] = {key: profile[key] for key in trait_fields}
+    result["canonical_attributes"] = {
+        key: value for key, value in canonical_attributes(db, profile_id).items()
+        if user.role != "viewer" or not FIELDS[key]["sensitive"]
+    }
     result.update({
         "gifts": gifts, "events": events, "identifiers": identifiers,
         "source_records": source_records, "merges": merges,
         "enrichment": enrichment, "consents": consents,
     })
+    if user.role == "viewer":
+        result["enrichment"] = [item for item in enrichment if not item["sensitive"]]
+        for record in source_records:
+            record["attributes"] = {
+                key: value for key, value in record["attributes"].items()
+                if canonical_name(key) != "inmate" and key != "_import_enrichments"
+            }
+        # Reasons are free-form legacy JSON and may embed a key as either a
+        # value or a dictionary key. Never serialize this provenance to viewers.
+        result["merges"] = [
+            {**merge, "reason": {"redacted": True}} for merge in merges
+        ]
     db.add(AuditLog(user_id=user.id, actor_type="user", action="profile.view",
                     entity_type="profile", entity_id=str(profile_id),
                     details={"role": user.role}))

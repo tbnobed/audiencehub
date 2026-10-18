@@ -147,7 +147,8 @@ def _iter_ground_truth(path: Path, local: sqlite3.Connection) -> dict[str, Any]:
                 raise ValueError(f"Expected ':' after ground-truth key {key!r}")
             first = _non_whitespace(stream)
             if key != "records":
-                if key in {"format_version", "random_seed", "scale", "requested_people", "record_count"}:
+                if key in {"format_version", "random_seed", "scale", "requested_people", "record_count",
+                           "identity_rule"}:
                     metadata[key] = _read_json_value(stream, first)
                 else:
                     _read_json_value(stream, first, retain=False)
@@ -196,8 +197,96 @@ def _iter_ground_truth(path: Path, local: sqlite3.Connection) -> dict[str, Any]:
                 raise ValueError("Expected ',' or '}' in ground-truth root")
     local.commit()
     if "streamed_record_count" not in metadata:
+        if metadata.get("format_version") == 2:
+            return _expand_compact_truth(path, local, metadata)
         raise ValueError("Ground-truth JSON has no records object")
     return metadata
+
+
+def _expand_compact_truth(path: Path, local: sqlite3.Connection,
+                          metadata: dict[str, Any]) -> dict[str, Any]:
+    """Expand audit v2 rules from immutable seed CSVs into disk-backed SQLite.
+
+    O(DB_BATCH_SIZE) RAM, irrespective of profile/event count. Each CSV row
+    gets a label from its deterministic external ID, independently cross-checked
+    against its contact reference. Missing files, truncated files, duplicate
+    keys, unsupported rules and inconsistent references fail closed.
+    Household members are distinct people, NEVER an allowed-merge exemption.
+    """
+    if metadata.get("identity_rule") != "crm-{zero_based_index:08d}; synthetic only":
+        raise ValueError("Unsupported compact identity truth rule")
+    population = metadata.get("requested_people")
+    if type(population) is not int or population < 1:
+        raise ValueError("Compact truth requires positive requested_people")
+    stats_path = path.with_name("generator_stats.json")
+    if not stats_path.is_file():
+        raise ValueError("Compact truth requires generator_stats.json and all five seed CSVs")
+    stats = json.loads(stats_path.read_text(encoding="utf-8"))
+    if stats.get("mode") != "audit" or stats.get("requested_people") != population:
+        raise ValueError("Compact truth population/mode does not match generator statistics")
+    patterns = {
+        "donor_crm": re.compile(r"crm-(\d+)"),
+        "esp": re.compile(r"esp-(\d+)"),
+        "zeta_enrichment": re.compile(r"zeta-(\d+)"),
+        "giving_platform": re.compile(r"(?:donation|donation_return)-(\d+)-.+"),
+        "five9": re.compile(r"[a-z_]+-(\d+)-.*"),
+    }
+    inserted = 0
+    per_source = {}
+    for filename, source_key in FILES.items():
+        csv_path = path.with_name(filename)
+        if not csv_path.is_file():
+            raise ValueError(f"Compact truth CSV is missing: {filename}")
+        expected = stats.get("files", {}).get(filename, {}).get("rows_generated")
+        if type(expected) is not int or expected < 0:
+            raise ValueError(f"Compact truth lacks row count for {filename}")
+        count = 0
+        batch = []
+        with csv_path.open(encoding="utf-8-sig", newline="") as stream:
+            reader = csv.DictReader(stream)
+            if not reader.fieldnames or len(reader.fieldnames) != len(set(reader.fieldnames)):
+                raise ValueError(f"Compact truth CSV has missing/duplicate headers: {filename}")
+            for row in reader:
+                external_id = row.get("external_id", "")
+                match = patterns[source_key].fullmatch(external_id)
+                if not match:
+                    raise ValueError(f"Invalid compact truth external ID in {filename}")
+                index = int(match.group(1))
+                if not 0 <= index < population:
+                    raise ValueError(f"Compact truth person index out of range in {filename}")
+                contact = f"crm-{index:08d}"
+                if source_key == "donor_crm":
+                    if external_id != contact or index != count:
+                        raise ValueError("Compact truth CRM population is not complete and ordered")
+                elif row.get("contact_external_id") != contact:
+                    raise ValueError(f"Compact truth contact reference disagrees with external ID in {filename}")
+                batch.append((source_key, external_id, f"person-{index+1:08d}", None))
+                count += 1
+                if len(batch) >= DB_BATCH_SIZE:
+                    local.executemany("INSERT INTO truth VALUES (?,?,?,?)", batch)
+                    batch.clear()
+            if batch:
+                local.executemany("INSERT INTO truth VALUES (?,?,?,?)", batch)
+        if count != expected or (source_key == "donor_crm" and count != population):
+            raise ValueError(f"Compact truth CSV row count mismatch: {filename}")
+        inserted += count
+        per_source[source_key] = count
+        local.commit()
+    if not inserted:
+        raise ValueError("Compact truth expanded to no records")
+    metadata.update(streamed_record_count=inserted, compact_truth=True,
+                    truth_records_by_source=per_source,
+                    household_policy="Shared contact information never permits a person merge")
+    return metadata
+
+
+def _compact_accuracy_pass(metrics: dict[str, Any]) -> bool:
+    """Audit fixtures require complete labels and exact identity, not M3 slack."""
+    return bool(metrics["truth_records"] > 0
+                and metrics["matched_records"] == metrics["truth_records"]
+                and metrics["unknown_actual_records"] == 0
+                and metrics["false_positive_pairs_strict"] == 0
+                and metrics["false_negative_pairs_including_unmatched"] == 0)
 
 
 def _sqlite_database(local: sqlite3.Connection) -> None:
@@ -1032,6 +1121,12 @@ def _print_report(metadata: dict[str, Any], local: sqlite3.Connection,
     metrics["m3_accuracy_pass"] = bool(
         true_people and active and abs(delta) / true_people <= 0.02
         and max(0, multi_profiles - intentional) / active < 0.01)
+    if metadata.get("compact_truth"):
+        metrics["compact_truth_accuracy_pass"] = _compact_accuracy_pass(metrics)
+        metrics["compact_truth_records_by_source"] = metadata["truth_records_by_source"]
+        metrics["thresholds"]["compact_truth"] = (
+            "100% record coverage; zero unknown records, wrong merges or splits; no household exemptions")
+        metrics["m3_accuracy_pass"] = metrics["m3_accuracy_pass"] and metrics["compact_truth_accuracy_pass"]
     for key, value in metrics.items():
         print(f"  {key}: {value if value is not None else 'undefined (no eligible pairs)'}")
     _print_identity_diagnostics(local, report, loaded_csv_evidence or set())

@@ -48,7 +48,9 @@ def test_seed_reference_mapping_import_commits_without_config_change(tmp_path, r
         filename = "giving_platform_gifts.csv"
     else:
         row = {"external_id": "zeta-1", "contact_external_id": "crm-1",
-               "hh_income_band": "75k_149k", "donor_propensity_score": "0.75"}
+               "hh_income_band": "75k_149k", "donor_propensity_score": "0.75",
+               "vendor": "test-provider", "license_id": "test-license",
+               "append_date": "2025-01-01", "sensitive": "false"}
         filename = "zeta_enrichment.csv"
     path = tmp_path / filename
     with path.open("w", newline="") as handle:

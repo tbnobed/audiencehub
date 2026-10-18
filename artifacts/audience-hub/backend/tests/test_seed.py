@@ -12,9 +12,29 @@ import pytest
 
 from app.importer import _mapping
 import app.seed as seed_module
-from app.seed import CSV_FILES, _email, generate_seed
+from app.seed import CSV_FILES, _email, generate_seed as _generate_seed
+from functools import partial
+
+# This suite tests the deliberately messy original CSV fixtures, not audit mix.
+generate_seed = partial(_generate_seed, mode="legacy")
 from app.imports.validation import map_and_validate_row, normalize_email
 from app.seed_dates import seed_window
+
+
+def test_synthetic_enrichment_has_explicit_demo_evidence(tmp_path):
+    result = generate_seed(profiles=3, output_dir=tmp_path)
+    with result["files"]["zeta_enrichment.csv"].open() as handle:
+        rows = list(csv.DictReader(handle))
+    for row in rows:
+        if not row["external_id"]:  # Deliberately unrecoverable row remains invalid.
+            continue
+        assert row["vendor"] == "kinship-synthetic-demo"
+        assert row["license_id"] == "synthetic-demo-only"
+        assert date.fromisoformat(row["append_date"])
+        assert row["sensitive"] == "false"
+        mapped = _mapping(list(row), "enrichment")
+        converted = map_and_validate_row(row, mapped["columns"], "enrichment", mapped["options"])
+        assert converted["errors"] == []
 
 
 def test_seed_email_ids_do_not_collide_after_gmail_normalization():

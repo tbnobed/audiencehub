@@ -5,7 +5,7 @@
 The production-container CLI now supports:
 
 ```sh
-docker compose exec api kinship benchmark --segments --profiles 500000 --scale medium
+docker compose exec api kinship benchmark --segments --isolated --profiles 500000 --scale medium
 ```
 
 Rebuild the application image/update Compose before using the new flag. As with
@@ -34,7 +34,7 @@ people. Local disposable-cluster mode also supports the flag.
 Executed against a restricted schema inside a disposable PostgreSQL cluster:
 
 ```sh
-kinship benchmark --segments --profiles 50000 --scale small
+kinship benchmark --segments --isolated --profiles 50000 --scale small
 ```
 
 Seed: **50,000 requested people**, scale **small**, random seed **20250308**,

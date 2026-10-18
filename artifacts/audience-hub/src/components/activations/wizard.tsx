@@ -12,7 +12,7 @@ import { useSegment, useSegments } from '@/hooks/use-segments';
 import type { Destination } from '@/lib/activations';
 import {
   ADS_CONSENT, CONSENT_CHANNELS, DAYS, PRESETS, activationFormErrors, activationToForm, buildActivationWrite, buildCron, can, describeSchedule,
-  effectiveConsent, fmtInt, isAdsType, plural, mappingProblems, presetRows, timezoneList, type ActivationForm, type Role, type SchedulePreset,
+  crosswalkErrors, effectiveConsent, fmtInt, isAdsType, plural, mappingProblems, presetRows, timezoneList, type ActivationForm, type Role, type SchedulePreset,
 } from './logic';
 import { FieldMapper } from './field-mapper';
 import { TypeBadge, apiToast } from './shared';
@@ -27,6 +27,7 @@ export function ActivationWizard({ id, role }: { id?: number; role: Role }) {
   const [form, setForm] = useState<ActivationForm>(() => activationToForm(null));
   const [step, setStep] = useState(0);
   const [showErrors, setShowErrors] = useState(false);
+  const [sensitiveEnabled, setSensitiveEnabled] = useState(false);
   const initFor = useRef<number | null>(null);
   // Poll-safe init: hydrate from the server exactly once per activation id; 5s refetches never overwrite edits.
   useEffect(() => {
@@ -36,15 +37,22 @@ export function ActivationWizard({ id, role }: { id?: number; role: Role }) {
   const dests = useDestinations();
   const fieldsQ = useActivationFields();
   const fields = useMemo(() => fieldsQ.data?.fields ?? [], [fieldsQ.data]);
+  const selectableFields = fields.filter(f => !f.sensitive || (role === 'admin' && sensitiveEnabled));
+  const selectedSensitive = fields.filter(f => f.sensitive && form.rows.some(r =>
+    r.value?.kind === f.kind && r.value.key === f.key && r.value.source === f.source
+  )).map(f => [f.kind, f.source, f.key].filter(v => v !== undefined).join(':')).sort();
   const destination = dests.data?.items.find(d => d.id === form.destination_id) ?? null;
   const destType = destination?.type ?? existing.data?.destination_type;
   const { save } = useActivationActions();
   const set = <K extends keyof ActivationForm>(k: K, v: ActivationForm[K]) => setForm(p => ({ ...p, [k]: v }));
 
   const errors = activationFormErrors(form, destType, role);
-  const mapProblems = fieldsQ.data ? mappingProblems(form.rows, fields, destination) : [];
-  const stepErr = [errors.segment || (!form.name.trim() ? errors.name : ''), errors.destination, mapProblems[0], errors.consent, errors.schedule || errors.timezone, ''];
-  const allErrors = [...Object.values(errors), ...mapProblems];
+  const mapProblems = fieldsQ.data ? mappingProblems(form.rows, fields, destination, form.attribute_mode) : [];
+  const xwalk = crosswalkErrors(form, destination, role);
+  const stepErr = [errors.segment || (!form.name.trim() ? errors.name : ''), errors.destination || (role !== 'admin' ? xwalk[0] : ''), errors.mapping || mapProblems[0], errors.consent || xwalk.find(x => x.includes('consent')), errors.schedule || errors.timezone, ''];
+  const allErrors = [...Object.values(errors), ...mapProblems, ...xwalk,
+    ...(role === 'admin' && selectedSensitive.length && !sensitiveEnabled
+      ? ['Explicitly opt into the selected sensitive fields in Field mapping before saving.'] : [])];
 
   if (id && existing.isLoading) return <div className="p-4 space-y-2">{[0, 1, 2].map(i => <div key={i} className="h-8 bg-surface-raised animate-pulse rounded-sm" />)}</div>;
   if (id && existing.isError) return <div className="p-6 text-center"><p className="text-danger mb-2">Couldn't load activation #{id}: {(existing.error as Error).message}</p><Button size="sm" variant="outline" onClick={() => existing.refetch()} data-testid="button-retry-activation">Retry</Button></div>;
@@ -61,7 +69,8 @@ export function ActivationWizard({ id, role }: { id?: number; role: Role }) {
   const submit = () => {
     setShowErrors(true);
     if (allErrors.length) { toast({ title: 'Fix the highlighted steps', description: allErrors[0], variant: 'destructive' }); return; }
-    save.mutate(buildActivationWrite(form, destType, role), {
+    save.mutate({ ...buildActivationWrite(form, destType, role),
+      ...(role === 'admin' && sensitiveEnabled ? { sensitive_fields: selectedSensitive } : {}) }, {
       onSuccess: a => { toast({ title: `${id ? 'Saved' : 'Created'} ${a.name}`, description: 'Nothing has been sent. Use Run now or wait for the schedule.' }); nav(`/activations/${a.id}`); },
       onError: e => apiToast('Save failed', e),
     });
@@ -89,8 +98,26 @@ export function ActivationWizard({ id, role }: { id?: number; role: Role }) {
         {step === 2 && (!destination ? <p className="text-ink-muted text-[12px]">Pick a destination first; its type decides which columns exist.</p>
           : fieldsQ.isLoading ? <div className="h-40 bg-surface-raised animate-pulse rounded-sm" />
           : fieldsQ.isError ? <p className="text-danger text-[12px]">Couldn't load the export field registry. <button className="underline" onClick={() => fieldsQ.refetch()} data-testid="button-retry-fields">Retry</button></p>
-          : <><FieldMapper rows={form.rows} onChange={r => set('rows', r)} fields={fields} destination={destination} />{mapProblems.length > 0 && <ul className="mt-2 text-[11px] text-warn list-disc pl-4">{mapProblems.map(p => <li key={p}>{p}</li>)}</ul>}</>)}
+          : <><div className="mb-3 border border-warn/40 bg-warn/5 rounded-sm p-2.5 text-[12px] space-y-2">
+            <p>Sensitive fields (including inmate, religion, politics and military) are excluded by default. Only an admin can explicitly select them for export. Sensitive downloads are admin-only; each sensitive export and download is audited by field name, never value.</p>
+            {role === 'admin' ? <label className="flex items-center gap-2"><Checkbox checked={sensitiveEnabled} onCheckedChange={v => setSensitiveEnabled(!!v)} data-testid="checkbox-sensitive-export" />I explicitly opt into exporting only the sensitive fields I add to this mapping.</label>
+              : <p className="text-ink-muted">Ask an admin to select and approve sensitive fields. Analysts cannot grant approval or download sensitive files.</p>}
+            {!!selectedSensitive.length && <p className="font-mono text-warn" data-testid="text-sensitive-fields">Selected sensitive fields: {selectedSensitive.join(', ')}</p>}
+          </div>
+          {!isAdsType(destination.type) && <div className="mb-3 flex flex-wrap items-center gap-2 text-[12px]" data-testid="group-attribute-mode">
+            <span className="text-ink-muted">Columns:</span>
+            {(['selected', 'all'] as const).map(m => <button key={m} type="button" onClick={() => set('attribute_mode', m)} data-testid={`button-attribute-mode-${m}`}
+              className={`h-7 px-2.5 rounded-sm border ${form.attribute_mode === m ? 'border-signal bg-signal-soft text-ink' : 'border-line text-ink-muted hover:border-line-strong'}`}>{m === 'selected' ? 'Selected columns' : 'All attributes'}</button>)}
+            <span className="text-[11px] text-ink-muted">{form.attribute_mode === 'all' ? 'Exports every non-sensitive canonical and computed attribute. Columns below are added on top; sensitive fields still need the explicit admin opt-in above.' : 'Only the columns mapped below are exported.'}</span>
+          </div>}
+          {errors.mapping && <p className="mb-2 text-[11px] text-danger">{errors.mapping}</p>}
+          <FieldMapper rows={form.rows} onChange={r => set('rows', r)} fields={selectableFields} destination={destination} />{mapProblems.length > 0 && <ul className="mt-2 text-[11px] text-warn list-disc pl-4">{mapProblems.map(p => <li key={p}>{p}</li>)}</ul>}</>)}
         {step === 3 && <ConsentStep form={form} set={set} destType={destType} role={role} showErrors={showErrors} error={errors.consent} />}
+        {step === 3 && destination?.config.export_kind === 'crosswalk' && <div className="mt-3 max-w-xl border border-warn/40 bg-warn/5 rounded-sm p-2.5 text-[12px] space-y-1" data-testid="notice-crosswalk">
+          <p className="inline-flex items-center gap-1 font-medium"><ShieldAlert size={12} className="text-warn" /> Identity crosswalk export</p>
+          <p className="text-ink-muted">Approved purpose: <span className="text-ink">{destination.config.approved_purpose || 'not set'}</span></p>
+          {xwalk.length > 0 ? <ul className="list-disc pl-4 text-danger">{xwalk.map(x => <li key={x}>{x}</li>)}</ul> : <p className="text-ok">Admin, purpose and consent channel are in place.</p>}
+        </div>}
         {step === 4 && <ScheduleStep form={form} set={set} error={errors.schedule || errors.timezone} />}
         {step === 5 && <Review form={form} destination={destination} destType={destType} role={role} problems={allErrors} />}
         <div className="flex justify-between mt-4 pt-3 border-t border-line">
@@ -135,7 +162,7 @@ function DestinationStep({ q, value, onPick }: { q: ReturnType<typeof useDestina
     {items.map(d => <button key={d.id} type="button" role="radio" aria-checked={value === d.id} onClick={() => onPick(d)}
       className={`text-left border rounded-sm p-2.5 ${value === d.id ? 'border-signal bg-signal-soft' : 'border-line hover:border-line-strong'}`} data-testid={`option-destination-${d.id}`}>
       <div className="flex items-center justify-between"><span className="text-[13px] font-medium">{d.name}</span><TypeBadge type={d.type} /></div>
-      <p className="text-[11px] text-ink-muted mt-1 font-mono truncate">{d.type === 'webhook' ? `${d.config.url} · ${d.config.mode ?? 'full'}` : d.type === 'csv' ? `PII ${d.config.include_pii ? 'included' : 'excluded'}` : 'Hashed file for manual upload — no platform connection'}</p>
+      <p className="text-[11px] text-ink-muted mt-1 font-mono truncate">{d.type === 'webhook' ? `${d.config.url} · ${d.config.mode ?? 'full'}` : d.type === 'sftp' ? `${d.config.output_dir ?? ''} · ${d.config.export_kind ?? 'audience'}${d.config.gzip ? ' · gzip' : ''}` : d.type === 'csv' ? `PII ${d.config.include_pii ? 'included' : 'excluded'}` : 'Hashed file for manual upload — no platform connection'}</p>
     </button>)}
   </div>;
 }
@@ -196,7 +223,7 @@ function Review({ form, destination, destType, role, problems }: { form: Activat
     <div className="border border-line rounded-sm px-3">
       {row('Segment', seg.data ? `${seg.data.name} · ${seg.data.last_count == null ? 'count pending' : plural(seg.data.last_count, 'member')}` : '—')}
       {row('Destination', destination ? <span className="inline-flex items-center gap-2">{destination.name}<TypeBadge type={destination.type} /></span> : '—')}
-      {row('Columns', <span className="font-mono">{form.rows.filter(r => r.value).map(r => r.column).join(', ') || '—'}</span>)}
+      {row('Columns', <span className="font-mono">{form.attribute_mode === 'all' ? 'All non-sensitive attributes' : ''}{form.attribute_mode === 'all' && form.rows.some(r => r.value) ? ' + ' : ''}{form.rows.filter(r => r.value).map(r => r.column).join(', ') || (form.attribute_mode === 'all' ? '' : '—')}</span>)}
       {row('Consent', <span className="font-mono">{effectiveConsent(form, destType as never, role) ?? 'none'}{form.consent_override && isAdsType(destType as never) ? ' (admin override)' : ''}</span>)}
       {row('Schedule', describeSchedule(buildCron(form.schedule), form.timezone))}
     </div>

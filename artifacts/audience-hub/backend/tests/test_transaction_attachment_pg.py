@@ -205,7 +205,8 @@ def test_seed_preregisters_all_five_and_defers_until_last_import(db, monkeypatch
     local = db.get_bind()
     monkeypatch.setattr(app.db, "engine", local)
     monkeypatch.setattr(app.importer, "engine", local)
-    files = generate_seed(profiles=profiles, scale="medium", output_dir=tmp_path / "seed")["files"]
+    files = generate_seed(profiles=profiles, scale="medium", output_dir=tmp_path / "seed",
+                          mode="legacy")["files"]
     calls = []
     original = app.identity.bulk.resolve_bulk
 

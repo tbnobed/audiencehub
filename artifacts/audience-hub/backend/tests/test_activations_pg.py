@@ -128,9 +128,10 @@ def test_delta_two_runs_failure_preserves_baseline_and_snapshot(db, tmp_path, mo
     service.execute(db, second.id)
     db.commit()
     payloads = [json.loads(body) for _, body in echo["requests"]]
+    masters = dict(db.execute(text("SELECT id,master_id FROM profiles WHERE id IN (1,2)")).all())
     assert [p for body in payloads for p in body["added"]] == [{
-        "profile_id": 2, "email": "second@example.org", "first_name": "Second", "last_name": "Partner"}]
-    assert [p for body in payloads for p in body["removed"]] == [{"profile_id": 1}]
+        "profile_id": 2, "master_id": masters[2], "email": "second@example.org", "first_name": "Second", "last_name": "Partner"}]
+    assert [p for body in payloads for p in body["removed"]] == [{"profile_id": 1, "master_id": masters[1]}]
     assert db.execute(text("SELECT profile_id FROM activation_last_members")).scalars().all() == [2]
     db.get(Destination, destination["id"]).config = {
         "url": echo["url"], "allow_internal_network": True, "mode": "delta", "batch_size": 1}
@@ -221,7 +222,8 @@ def test_mapping_whitelist_pii_licensing_and_csv_formula(db, tmp_path, monkeypat
     service.execute(db, run.id)
     db.commit()
     rows = list(csv.reader(Path(run.file_path).open()))
-    assert rows[0] == ["'=header"] and rows[1] == ["'=1+1"]
+    assert rows[0] == ["'=header", "master_id"] and rows[1][0] == "'=1+1"
+    assert rows[1][1].startswith("kin_")
 
 
 def test_scheduled_dedupe_and_missing_traits_barrier(db, tmp_path, monkeypatch):
@@ -290,7 +292,7 @@ def test_real_job_dispatch_and_column_order(db, tmp_path, monkeypatch):
     record = db.get(ActivationRun, queued["run_id"])
     assert record.status == "succeeded"
     with Path(record.file_path).open() as stream:
-        assert next(csv.reader(stream)) == ["Z first", "A second"]
+        assert next(csv.reader(stream)) == ["Z first", "A second", "master_id"]
     assert list(api.get_activation(activation["id"], db, analyst)["field_mapping"]) == ["Z first", "A second"]
 
 

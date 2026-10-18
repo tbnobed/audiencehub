@@ -2,6 +2,7 @@ import { Link } from 'react-router-dom';
 import { ArrowUpRight, Mail, MapPin, Phone, RefreshCw, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
+import { MasterIdChip } from '@/components/profiles/master-id-chip';
 import { useProfile } from '@/hooks/use-profiles';
 import { displayAmount, displayDate, displayJoined, displayNumber, displayValue, record, records } from '@/lib/profile-display';
 
@@ -20,6 +21,7 @@ export function ProfilePreview({ id, from, onClose }: { id: number; from: string
         <p className="text-[10px] font-mono uppercase tracking-[.16em] text-signal">Preview · #{id}</p>
         {isLoading ? <Skeleton className="h-5 w-40 mt-1 bg-surface-raised" />
           : <h2 className="kin-heading truncate" data-testid="text-preview-name">{data ? displayJoined([data.first_name, data.last_name], ' ') : 'Profile'}</h2>}
+          {data && <MasterIdChip masterId={data.master_id} testId="button-copy-preview-master-id" />}
       </div>
       <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" aria-label="Close preview" data-testid="button-close-preview" onClick={onClose}><X size={14} /></Button>
     </div>

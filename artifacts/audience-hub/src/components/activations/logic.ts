@@ -1,5 +1,5 @@
 // Pure helpers for the activation console. No React, no fetch — unit tested in logic.test.ts.
-import type { Activation, ActivationRun, ActivationWrite, Destination, DestinationConfig, DestinationType, DestinationWrite, ExportField, FieldMapping, MappingValue } from '../../lib/activations.ts';
+import type { AttributeMode, ExportKind, Activation, ActivationRun, ActivationWrite, Destination, DestinationConfig, DestinationType, DestinationWrite, ExportField, FieldMapping, MappingValue } from '../../lib/activations.ts';
 
 export type Role = 'viewer' | 'analyst' | 'admin';
 export const DEST_TYPES: { value: DestinationType; label: string; short: string; blurb: string }[] = [
@@ -7,6 +7,7 @@ export const DEST_TYPES: { value: DestinationType; label: string; short: string;
   { value: 'google_customer_match', label: 'Google Customer Match file', short: 'Google CM', blurb: 'Normalized, SHA-256 hashed file for manual upload in Google Ads. No API connection.' },
   { value: 'meta_custom_audience', label: 'Meta custom audience file', short: 'Meta CA', blurb: 'Normalized, SHA-256 hashed file for manual upload in Meta Ads Manager. No API connection.' },
   { value: 'webhook', label: 'Webhook', short: 'Webhook', blurb: 'Signed JSON POST in batches to an admin-entered URL.' },
+  { value: 'sftp', label: 'SFTP drop', short: 'SFTP', blurb: 'Comma CSV pushed over key-auth SFTP with a pinned host key; manifest.json marks each complete run.' },
 ];
 export const typeLabel = (t: DestinationType) => DEST_TYPES.find(d => d.value === t)?.short ?? t;
 export const isAdsType = (t?: DestinationType | null) => t === 'google_customer_match' || t === 'meta_custom_audience';
@@ -156,7 +157,7 @@ export function allowedFields(fields: ExportField[], dest?: Pick<Destination, 't
   if (dest?.type === 'csv' && dest.config.include_pii === false) return fields.filter(f => !f.pii);
   return fields;
 }
-export function mappingProblems(rows: MapRow[], fields: ExportField[], dest?: Pick<Destination, 'type' | 'config'> | null): string[] {
+export function mappingProblems(rows: MapRow[], fields: ExportField[], dest?: Pick<Destination, 'type' | 'config'> | null, mode: AttributeMode = 'selected'): string[] {
   const out: string[] = [];
   const allowed = new Set(allowedFields(fields, dest).map(fieldId));
   const seen = new Set<string>();
@@ -167,7 +168,7 @@ export function mappingProblems(rows: MapRow[], fields: ExportField[], dest?: Pi
     seen.add(c.toLowerCase());
     if (r.value && r.value.kind !== 'constant' && !allowed.has(fieldId(r.value))) out.push(`"${c}" maps a field this destination may not export.`);
   });
-  if (!rows.some(r => r.value)) out.push('Map at least one column.');
+  if (mode === 'selected' && !rows.some(r => r.value)) out.push('Map at least one column.');
   return Array.from(new Set(out));
 }
 
@@ -208,14 +209,19 @@ export function presetRows(type: DestinationType, fields: ExportField[], existin
 
 /* ---------- request builders ---------- */
 export type HeaderRow = { name: string; value: string };
-export type DestinationForm = { id?: number; name: string; type: DestinationType; is_active: boolean; delimiter: string; include_pii: boolean; url: string; batch_size: string; mode: 'full' | 'delta'; allow_internal_network: boolean; secret: string; replaceHeaders: boolean; headers: HeaderRow[] };
+export type SftpForm = { output_dir: string; gzip: boolean; export_kind: ExportKind; approved_purpose: string; replaceCredentials: boolean; host: string; port: string; username: string; private_key: string; passphrase: string; host_key_sha256: string };
+export const blankSftp = (): SftpForm => ({ output_dir: '/exports', gzip: false, export_kind: 'audience', approved_purpose: '', replaceCredentials: true, host: '', port: '22', username: '', private_key: '', passphrase: '', host_key_sha256: '' });
+/** Wipe every write-only secret field (used after save/cancel). */
+export const clearSftpSecrets = (s: SftpForm): SftpForm => ({ ...s, private_key: '', passphrase: '' });
+export type DestinationForm = { sftp: SftpForm; id?: number; name: string; type: DestinationType; is_active: boolean; delimiter: string; include_pii: boolean; url: string; batch_size: string; mode: 'full' | 'delta'; allow_internal_network: boolean; secret: string; replaceHeaders: boolean; headers: HeaderRow[] };
 export function destinationToForm(d?: Destination | null): DestinationForm {
   return {
     id: d?.id, name: d?.name ?? '', type: d?.type ?? 'csv', is_active: d?.is_active ?? true,
-    delimiter: d?.config.delimiter ?? ',', include_pii: d?.config.include_pii ?? false,
+    delimiter: d?.config.delimiter ?? ',', include_pii: d?.config.include_pii ?? d?.type === 'sftp',
     url: d?.config.url ?? '', batch_size: String(d?.config.batch_size ?? 500), mode: d?.config.mode ?? 'full',
     allow_internal_network: d?.config.allow_internal_network ?? false,
     secret: '', replaceHeaders: !d, headers: [],
+    sftp: { ...blankSftp(), output_dir: d?.config.output_dir ?? '/exports', gzip: d?.config.gzip ?? false, export_kind: d?.config.export_kind ?? 'audience', approved_purpose: d?.config.approved_purpose ?? '', replaceCredentials: !d?.has_credentials },
   };
 }
 export function destinationFormErrors(f: DestinationForm): Record<string, string> {
@@ -228,12 +234,25 @@ export function destinationFormErrors(f: DestinationForm): Record<string, string
     if (!Number.isInteger(b) || b < 1 || b > 10000) e.batch_size = 'Batch size must be a whole number between 1 and 10,000.';
     if (f.replaceHeaders && f.headers.some(h => !h.name.trim() || !/^[A-Za-z0-9-]+$/.test(h.name.trim()))) e.headers = 'Header names use letters, digits and dashes only.';
   }
+  if (f.type === 'sftp') {
+    const s = f.sftp;
+    if (!s.output_dir.startsWith('/') || /\/\.{1,2}(\/|$)|\/\/|.\/$/.test(s.output_dir)) e.output_dir = 'Use an absolute, normalized path such as /exports/kinship.';
+    if (s.export_kind === 'crosswalk' && f.is_active && !s.approved_purpose.trim()) e.approved_purpose = 'Crosswalk exports need an admin-approved purpose.';
+    if (s.replaceCredentials) {
+      if (!s.host.trim()) e.host = 'Host is required.';
+      const p = Number(s.port); if (!Number.isInteger(p) || p < 1 || p > 65535) e.port = 'Port must be 1-65535.';
+      if (!s.username.trim()) e.username = 'Username is required.';
+      if (!s.private_key.includes('PRIVATE KEY')) e.private_key = 'Paste the full private key (PEM / OpenSSH), including BEGIN/END lines.';
+      if (!s.host_key_sha256.trim()) e.host_key_sha256 = 'Pin the server host key fingerprint (SHA256).';
+    } else if (f.is_active && !f.id) e.host = 'Active SFTP destinations need credentials.';
+  }
   return e;
 }
 /** Secrets/headers are write-only: blank secret on edit is omitted (server keeps it); headers sent only when replacing. */
 export function buildDestinationWrite(f: DestinationForm): DestinationWrite & { id?: number } {
   let config: DestinationConfig = {};
   if (f.type === 'csv') config = { delimiter: f.delimiter, include_pii: f.include_pii };
+  if (f.type === 'sftp') config = { output_dir: f.sftp.output_dir.trim(), gzip: f.sftp.gzip, include_pii: f.sftp.export_kind === 'crosswalk' ? true : f.include_pii, delimiter: ',', export_kind: f.sftp.export_kind, ...(f.sftp.approved_purpose.trim() ? { approved_purpose: f.sftp.approved_purpose.trim() } : {}) };
   if (f.type === 'webhook') config = { url: f.url.trim(), batch_size: Number(f.batch_size), mode: f.mode, allow_internal_network: f.allow_internal_network };
   const body: DestinationWrite & { id?: number } = { name: f.name.trim(), type: f.type, config, is_active: f.is_active };
   if (f.id) body.id = f.id;
@@ -241,16 +260,21 @@ export function buildDestinationWrite(f: DestinationForm): DestinationWrite & { 
     if (f.secret.trim()) body.signing_secret = f.secret.trim();
     if (f.replaceHeaders) body.headers = Object.fromEntries(f.headers.filter(h => h.name.trim()).map(h => [h.name.trim(), h.value]));
   }
+  if (f.type === 'sftp' && f.sftp.replaceCredentials) {
+    const s = f.sftp;
+    body.credentials = { host: s.host.trim(), port: Number(s.port), username: s.username.trim(), private_key: s.private_key, host_key_sha256: s.host_key_sha256.trim(), ...(s.passphrase ? { private_key_passphrase: s.passphrase } : {}) };
+  }
   return body;
 }
 
-export type ActivationForm = { id?: number; name: string; segment_id: number | null; destination_id: number | null; rows: MapRow[]; required_consent: string | null; consent_override: boolean; override_note: string; schedule: ScheduleState; timezone: string; is_active: boolean };
+export type ActivationForm = { id?: number; name: string; segment_id: number | null; destination_id: number | null; rows: MapRow[]; required_consent: string | null; consent_override: boolean; override_note: string; schedule: ScheduleState; timezone: string; is_active: boolean; attribute_mode: AttributeMode };
 export function activationToForm(a?: Activation | null): ActivationForm {
   return {
     id: a?.id, name: a?.name ?? '', segment_id: a?.segment_id ?? null, destination_id: a?.destination_id ?? null,
     rows: mappingToRows(a?.field_mapping), required_consent: a?.required_consent ?? null,
     consent_override: !!a && isAdsType(a.destination_type) && a.required_consent !== ADS_CONSENT, override_note: '',
     schedule: parseCron(a?.schedule), timezone: a?.timezone ?? DEFAULT_TZ, is_active: a?.is_active ?? true,
+    attribute_mode: a?.attribute_mode ?? 'selected',
   };
 }
 export function effectiveConsent(f: Pick<ActivationForm, 'required_consent' | 'consent_override'>, destType: DestinationType | undefined, role: Role | undefined): string | null {
@@ -270,12 +294,22 @@ export function activationFormErrors(f: ActivationForm, destType: DestinationTyp
   if (f.schedule.preset === 'custom' && !cron) e.schedule = 'Enter a cron expression or pick a preset.';
   const ce = cronShapeError(cron); if (ce) e.schedule = ce;
   if (!isValidTimezone(f.timezone)) e.timezone = 'Unknown timezone.';
+  if (f.attribute_mode === 'all' && isAdsType(destType)) e.mapping = 'Ad destinations require selected provider columns.';
   return e;
+}
+/** Crosswalk exports: admin only, explicit consent channel when active. Server re-enforces. */
+export function crosswalkErrors(f: Pick<ActivationForm, 'required_consent' | 'is_active'>, dest: Pick<Destination, 'config'> | null | undefined, role: Role | undefined): string[] {
+  if (dest?.config.export_kind !== 'crosswalk') return [];
+  const out: string[] = [];
+  if (role !== 'admin') out.push('Crosswalk activations are restricted to admins.');
+  if (f.is_active && !f.required_consent) out.push('Crosswalk exports require an explicit consent channel.');
+  if (!dest.config.approved_purpose?.trim()) out.push('The crosswalk destination has no approved purpose; an admin must set one.');
+  return out;
 }
 export function buildActivationWrite(f: ActivationForm, destType: DestinationType | undefined, role: Role | undefined): ActivationWrite & { id?: number } {
   const body: ActivationWrite & { id?: number } = {
     name: f.name.trim(), segment_id: f.segment_id!, destination_id: f.destination_id!, field_mapping: rowsToMapping(enforceLocked(destType, f.rows)),
-    required_consent: effectiveConsent(f, destType, role), schedule: buildCron(f.schedule), timezone: f.timezone, is_active: f.is_active,
+    required_consent: effectiveConsent(f, destType, role), schedule: buildCron(f.schedule), timezone: f.timezone, is_active: f.is_active, attribute_mode: f.attribute_mode,
   };
   if (f.id) body.id = f.id;
   if (isAdsType(destType) && f.consent_override && can(role).overrideAdsConsent) { body.consent_override = true; body.override_note = f.override_note.trim(); }
@@ -283,9 +317,15 @@ export function buildActivationWrite(f: ActivationForm, destType: DestinationTyp
 }
 /** Full PATCH body for pause/resume, reusing the stored activation verbatim. */
 export function toggleActiveBody(a: Activation, is_active: boolean): ActivationWrite & { id: number } {
-  return { id: a.id, name: a.name, segment_id: a.segment_id, destination_id: a.destination_id, field_mapping: a.field_mapping, required_consent: a.required_consent, schedule: a.schedule, timezone: a.timezone, is_active };
+  return { id: a.id, name: a.name, segment_id: a.segment_id, destination_id: a.destination_id, field_mapping: a.field_mapping, required_consent: a.required_consent, schedule: a.schedule, timezone: a.timezone, is_active, ...(a.attribute_mode ? { attribute_mode: a.attribute_mode } : {}) };
 }
 
+/** Run manifest summary: file count, total rows, total bytes. */
+export function manifestSummary(m: { files: { row_count: number; bytes: number }[] } | null | undefined) {
+  if (!m) return null;
+  return { files: m.files.length, rows: m.files.reduce((s, f) => s + f.row_count, 0), bytes: m.files.reduce((s, f) => s + f.bytes, 0) };
+}
+export const shortHash = (h?: string | null) => (h ? `${h.slice(0, 12)}…` : '—');
 export const plural = (n: number, one: string, many = one + 's') => `${fmtInt(n)} ${n === 1 ? one : many}`;
 /** DELETE /api/activations/:id is a soft delete (is_active=false); the row stays listed as paused with its history. */
 export const DEACTIVATE_COPY = {

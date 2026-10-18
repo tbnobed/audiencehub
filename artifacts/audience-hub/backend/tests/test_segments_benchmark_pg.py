@@ -26,6 +26,7 @@ def test_segment_benchmark_arguments_and_independent_references():
     with pytest.raises(ValueError, match="cannot be combined"):
         run_benchmark(args)
     args.traits = False
+    args.isolated = True
     args.profiles = 0
     with pytest.raises(ValueError, match="positive"):
         run_benchmark(args)
@@ -86,8 +87,14 @@ def test_segments_cli_isolated_small_seed(admin, tmp_path):
                    OIDC_CLIENT_SECRET="fixture", PUBLIC_BASE_URL="https://fixture.invalid",
                    SECRET_KEY="x" * 40, KINSHIP_BENCHMARK_BACKEND="schema",
                    KINSHIP_BENCHMARK_OUTPUT=str(tmp_path))
-        result = subprocess.run(["kinship", "benchmark", "--segments",
-                                 "--profiles", str(profiles), "--scale", "small"],
+        command = ["kinship", "benchmark", "--segments", "--isolated",
+                   "--profiles", str(profiles), "--scale", "small"]
+        # Targeted reruns may reuse the identical generated CSV fixture; the
+        # benchmark validates population, random seed, scale and as_of before
+        # reuse. Imports, identity, traits and every segment still run afresh.
+        if os.environ.get("KINSHIP_SEGMENTS_ACCEPTANCE_SEED_DIR"):
+            command += ["--seed-dir", os.environ["KINSHIP_SEGMENTS_ACCEPTANCE_SEED_DIR"]]
+        result = subprocess.run(command,
                                 env=env, capture_output=True, text=True, timeout=1800)
         assert result.returncode == 0, result.stdout + result.stderr
         report_path = next(tmp_path.glob("segments-*/segments.json"))

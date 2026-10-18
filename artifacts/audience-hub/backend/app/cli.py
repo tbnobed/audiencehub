@@ -37,6 +37,20 @@ def main():
         description="Audience Hub administration and deterministic synthetic CSV generation."
     )
     commands = parser.add_subparsers(dest="command", required=True)
+    pull = commands.add_parser("source-pull", help="Pull a configured SFTP/Snowflake/Zeta source through COPY imports.")
+    pull.add_argument("--source-id", required=True, type=int)
+    pull.add_argument("--feed", choices=["people", "models", "events", "resources", "enrichment", "lookups"])
+    pull.add_argument("--dry-run", action="store_true", help="Validate up to 100 remote rows per mapping without writes.")
+    master = commands.add_parser("master-id", aliases=["masterID"], help="Permanent Master ID maintenance.")
+    master_commands = master.add_subparsers(dest="master_command", required=True)
+    backfill = master_commands.add_parser("backfill", help="Resumable backfill; commit each batch and safely restart.")
+    backfill.add_argument("--batch-size", type=int, default=5000)
+    backfill.add_argument("--max-batches", type=int, help="Stop after this many committed batches (default: drain).")
+    filedrop = commands.add_parser("identity-filedrop", help="Resolve CSV identity keys from a configured remote SFTP folder.")
+    filedrop.add_argument("--config", required=True,
+                          help="Fernet-encrypted config file (FERNET_KEY); never a plaintext JSON or private-key file.")
+    filedrop.add_argument("--watch", action="store_true", help="Keep polling; default is one folder pass.")
+    filedrop.add_argument("--interval", type=float, default=60, help="Polling interval in seconds, minimum 5.")
     jobs = commands.add_parser("jobs", help="Worker job recovery.")
     job_commands = jobs.add_subparsers(dest="jobs_command", required=True)
     cancel = job_commands.add_parser("cancel", help="Terminate stale owned SQL sessions and recover jobs.")
@@ -71,6 +85,7 @@ def main():
     )
     seed.add_argument("--profiles", type=int, default=50_000)
     seed.add_argument("--scale", choices=("small", "medium", "large"), default="small")
+    seed.add_argument("--mode", choices=("audit", "legacy"), default="audit")
     seed.add_argument("--random-seed", type=int, default=20250308)
     seed.add_argument("--as-of", type=date.fromisoformat,
                       default=None, metavar="YYYY-MM-DD",
@@ -85,6 +100,49 @@ def main():
         help="After writing files, call app.importer.import_seed_files(files) if available.",
     )
     args = parser.parse_args()
+    if args.command == "source-pull":
+        from app.source_pulls import run_source, collect, connection_row
+        from app.db import engine
+        import json
+        try:
+            if args.dry_run:
+                with Session(engine) as db:
+                    result = collect(connection_row(db, args.source_id), args.feed, dry_run=True)
+            else:
+                result = run_source(args.source_id, feed=args.feed)
+            print(json.dumps(result))
+        except Exception:
+            raise SystemExit("Source pull failed; verify configuration and canonical feed data. Retry resumes durable checkpoints.") from None
+        return
+    if args.command in ("master-id", "masterID"):
+        if not 1 <= args.batch_size <= 50000 or (args.max_batches is not None and args.max_batches < 1):
+            parser.error("batch-size must be 1..50000 and max-batches must be positive.")
+        from app.db import engine
+        total = run_master_id_backfill(engine, args.batch_size, args.max_batches)
+        print(f"Master ID backfill committed: {total} profiles; restart safely to resume.")
+        return
+    if args.command == "identity-filedrop":
+        if args.interval < 5 or not __import__("math").isfinite(args.interval):
+            parser.error("interval must be finite and at least 5 seconds.")
+        from app.identity.filedrop import FiledropError, load_config, poll
+        try:
+            config = load_config(args.config)
+            from app.db import engine
+            while True:
+                with Session(engine) as db:
+                    # Lookup polling must never change identity or application rows.
+                    db.execute(text("SET TRANSACTION READ ONLY"))
+                    counts = poll(db, config)
+                print(f"Identity filedrop: {counts['processed']} processed, {counts['skipped']} skipped.", flush=True)
+                if not args.watch:
+                    return
+                time.sleep(args.interval)
+        except FiledropError as exc:
+            raise SystemExit(str(exc)) from None
+        except KeyboardInterrupt:
+            return
+        except Exception:
+            raise SystemExit("Identity filedrop failed; verify database and encrypted SFTP configuration.") from None
     if args.command == "jobs":
         from datetime import timedelta
         from app.config import get_settings
@@ -134,6 +192,7 @@ def main():
                 random_seed=args.random_seed,
                 output_dir=args.output_dir,
                 as_of=reference,
+                mode=args.mode,
             )
             print(f"Synthetic CSVs written to: {result['output_dir']}")
             for filename, count in result["counts"].items():
@@ -175,6 +234,21 @@ def main():
                         entity_type="user", entity_id=str(user.id), details={}))
         db.commit()
     print("Admin provisioned. Production login still requires an OIDC admin group.")
+
+
+def run_master_id_backfill(engine, batch_size=5000, max_batches=None):
+    """A stopped/crashed invocation loses at most its uncommitted final batch."""
+    from app.identity.master import backfill_master_ids
+    total = batches = 0
+    while max_batches is None or batches < max_batches:
+        with Session(engine) as db:
+            updated = backfill_master_ids(db, batch_size=batch_size)
+            db.commit()
+        total += updated
+        batches += 1
+        if not updated:
+            break
+    return total
 
 
 if __name__ == "__main__":

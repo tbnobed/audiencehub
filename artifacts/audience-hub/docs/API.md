@@ -1,5 +1,80 @@
 # API
 
+## Scheduled SFTP activations
+
+Destination type `sftp` supports public config `output_dir` (normalized absolute
+path), `gzip` (boolean), `include_pii` (boolean), `delimiter` (comma only), and
+`export_kind` (`audience`, default, or `crosswalk`). Write-only `credentials` is
+an object containing `host`, optional `port` (22), `username`, `private_key`,
+optional `private_key_passphrase`, and `host_key_sha256` (`SHA256:base64`).
+Destination create/patch is admin-only. GET returns `has_credentials`, never
+credentials. Disabled destinations may omit credentials; enabling requires them.
+SFTP always validates all DNS answers against public-IP policy and pins the SSH
+host key before key authentication. There is no internal-network override.
+Snowflake **export** is explicitly unsupported; the Snowflake source reader is
+not an export writer.
+
+Activations accept `attribute_mode: selected|all`, existing `field_mapping`,
+five-field `schedule`, and IANA `timezone` (new default `America/New_York`).
+`all` includes all licensed non-sensitive registry fields, with canonical
+original field names and `computed__...` prefixes for other namespaces.
+Explicit mappings may add sensitive fields, but the existing exact active-admin
+approval fingerprint remains mandatory. General exports always include
+`master_id`. Cron day 29 skips February in non-leap years; it never moves to 28.
+
+`POST /api/activations/bootstrap` (admin) and
+`python -m app.activations.cli bootstrap` add missing reference configurations
+without changing existing destinations or activations. Missing template
+audiences are returned as `unavailable`; rerun bootstrap after templates exist.
+CustomerPulse All TBN runs monthly day 2, CustomerPulse RFM day 1, Trilogy RFM
+day 29, and Identity Crosswalk daily; all are initially **disabled**.
+Configure through the API or
+`python -m app.activations.cli destination-config ID --admin-id ID --file FILE`
+using a DestinationPatch JSON file; secrets are never CLI arguments or output.
+`python -m app.activations.cli run ID --admin-id ID` queues a run.
+
+Crosswalk SFTP config additionally requires a nonempty admin-set
+`approved_purpose`; its activation requires an explicit consent channel.
+Only admins may configure/run/download crosswalks. Consent, all suppression
+channels and active-profile filtering apply before exporting. Crosswalk columns
+are `master_id,key_type,key_value,status,updated_at`; aliases columns are
+`retired_id,survivor_id,merged_at`. Audit records contain field names, not values.
+
+Every remote run uses a unique `run-ID/` directory. Consumers **must wait for
+manifest.json**: each CSV (or optional deterministic gzip) is uploaded to `.part`
+and renamed, then the manifest is atomically renamed last. A crosswalk manifest
+covers both files. It records transmitted-byte SHA256, bytes and data-row count.
+Three bounded network attempts use deterministic backoff; a failed transfer can
+leave uncommitted data files but never a committed partial manifest. Local
+artifacts remain subject to retention and privacy erasure. Remote recipients
+must separately honor downstream deletion obligations.
+
+Run history includes `manifest`, `file_sha256`, exclusion counts and safe errors.
+`GET /api/activation-alerts` (analyst+) returns durable failed-run alerts for
+Data Health/toast polling (`id`, `run_id`, `activation_id`, `severity`, `message`,
+`created_at`). No raw connector exception or credential is returned.
+
+## Pull-source operational history
+
+`GET /api/sources/{source_id}/pulls?limit=50` is admin-only and returns
+`{"items":[...]}` ordered by descending job ID. `limit` must be 1–50.
+Each item contains `job_id`, `status`, `feed` (or null for all feeds), `attempts`,
+`max_attempts`, ISO timestamps `created_at`, `run_after`, `started_at`,
+`finished_at`, `heartbeat_at` (nullable), and `counts`:
+`imports_total`, `imports_completed`, `rows_total`, `rows_ok`, `rows_rejected`.
+These are committed COPY-import counters for the job's durable identity batch,
+including projected donation/refund gift rows. Resource upserts and files
+skipped via previous receipts are not counted as new import rows. Jobs that fail
+before batch registration have zero counters.
+
+An `error` field is either null or a fixed safe recovery message. Raw SQL,
+connector exceptions, job payload/progress, remote rows, keys, and credentials
+are never returned. Clients can poll this endpoint after reload to observe
+queued/running/retrying/failed/completed operational states instead of treating
+the POST's 202 response as completion (successful job status is `succeeded`).
+History survives retries and application restarts; an explicit dataset reset
+clears it along with jobs and source import receipts.
+
 Two surfaces:
 - `/api/*` for the UI, authenticated by session cookie (OIDC login), role-checked per route.
 - `/v1/*` for event ingestion, authenticated by a per-source write key.

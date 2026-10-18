@@ -9,7 +9,8 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { toast } from '@/hooks/use-toast';
 import { useDestinations, useDestinationActions } from '@/hooks/use-activations';
 import type { Destination } from '@/lib/activations';
-import { DEACTIVATE_DEST_COPY, DEST_TYPES, buildDestinationWrite, destinationFormErrors, destinationToForm, type DestinationForm } from './logic';
+import { SftpFields } from './sftp-fields';
+import { DEACTIVATE_DEST_COPY, DEST_TYPES, buildDestinationWrite, clearSftpSecrets, destinationFormErrors, destinationToForm, type DestinationForm } from './logic';
 import { ConfirmDialog, SkeletonRows, TypeBadge, apiToast, when } from './shared';
 
 export function DestinationsPanel({ isAdmin }: { isAdmin: boolean }) {
@@ -19,7 +20,10 @@ export function DestinationsPanel({ isAdmin }: { isAdmin: boolean }) {
   const [archiving, setArchiving] = useState<Destination | null>(null);
   const items = q.data?.items ?? [];
 
-  const runTest = (d: Destination) => test.mutate(d.id, {
+  const runTest = (d: Destination) => test.mutate(d.id, d.type === 'sftp' ? {
+    onSuccess: () => toast({ title: `Connected to ${d.name}`, description: 'Login, host-key pin and output directory stat succeeded. This does not prove write permission; the first run confirms it.' }),
+    onError: e => apiToast(`Connection test for ${d.name} failed`, e),
+  } : {
     onSuccess: r => toast({ title: r.delivered ? `Test delivered to ${d.name}` : `Test not delivered to ${d.name}`, description: r.delivered ? 'The endpoint accepted a signed sample payload with no profile data.' : 'The endpoint did not accept the test. Check the URL and headers.', variant: r.delivered ? undefined : 'destructive' }),
     onError: e => apiToast(`Test to ${d.name} failed`, e),
   });
@@ -40,12 +44,12 @@ export function DestinationsPanel({ isAdmin }: { isAdmin: boolean }) {
             : items.map(d => <tr key={d.id} className="h-8 border-t border-line hover:bg-surface-raised/60" data-testid={`row-destination-${d.id}`}>
               <td className="px-3"><span className="text-ink">{d.name}</span><span className="ml-2 font-mono text-[10px] text-ink-muted">#{d.id}</span></td>
               <td className="px-2"><TypeBadge type={d.type} /></td>
-              <td className="px-2 text-ink-muted max-w-[260px] truncate font-mono text-[11px]">{d.type === 'webhook' ? `${d.config.url ?? '—'} · ${d.config.mode ?? 'full'} · ${d.config.batch_size ?? 500}/batch` : d.type === 'csv' ? `delimiter "${d.config.delimiter === '\t' ? 'TAB' : d.config.delimiter ?? ','}" · PII ${d.config.include_pii ? 'included' : 'excluded'}` : 'hashed file, manual upload'}</td>
-              <td className="px-2 text-ink-muted text-[11px]">{d.type === 'webhook' ? <span className="inline-flex items-center gap-1">{d.has_secret ? <><Lock size={11} className="text-ok" /> secret ••••{d.secret_last4}</> : <span className="text-warn">unsigned</span>}{d.header_names.length > 0 && <span className="font-mono"> · {d.header_names.join(', ')}</span>}{d.config.allow_internal_network && <span className="text-warn inline-flex items-center gap-0.5"> · <ShieldAlert size={11} /> internal</span>}</span> : '—'}</td>
+              <td className="px-2 text-ink-muted max-w-[260px] truncate font-mono text-[11px]">{d.type === 'webhook' ? `${d.config.url ?? '—'} · ${d.config.mode ?? 'full'} · ${d.config.batch_size ?? 500}/batch` : d.type === 'sftp' ? `${d.config.output_dir ?? '—'} · ${d.config.export_kind ?? 'audience'}${d.config.gzip ? ' · gzip' : ''} · PII ${d.config.include_pii === false ? 'excluded' : 'included'}` : d.type === 'csv' ? `delimiter "${d.config.delimiter === '\t' ? 'TAB' : d.config.delimiter ?? ','}" · PII ${d.config.include_pii ? 'included' : 'excluded'}` : 'hashed file, manual upload'}</td>
+              <td className="px-2 text-ink-muted text-[11px]">{d.type === 'sftp' ? <span className="inline-flex items-center gap-1" data-testid={`text-credentials-${d.id}`}>{d.has_credentials ? <><Lock size={11} className="text-ok" /> key on file</> : <span className="text-warn">no credentials</span>}{d.config.export_kind === 'crosswalk' && <span className={d.config.approved_purpose ? 'text-ink-muted' : 'text-warn'}> · {d.config.approved_purpose ? 'purpose approved' : 'purpose missing'}</span>}</span> : d.type === 'webhook' ? <span className="inline-flex items-center gap-1">{d.has_secret ? <><Lock size={11} className="text-ok" /> secret ••••{d.secret_last4}</> : <span className="text-warn">unsigned</span>}{d.header_names.length > 0 && <span className="font-mono"> · {d.header_names.join(', ')}</span>}{d.config.allow_internal_network && <span className="text-warn inline-flex items-center gap-0.5"> · <ShieldAlert size={11} /> internal</span>}</span> : '—'}</td>
               <td className="px-2">{d.is_active ? <span className="text-ok">active</span> : <span className="text-ink-muted">inactive</span>}</td>
               <td className="px-2 text-ink-muted font-mono text-[11px]">{when(d.created_at)}</td>
               <td className="px-2 whitespace-nowrap">{isAdmin && <div className="flex gap-1">
-                {d.type === 'webhook' && <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" disabled={test.isPending} onClick={() => runTest(d)} data-testid={`button-test-destination-${d.id}`}><Send size={11} /> Test</Button>}
+                {(d.type === 'webhook' || (d.type === 'sftp' && d.has_credentials)) && <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" disabled={test.isPending} onClick={() => runTest(d)} title={d.type === 'sftp' ? 'Connection-only check: login, host key and output directory. Does not test write permission.' : undefined} data-testid={`button-test-destination-${d.id}`}><Send size={11} /> {d.type === 'sftp' ? 'Test connection' : 'Test'}</Button>}
                 <Button size="sm" variant="ghost" className="h-6 px-2" onClick={() => setEditing(d)} aria-label={`Edit ${d.name}`} data-testid={`button-edit-destination-${d.id}`}><Pencil size={11} /></Button>
                 <Button size="sm" variant="ghost" className="h-6 px-2 text-danger" onClick={() => setArchiving(d)} aria-label={`Deactivate ${d.name}`} title="Deactivate" data-testid={`button-deactivate-destination-${d.id}`}><Archive size={11} /></Button>
               </div>}</td>
@@ -70,11 +74,16 @@ function DestinationDialog({ destination, onClose }: { destination: Destination 
   const submit = () => {
     setTouched(true);
     if (Object.keys(errors).length) return;
-    save.mutate(buildDestinationWrite(f), { onSuccess: d => { toast({ title: `${destination ? 'Saved' : 'Created'} ${d.name}` }); onClose(); }, onError: e => apiToast('Save failed', e) });
+    const body = buildDestinationWrite(f);
+    save.mutate(body, {
+      // Secrets live only in this dialog's state: wipe them as soon as the request settles.
+      onSuccess: d => { setF(p => ({ ...p, secret: '', sftp: clearSftpSecrets(p.sftp) })); toast({ title: `${destination ? 'Saved' : 'Created'} ${d.name}` }); onClose(); },
+      onError: e => apiToast('Save failed', e),
+    });
   };
   const err = (k: string) => touched && errors[k] ? <p className="text-danger text-[11px] mt-0.5" data-testid={`error-${k}`}>{errors[k]}</p> : null;
 
-  return <Dialog open onOpenChange={o => !o && onClose()}>
+  return <Dialog open onOpenChange={o => { if (!o) { setF(p => ({ ...p, secret: '', sftp: clearSftpSecrets(p.sftp) })); onClose(); } }}>
     <DialogContent className="bg-surface border-line max-w-xl max-h-[90dvh] overflow-y-auto">
       <DialogHeader><DialogTitle className="kin-heading">{destination ? `Edit ${destination.name}` : 'New destination'}</DialogTitle>
         <DialogDescription className="text-ink-muted text-[12px]">Nothing is sent while you edit. Webhook tests run only when you click Test.</DialogDescription></DialogHeader>
@@ -96,6 +105,7 @@ function DestinationDialog({ destination, onClose }: { destination: Destination 
               <option value=",">Comma ,</option><option value=";">Semicolon ;</option><option value="|">Pipe |</option><option value={'\t'}>Tab</option></select>{err('delimiter')}</div>
           <div><Label className="text-[11px] text-ink-muted">PII columns</Label><div className="h-8 flex items-center gap-2"><Switch checked={f.include_pii} onCheckedChange={v => set('include_pii', v)} data-testid="switch-include-pii" /><span className="text-[12px] text-ink-muted">{f.include_pii ? 'Email, phone, names allowed' : 'PII fields blocked from mapping'}</span></div></div>
         </div>}
+        {f.type === 'sftp' && <SftpFields value={f.sftp} includePii={f.include_pii} onIncludePii={v => set('include_pii', v)} onChange={v => set('sftp', v)} hasCredentials={!!destination?.has_credentials} editing={!!destination} errors={touched ? errors : {}} />}
         {f.type === 'webhook' && <>
           <div><Label htmlFor="d-url" className="text-[11px] text-ink-muted">URL (POST)</Label><Input id="d-url" className="h-8 font-mono text-[12px]" placeholder="https://partner.example.org/audiences" value={f.url} onChange={e => set('url', e.target.value)} data-testid="input-webhook-url" />{err('url')}</div>
           <div className="grid grid-cols-2 gap-3">

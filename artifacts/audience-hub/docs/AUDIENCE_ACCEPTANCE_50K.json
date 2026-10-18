@@ -1,0 +1,1266 @@
+{
+  "as_of": "2026-10-17",
+  "denominator": 7807899,
+  "status": "passed",
+  "templates": [
+    {
+      "key": "all-tbn-reference",
+      "name": "All TBN Reference",
+      "definition": {
+        "root": {
+          "op": "and",
+          "rules": [
+            {
+              "type": "profile",
+              "field": "master_id",
+              "operator": "exists"
+            }
+          ],
+          "negate": false
+        },
+        "version": 1
+      },
+      "count": 50000,
+      "oracle_count": 50000,
+      "oracle_sql": "SELECT id FROM audit_people p WHERE master_id IS NOT NULL",
+      "oracle_ms": 60.58322200078692,
+      "missing_count": 0,
+      "unexpected_count": 0,
+      "missing_sample": [],
+      "unexpected_sample": [],
+      "expected": 50000,
+      "tolerance": 10000,
+      "pass": true,
+      "count_cold_ms": 351.5203269998892,
+      "count_warm_ms": [
+        20.441156999368104,
+        17.214192999745137,
+        15.407008000693168
+      ],
+      "preview_cold_ms": 16.289786999550415,
+      "preview_warm_ms": [
+        16.617250999843236,
+        16.694898999048746,
+        16.255757000180893
+      ],
+      "preview_warm_median_ms": 16.617250999843236,
+      "sample_ms": 89.84049299942853,
+      "sample_rows": 25,
+      "materialize_ms": 1375.7998029996088,
+      "materialized_count": 50000,
+      "materialized_identity_match": true
+    },
+    {
+      "key": "has-active-email",
+      "name": "Has Active Email",
+      "definition": {
+        "root": {
+          "op": "and",
+          "rules": [
+            {
+              "type": "attribute",
+              "field": "has_active_email",
+              "operator": "is_true"
+            }
+          ],
+          "negate": false
+        },
+        "version": 1
+      },
+      "count": 28659,
+      "oracle_count": 28659,
+      "oracle_sql": "SELECT id FROM audit_people p WHERE attrs->>'has_active_email'='true'",
+      "oracle_ms": 72.87196099969151,
+      "missing_count": 0,
+      "unexpected_count": 0,
+      "missing_sample": [],
+      "unexpected_sample": [],
+      "expected": 28658.529010172904,
+      "tolerance": 5731.705802034581,
+      "pass": true,
+      "count_cold_ms": 562.94465999963,
+      "count_warm_ms": [
+        435.1639439992141,
+        427.44193299949984,
+        406.5076909992058
+      ],
+      "preview_cold_ms": 424.93243900025846,
+      "preview_warm_ms": [
+        415.0368390000949,
+        394.71994300038205,
+        396.2419899999077
+      ],
+      "preview_warm_median_ms": 396.2419899999077,
+      "sample_ms": 1033.7892019997525,
+      "sample_rows": 25,
+      "materialize_ms": 956.0451979996287,
+      "materialized_count": 28659,
+      "materialized_identity_match": true
+    },
+    {
+      "key": "active-120-days",
+      "name": "Active (120 days)",
+      "definition": {
+        "root": {
+          "op": "and",
+          "rules": [
+            {
+              "op": "or",
+              "rules": [
+                {
+                  "type": "attribute",
+                  "field": "last_seen",
+                  "value": 120,
+                  "operator": "within_previous_days"
+                },
+                {
+                  "type": "attribute",
+                  "field": "last_contact",
+                  "value": 120,
+                  "operator": "within_previous_days"
+                }
+              ],
+              "negate": false
+            }
+          ],
+          "negate": false
+        },
+        "version": 1
+      },
+      "count": 18585,
+      "oracle_count": 18585,
+      "oracle_sql": "SELECT id FROM audit_people p WHERE (NULLIF(attrs->>'last_seen','')::timestamptz>=:active AND NULLIF(attrs->>'last_seen','')::timestamptz<:as_of) OR (NULLIF(attrs->>'last_contact','')::timestamptz>=:active AND NULLIF(attrs->>'last_contact','')::timestamptz<:as_of)",
+      "oracle_ms": 136.40641500023776,
+      "missing_count": 0,
+      "unexpected_count": 0,
+      "missing_sample": [],
+      "unexpected_sample": [],
+      "expected": 18584.935588946526,
+      "tolerance": 3716.9871177893056,
+      "pass": true,
+      "count_cold_ms": 1108.3497480012738,
+      "count_warm_ms": [
+        725.844740998582,
+        810.2235509995808,
+        719.2076449991873
+      ],
+      "preview_cold_ms": 774.9112809997314,
+      "preview_warm_ms": [
+        804.394996001065,
+        742.1175859999494,
+        787.3668050015112
+      ],
+      "preview_warm_median_ms": 787.3668050015112,
+      "sample_ms": 1649.3854220007051,
+      "sample_rows": 25,
+      "materialize_ms": 1341.5872770001442,
+      "materialized_count": 18585,
+      "materialized_identity_match": true
+    },
+    {
+      "key": "tbn-plus-subscription",
+      "name": "TBN Plus Subscription",
+      "definition": {
+        "root": {
+          "op": "and",
+          "rules": [
+            {
+              "type": "attribute",
+              "field": "tbn_plus_subscription",
+              "value": [
+                "basic",
+                "premium_monthly",
+                "premium_annual"
+              ],
+              "operator": "in"
+            }
+          ],
+          "negate": false
+        },
+        "version": 1
+      },
+      "count": 13364,
+      "oracle_count": 13364,
+      "oracle_sql": "SELECT id FROM audit_people p WHERE attrs->>'tbn_plus_subscription' IN ('basic','premium_monthly','premium_annual')",
+      "oracle_ms": 69.83670899899153,
+      "missing_count": 0,
+      "unexpected_count": 0,
+      "missing_sample": [],
+      "unexpected_sample": [],
+      "expected": 13363.370863275768,
+      "tolerance": 2672.6741726551536,
+      "pass": true,
+      "count_cold_ms": 435.71173999953317,
+      "count_warm_ms": [
+        357.4602899989259,
+        347.5170790006814,
+        361.28399900007935
+      ],
+      "preview_cold_ms": 343.88949099957244,
+      "preview_warm_ms": [
+        354.4529849987157,
+        346.92801399978634,
+        374.34526499964704
+      ],
+      "preview_warm_median_ms": 354.4529849987157,
+      "sample_ms": 917.0468369993614,
+      "sample_rows": 25,
+      "materialize_ms": 805.8966209991922,
+      "materialized_count": 13364,
+      "materialized_identity_match": true
+    },
+    {
+      "key": "tbn-plus-free-users",
+      "name": "TBN Plus Free Users",
+      "definition": {
+        "root": {
+          "op": "and",
+          "rules": [
+            {
+              "type": "attribute",
+              "field": "tbn_plus_subscription",
+              "value": "basic",
+              "operator": "eq"
+            }
+          ],
+          "negate": false
+        },
+        "version": 1
+      },
+      "count": 13131,
+      "oracle_count": 13131,
+      "oracle_sql": "SELECT id FROM audit_people p WHERE attrs->>'tbn_plus_subscription'='basic'",
+      "oracle_ms": 67.67010300063703,
+      "missing_count": 0,
+      "unexpected_count": 0,
+      "missing_sample": [],
+      "unexpected_sample": [],
+      "expected": 13130.779483699776,
+      "tolerance": 2626.1558967399556,
+      "pass": true,
+      "count_cold_ms": 885.3536509996047,
+      "count_warm_ms": [
+        652.8592009999556,
+        864.5166989990685,
+        384.41907100059325
+      ],
+      "preview_cold_ms": 390.01869399908173,
+      "preview_warm_ms": [
+        379.8999840000761,
+        398.6825449992466,
+        395.9113900000375
+      ],
+      "preview_warm_median_ms": 395.9113900000375,
+      "sample_ms": 895.6783289995656,
+      "sample_rows": 25,
+      "materialize_ms": 1710.0820960004057,
+      "materialized_count": 13131,
+      "materialized_identity_match": true
+    },
+    {
+      "key": "tbn-plus-premium",
+      "name": "TBN Plus Premium",
+      "definition": {
+        "root": {
+          "op": "and",
+          "rules": [
+            {
+              "type": "attribute",
+              "field": "tbn_plus_subscription",
+              "value": [
+                "premium_monthly",
+                "premium_annual"
+              ],
+              "operator": "in"
+            }
+          ],
+          "negate": false
+        },
+        "version": 1
+      },
+      "count": 233,
+      "oracle_count": 233,
+      "oracle_sql": "SELECT id FROM audit_people p WHERE attrs->>'tbn_plus_subscription' IN ('premium_monthly','premium_annual')",
+      "oracle_ms": 47.06049700143922,
+      "missing_count": 0,
+      "unexpected_count": 0,
+      "missing_sample": [],
+      "unexpected_sample": [],
+      "expected": 232.59137957599094,
+      "tolerance": 46.51827591519819,
+      "pass": true,
+      "count_cold_ms": 2650.542473000314,
+      "count_warm_ms": [
+        1137.6654190007685,
+        866.0381730005611,
+        868.6559800007672
+      ],
+      "preview_cold_ms": 1107.0541110002523,
+      "preview_warm_ms": [
+        1085.771145999388,
+        741.3916599998629,
+        531.430402001206
+      ],
+      "preview_warm_median_ms": 741.3916599998629,
+      "sample_ms": 1640.6969979998394,
+      "sample_rows": 25,
+      "materialize_ms": 469.72901499975706,
+      "materialized_count": 233,
+      "materialized_identity_match": true
+    },
+    {
+      "key": "premium-upgraders",
+      "name": "Premium Upgraders",
+      "definition": {
+        "root": {
+          "op": "and",
+          "rules": [
+            {
+              "type": "attribute",
+              "field": "tbn_plus_subscription_update",
+              "value": "Upgrade",
+              "operator": "starts_with"
+            }
+          ],
+          "negate": false
+        },
+        "version": 1
+      },
+      "count": 56,
+      "oracle_count": 56,
+      "oracle_sql": "SELECT id FROM audit_people p WHERE attrs->>'tbn_plus_subscription_update' LIKE 'Upgrade%'",
+      "oracle_ms": 47.51303699958953,
+      "missing_count": 0,
+      "unexpected_count": 0,
+      "missing_sample": [],
+      "unexpected_sample": [],
+      "expected": 56.16107482947717,
+      "tolerance": 25,
+      "pass": true,
+      "count_cold_ms": 500.05434100057755,
+      "count_warm_ms": [
+        380.47601000107534,
+        396.73916599895165,
+        456.7102410001098
+      ],
+      "preview_cold_ms": 480.4075069987448,
+      "preview_warm_ms": [
+        368.05138400086435,
+        598.4370930000296,
+        371.1759859997983
+      ],
+      "preview_warm_median_ms": 371.1759859997983,
+      "sample_ms": 1142.8067850010848,
+      "sample_rows": 25,
+      "materialize_ms": 420.1778330007073,
+      "materialized_count": 56,
+      "materialized_identity_match": true
+    },
+    {
+      "key": "tbn-app-non-donors",
+      "name": "TBN App Non-Donors",
+      "definition": {
+        "root": {
+          "op": "and",
+          "rules": [
+            {
+              "type": "attribute",
+              "field": "tbn_plus_subscription",
+              "value": [
+                "basic",
+                "premium_monthly",
+                "premium_annual"
+              ],
+              "operator": "in"
+            },
+            {
+              "op": "and",
+              "rules": [
+                {
+                  "type": "attribute",
+                  "field": "donor_account_number",
+                  "operator": "exists"
+                }
+              ],
+              "negate": true
+            },
+            {
+              "op": "and",
+              "rules": [
+                {
+                  "name": "donation",
+                  "type": "event",
+                  "window": {
+                    "days": 720,
+                    "kind": "previous_days"
+                  },
+                  "operator": "is_true",
+                  "aggregate": "exists"
+                }
+              ],
+              "negate": true
+            }
+          ],
+          "negate": false
+        },
+        "version": 1
+      },
+      "count": 12295,
+      "oracle_count": 12295,
+      "oracle_sql": "SELECT id FROM audit_people p WHERE attrs->>'tbn_plus_subscription' IN ('basic','premium_monthly','premium_annual') AND NOT (NULLIF(btrim(attrs->>'donor_account_number'),'') IS NOT NULL) AND NOT (p.id IN (SELECT profile_id FROM events WHERE name='donation' AND occurred_at>=:app AND occurred_at<:as_of))",
+      "oracle_ms": 71.08438999966893,
+      "missing_count": 0,
+      "unexpected_count": 0,
+      "missing_sample": [],
+      "unexpected_sample": [],
+      "expected": 12295.27303055534,
+      "tolerance": 2459.054606111068,
+      "pass": true,
+      "count_cold_ms": 487.6090819998353,
+      "count_warm_ms": [
+        696.6689119999501,
+        710.3662640001858,
+        672.1355469999253
+      ],
+      "preview_cold_ms": 1036.1148089996277,
+      "preview_warm_ms": [
+        976.4730919996509,
+        972.8165930009709,
+        638.8184549996367
+      ],
+      "preview_warm_median_ms": 972.8165930009709,
+      "sample_ms": 1136.966432999543,
+      "sample_rows": 25,
+      "materialize_ms": 1408.0560090005747,
+      "materialized_count": 12295,
+      "materialized_identity_match": true
+    },
+    {
+      "key": "tbn-app-donors",
+      "name": "TBN App Donors",
+      "definition": {
+        "root": {
+          "op": "and",
+          "rules": [
+            {
+              "type": "attribute",
+              "field": "tbn_plus_subscription",
+              "value": [
+                "basic",
+                "premium_monthly",
+                "premium_annual"
+              ],
+              "operator": "in"
+            },
+            {
+              "name": "donation",
+              "type": "event",
+              "window": {
+                "days": 720,
+                "kind": "previous_days"
+              },
+              "operator": "is_true",
+              "aggregate": "exists"
+            }
+          ],
+          "negate": false
+        },
+        "version": 1
+      },
+      "count": 108,
+      "oracle_count": 108,
+      "oracle_sql": "SELECT id FROM audit_people p WHERE attrs->>'tbn_plus_subscription' IN ('basic','premium_monthly','premium_annual') AND p.id IN (SELECT profile_id FROM events WHERE name='donation' AND occurred_at>=:app AND occurred_at<:as_of)",
+      "oracle_ms": 27.538401000128943,
+      "missing_count": 0,
+      "unexpected_count": 0,
+      "missing_sample": [],
+      "unexpected_sample": [],
+      "expected": 107.93556627717649,
+      "tolerance": 25,
+      "pass": true,
+      "count_cold_ms": 33.88709499995457,
+      "count_warm_ms": [
+        23.841264999646228,
+        25.281274000008125,
+        16.406276999987313
+      ],
+      "preview_cold_ms": 17.26795700051298,
+      "preview_warm_ms": [
+        23.435984001480392,
+        15.142234000450117,
+        15.112540999325574
+      ],
+      "preview_warm_median_ms": 15.142234000450117,
+      "sample_ms": 118.28675600008864,
+      "sample_rows": 25,
+      "materialize_ms": 156.5995599994494,
+      "materialized_count": 108,
+      "materialized_identity_match": true
+    },
+    {
+      "key": "basic-donors",
+      "name": "Basic Donors",
+      "definition": {
+        "root": {
+          "op": "and",
+          "rules": [
+            {
+              "type": "attribute",
+              "field": "tbn_plus_subscription",
+              "value": "basic",
+              "operator": "eq"
+            },
+            {
+              "type": "attribute",
+              "field": "donor_account_number",
+              "operator": "exists"
+            },
+            {
+              "type": "attribute",
+              "field": "lifetime_amount",
+              "value": 0,
+              "operator": "gt"
+            }
+          ],
+          "negate": false
+        },
+        "version": 1
+      },
+      "count": 462,
+      "oracle_count": 462,
+      "oracle_sql": "SELECT id FROM audit_people p WHERE attrs->>'tbn_plus_subscription'='basic' AND NULLIF(btrim(attrs->>'donor_account_number'),'') IS NOT NULL AND NULLIF(attrs->>'lifetime_amount','')::numeric>0",
+      "oracle_ms": 139.79635599935136,
+      "missing_count": 0,
+      "unexpected_count": 0,
+      "missing_sample": [],
+      "unexpected_sample": [],
+      "expected": 461.7119150747211,
+      "tolerance": 92.34238301494423,
+      "pass": true,
+      "count_cold_ms": 1039.787133999198,
+      "count_warm_ms": [
+        701.4032869992661,
+        935.0159250006982,
+        663.0645729983371
+      ],
+      "preview_cold_ms": 993.0434560010326,
+      "preview_warm_ms": [
+        696.0436780009331,
+        729.8022069990111,
+        452.0440510004846
+      ],
+      "preview_warm_median_ms": 696.0436780009331,
+      "sample_ms": 954.253140000219,
+      "sample_rows": 25,
+      "materialize_ms": 483.29760499836993,
+      "materialized_count": 462,
+      "materialized_identity_match": true
+    },
+    {
+      "key": "basic-recurring-donors",
+      "name": "Basic Recurring Donors",
+      "definition": {
+        "root": {
+          "op": "and",
+          "rules": [
+            {
+              "type": "attribute",
+              "field": "tbn_plus_subscription",
+              "value": "basic",
+              "operator": "eq"
+            },
+            {
+              "type": "attribute",
+              "field": "has_recurring_donation",
+              "operator": "is_true"
+            }
+          ],
+          "negate": false
+        },
+        "version": 1
+      },
+      "count": 30,
+      "oracle_count": 30,
+      "oracle_sql": "SELECT id FROM audit_people p WHERE attrs->>'tbn_plus_subscription'='basic' AND attrs->>'has_recurring_donation'='true'",
+      "oracle_ms": 50.722632000542944,
+      "missing_count": 0,
+      "unexpected_count": 0,
+      "missing_sample": [],
+      "unexpected_sample": [],
+      "expected": 29.828766996089474,
+      "tolerance": 25,
+      "pass": true,
+      "count_cold_ms": 728.0787100007728,
+      "count_warm_ms": [
+        450.88793900140445,
+        445.2846830008639,
+        444.9304200006736
+      ],
+      "preview_cold_ms": 475.7924400000775,
+      "preview_warm_ms": [
+        423.39862900007574,
+        437.8961269994761,
+        428.5917209999752
+      ],
+      "preview_warm_median_ms": 428.5917209999752,
+      "sample_ms": 1171.026988000449,
+      "sample_rows": 25,
+      "materialize_ms": 472.854699999516,
+      "materialized_count": 30,
+      "materialized_identity_match": true
+    },
+    {
+      "key": "basic-one-time-donors",
+      "name": "Basic One-Time Donors",
+      "definition": {
+        "root": {
+          "op": "and",
+          "rules": [
+            {
+              "type": "attribute",
+              "field": "tbn_plus_subscription",
+              "value": "basic",
+              "operator": "eq"
+            },
+            {
+              "type": "attribute",
+              "field": "rfm_raw_frequency",
+              "value": 1,
+              "operator": "eq"
+            }
+          ],
+          "negate": false
+        },
+        "version": 1
+      },
+      "count": 72,
+      "oracle_count": 72,
+      "oracle_sql": "SELECT id FROM audit_people p WHERE attrs->>'tbn_plus_subscription'='basic' AND NULLIF(attrs->>'rfm_raw_frequency','')::numeric=1",
+      "oracle_ms": 47.29465099990193,
+      "missing_count": 0,
+      "unexpected_count": 0,
+      "missing_sample": [],
+      "unexpected_sample": [],
+      "expected": 71.57495249362216,
+      "tolerance": 25,
+      "pass": true,
+      "count_cold_ms": 442.7050530011911,
+      "count_warm_ms": [
+        442.41089899878716,
+        492.94896500032337,
+        414.95883599964145
+      ],
+      "preview_cold_ms": 430.83073100024194,
+      "preview_warm_ms": [
+        420.7902189991728,
+        420.1121290006995,
+        449.29400000000896
+      ],
+      "preview_warm_median_ms": 420.7902189991728,
+      "sample_ms": 1088.9519500015012,
+      "sample_rows": 25,
+      "materialize_ms": 470.2050429987139,
+      "materialized_count": 72,
+      "materialized_identity_match": true
+    },
+    {
+      "key": "rfm-all-donors",
+      "name": "RFM TBN All Donor Reference",
+      "definition": {
+        "root": {
+          "op": "and",
+          "rules": [
+            {
+              "type": "attribute",
+              "field": "donor_account_status",
+              "operator": "exists"
+            },
+            {
+              "type": "attribute",
+              "field": "rfm_date",
+              "operator": "exists"
+            }
+          ],
+          "negate": false
+        },
+        "version": 1
+      },
+      "count": 11268,
+      "oracle_count": 11268,
+      "oracle_sql": "SELECT id FROM audit_people p WHERE NULLIF(btrim(attrs->>'donor_account_status'),'') IS NOT NULL AND NULLIF(btrim(attrs->>'rfm_date'),'') IS NOT NULL",
+      "oracle_ms": 100.19211100006942,
+      "missing_count": 0,
+      "unexpected_count": 0,
+      "missing_sample": [],
+      "unexpected_sample": [],
+      "expected": 11268.236179796895,
+      "tolerance": 2253.647235959379,
+      "pass": true,
+      "count_cold_ms": 533.6112969998794,
+      "count_warm_ms": [
+        474.36638200088055,
+        522.8437620007753,
+        511.42722700024024
+      ],
+      "preview_cold_ms": 519.6096119998401,
+      "preview_warm_ms": [
+        493.7765849990683,
+        496.3101019984606,
+        497.615696000139
+      ],
+      "preview_warm_median_ms": 496.3101019984606,
+      "sample_ms": 1067.9477459998452,
+      "sample_rows": 25,
+      "materialize_ms": 1051.6432419990451,
+      "materialized_count": 11268,
+      "materialized_identity_match": true
+    },
+    {
+      "key": "rfm-lapsed-donors",
+      "name": "RFM Lapsed Donors",
+      "definition": {
+        "root": {
+          "op": "and",
+          "rules": [
+            {
+              "type": "attribute",
+              "field": "rfm_recency_score",
+              "value": 0,
+              "operator": "eq"
+            }
+          ],
+          "negate": false
+        },
+        "version": 1
+      },
+      "count": 10299,
+      "oracle_count": 10299,
+      "oracle_sql": "SELECT id FROM audit_people p WHERE NULLIF(attrs->>'rfm_recency_score','')::numeric=0",
+      "oracle_ms": 61.39726800029166,
+      "missing_count": 0,
+      "unexpected_count": 0,
+      "missing_sample": [],
+      "unexpected_sample": [],
+      "expected": 10299.134248534721,
+      "tolerance": 2059.8268497069444,
+      "pass": true,
+      "count_cold_ms": 453.0571390005207,
+      "count_warm_ms": [
+        378.700747000039,
+        363.25223200037726,
+        361.27977300020575
+      ],
+      "preview_cold_ms": 406.75575400018715,
+      "preview_warm_ms": [
+        385.5110770000465,
+        371.0791320008866,
+        378.8760130009905
+      ],
+      "preview_warm_median_ms": 378.8760130009905,
+      "sample_ms": 808.0781640001078,
+      "sample_rows": 25,
+      "materialize_ms": 937.1559379997052,
+      "materialized_count": 10299,
+      "materialized_identity_match": true
+    },
+    {
+      "key": "partner-names-non-donors",
+      "name": "Partner Names Non-Donors",
+      "definition": {
+        "root": {
+          "op": "and",
+          "rules": [
+            {
+              "type": "attribute",
+              "field": "donor_account_number",
+              "operator": "exists"
+            },
+            {
+              "op": "and",
+              "rules": [
+                {
+                  "type": "attribute",
+                  "field": "rfm_date",
+                  "operator": "exists"
+                }
+              ],
+              "negate": true
+            }
+          ],
+          "negate": false
+        },
+        "version": 1
+      },
+      "count": 3827,
+      "oracle_count": 3827,
+      "oracle_sql": "SELECT id FROM audit_people p WHERE NULLIF(btrim(attrs->>'donor_account_number'),'') IS NOT NULL AND NOT (NULLIF(btrim(attrs->>'rfm_date'),'') IS NOT NULL)",
+      "oracle_ms": 81.62304799952835,
+      "missing_count": 0,
+      "unexpected_count": 0,
+      "missing_sample": [],
+      "unexpected_sample": [],
+      "expected": 3827.1371082028595,
+      "tolerance": 765.427421640572,
+      "pass": true,
+      "count_cold_ms": 503.04162400061614,
+      "count_warm_ms": [
+        479.2869929988228,
+        496.92837800103007,
+        570.857642998817
+      ],
+      "preview_cold_ms": 507.5011810004071,
+      "preview_warm_ms": [
+        495.49665300037304,
+        507.1176250003191,
+        455.2287290007371
+      ],
+      "preview_warm_median_ms": 495.49665300037304,
+      "sample_ms": 1090.7601409999188,
+      "sample_rows": 25,
+      "materialize_ms": 730.6752849999611,
+      "materialized_count": 3827,
+      "materialized_identity_match": true
+    },
+    {
+      "key": "donors-past-30-days",
+      "name": "Donors Past 30 Days",
+      "definition": {
+        "root": {
+          "op": "and",
+          "rules": [
+            {
+              "name": "donation",
+              "type": "event",
+              "window": {
+                "days": 30,
+                "kind": "previous_days"
+              },
+              "operator": "is_true",
+              "aggregate": "exists"
+            }
+          ],
+          "negate": false
+        },
+        "version": 1
+      },
+      "count": 121,
+      "oracle_count": 121,
+      "oracle_sql": "SELECT id FROM audit_people p WHERE p.id IN (SELECT profile_id FROM events WHERE name='donation' AND occurred_at>=:recent AND occurred_at<:as_of)",
+      "oracle_ms": 42.11896000015258,
+      "missing_count": 0,
+      "unexpected_count": 0,
+      "missing_sample": [],
+      "unexpected_sample": [],
+      "expected": 121.30664087739865,
+      "tolerance": 25,
+      "pass": true,
+      "count_cold_ms": 14.105402000495815,
+      "count_warm_ms": [
+        13.869500999135198,
+        11.180210000020452,
+        9.727225000460749
+      ],
+      "preview_cold_ms": 10.333725000236882,
+      "preview_warm_ms": [
+        10.235861000182922,
+        11.371888000212493,
+        9.626085000491003
+      ],
+      "preview_warm_median_ms": 10.235861000182922,
+      "sample_ms": 35.862190001353156,
+      "sample_rows": 25,
+      "materialize_ms": 27.91682600036438,
+      "materialized_count": 121,
+      "materialized_identity_match": true
+    },
+    {
+      "key": "living-legacy-prospects-v2",
+      "name": "Living Legacy Prospects V2",
+      "definition": {
+        "root": {
+          "op": "and",
+          "rules": [
+            {
+              "type": "attribute",
+              "field": "donation_likelihood_prob",
+              "value": 0.75,
+              "operator": "gt"
+            },
+            {
+              "type": "attribute",
+              "field": "wealth_score",
+              "value": 4,
+              "operator": "gt"
+            },
+            {
+              "type": "attribute",
+              "field": "amt_suggested",
+              "value": 500,
+              "operator": "gt"
+            },
+            {
+              "name": "donation",
+              "type": "event",
+              "window": {
+                "kind": "previous_years",
+                "years": 5
+              },
+              "operator": "is_true",
+              "aggregate": "exists"
+            }
+          ],
+          "negate": false
+        },
+        "version": 1
+      },
+      "count": 5,
+      "oracle_count": 5,
+      "oracle_sql": "SELECT id FROM audit_people p WHERE NULLIF(attrs->>'donation_likelihood_prob','')::numeric>.75 AND NULLIF(attrs->>'wealth_score','')::numeric>4 AND NULLIF(attrs->>'amt_suggested','')::numeric>500 AND p.id IN (SELECT profile_id FROM events WHERE name='donation' AND occurred_at>=:start AND occurred_at<:as_of)",
+      "oracle_ms": 74.81355399977474,
+      "missing_count": 0,
+      "unexpected_count": 0,
+      "missing_sample": [],
+      "unexpected_sample": [],
+      "expected": 5.0461718318846085,
+      "tolerance": 25,
+      "pass": true,
+      "count_cold_ms": 212.102800998764,
+      "count_warm_ms": [
+        156.20923900132766,
+        156.93019799982721,
+        141.32472300116206
+      ],
+      "preview_cold_ms": 190.02324199936993,
+      "preview_warm_ms": [
+        188.81182499899296,
+        144.50504900014494,
+        149.50428300107887
+      ],
+      "preview_warm_median_ms": 149.50428300107887,
+      "sample_ms": 396.0029299996677,
+      "sample_rows": 5,
+      "materialize_ms": 258.7827360002848,
+      "materialized_count": 5,
+      "materialized_identity_match": true
+    },
+    {
+      "key": "giving-tuesday-2024",
+      "name": "Giving Tuesday 2024",
+      "definition": {
+        "root": {
+          "op": "and",
+          "rules": [
+            {
+              "name": "donation",
+              "type": "event",
+              "where": {
+                "properties.source_code": {
+                  "value": [
+                    "T4XWDGT",
+                    "T4XPCGT",
+                    "T4YWDGT",
+                    "T4YPCGT"
+                  ],
+                  "operator": "in"
+                }
+              },
+              "window": {
+                "to": "2024-12-03",
+                "from": "2024-12-03",
+                "kind": "between"
+              },
+              "operator": "is_true",
+              "aggregate": "exists"
+            }
+          ],
+          "negate": false
+        },
+        "version": 1
+      },
+      "count": 5,
+      "oracle_count": 5,
+      "oracle_sql": "SELECT id FROM audit_people p WHERE p.id IN (SELECT profile_id FROM events WHERE name='donation' AND occurred_at >= TIMESTAMPTZ '2024-12-03 00:00:00+00' AND occurred_at < TIMESTAMPTZ '2024-12-04 00:00:00+00' AND properties->>'source_code' IN ('T4XWDGT','T4XPCGT','T4YWDGT','T4YPCGT'))",
+      "oracle_ms": 2.531550999265164,
+      "missing_count": 0,
+      "unexpected_count": 0,
+      "missing_sample": [],
+      "unexpected_sample": [],
+      "expected": 4.5082550376227974,
+      "tolerance": 25,
+      "pass": true,
+      "count_cold_ms": 22.17902699885599,
+      "count_warm_ms": [
+        15.527409999776864,
+        13.883378000173252,
+        11.306616999718244
+      ],
+      "preview_cold_ms": 14.735581999048009,
+      "preview_warm_ms": [
+        19.329378999827895,
+        13.917850999860093,
+        11.658049999823561
+      ],
+      "preview_warm_median_ms": 13.917850999860093,
+      "sample_ms": 44.61276999973052,
+      "sample_rows": 5,
+      "materialize_ms": 33.69039700010035,
+      "materialized_count": 5,
+      "materialized_identity_match": true
+    },
+    {
+      "key": "mobile-subscribed",
+      "name": "Mobile Subscribed",
+      "definition": {
+        "root": {
+          "op": "and",
+          "rules": [
+            {
+              "type": "attribute",
+              "field": "mobile_mktg_optin_tbn",
+              "operator": "is_true"
+            },
+            {
+              "type": "profile",
+              "field": "phone",
+              "operator": "exists"
+            }
+          ],
+          "negate": false
+        },
+        "version": 1
+      },
+      "count": 571,
+      "oracle_count": 571,
+      "oracle_sql": "SELECT id FROM audit_people p WHERE attrs->>'mobile_mktg_optin_tbn'='true' AND phone IS NOT NULL",
+      "oracle_ms": 25.981568000133848,
+      "missing_count": 0,
+      "unexpected_count": 0,
+      "missing_sample": [],
+      "unexpected_sample": [],
+      "expected": 571.2228091065215,
+      "tolerance": 114.2445618213043,
+      "pass": true,
+      "count_cold_ms": 68.41164999968896,
+      "count_warm_ms": [
+        56.48055099845806,
+        51.03724299988244,
+        51.193187000535545
+      ],
+      "preview_cold_ms": 60.498615999676986,
+      "preview_warm_ms": [
+        70.07916899965494,
+        51.92230400098197,
+        53.48869399858813
+      ],
+      "preview_warm_median_ms": 53.48869399858813,
+      "sample_ms": 119.3050170004426,
+      "sample_rows": 25,
+      "materialize_ms": 198.37327000095684,
+      "materialized_count": 571,
+      "materialized_identity_match": true
+    },
+    {
+      "key": "call-center-sms-optins",
+      "name": "Call Center SMS Opt-ins",
+      "definition": {
+        "root": {
+          "op": "and",
+          "rules": [
+            {
+              "type": "attribute",
+              "field": "tbn_call_center_sms_optin",
+              "operator": "is_true"
+            },
+            {
+              "type": "profile",
+              "field": "phone",
+              "operator": "exists"
+            }
+          ],
+          "negate": false
+        },
+        "version": 1
+      },
+      "count": 958,
+      "oracle_count": 958,
+      "oracle_sql": "SELECT id FROM audit_people p WHERE attrs->>'tbn_call_center_sms_optin'='true' AND phone IS NOT NULL",
+      "oracle_ms": 33.369898999808356,
+      "missing_count": 0,
+      "unexpected_count": 0,
+      "missing_sample": [],
+      "unexpected_sample": [],
+      "expected": 957.844101210838,
+      "tolerance": 191.5688202421676,
+      "pass": true,
+      "count_cold_ms": 76.48184899881016,
+      "count_warm_ms": [
+        62.34459400002379,
+        73.87758900040353,
+        75.91932100149279
+      ],
+      "preview_cold_ms": 71.39704399924085,
+      "preview_warm_ms": [
+        50.91231400001561,
+        75.11717400120688,
+        56.27657700097188
+      ],
+      "preview_warm_median_ms": 56.27657700097188,
+      "sample_ms": 120.41277599928435,
+      "sample_rows": 25,
+      "materialize_ms": 201.99184599914588,
+      "materialized_count": 958,
+      "materialized_identity_match": true
+    },
+    {
+      "key": "sms-optout-date",
+      "name": "SMS Opt-Out Date Exists",
+      "definition": {
+        "root": {
+          "op": "and",
+          "rules": [
+            {
+              "type": "attribute",
+              "field": "mobile_mktg_optout_date_tbn",
+              "operator": "exists"
+            }
+          ],
+          "negate": false
+        },
+        "version": 1
+      },
+      "count": 252,
+      "oracle_count": 252,
+      "oracle_sql": "SELECT id FROM audit_people p WHERE NULLIF(btrim(attrs->>'mobile_mktg_optout_date_tbn'),'') IS NOT NULL",
+      "oracle_ms": 47.005324999190634,
+      "missing_count": 0,
+      "unexpected_count": 0,
+      "missing_sample": [],
+      "unexpected_sample": [],
+      "expected": 251.70023331500573,
+      "tolerance": 50.34004666300115,
+      "pass": true,
+      "count_cold_ms": 470.4931679989386,
+      "count_warm_ms": [
+        331.0265590007475,
+        367.0957920003275,
+        329.5225059991935
+      ],
+      "preview_cold_ms": 377.9242399996292,
+      "preview_warm_ms": [
+        363.6792629986303,
+        358.5356949988636,
+        371.5419549989747
+      ],
+      "preview_warm_median_ms": 363.6792629986303,
+      "sample_ms": 742.6444869997795,
+      "sample_rows": 25,
+      "materialize_ms": 386.9937929994194,
+      "materialized_count": 252,
+      "materialized_identity_match": true
+    },
+    {
+      "key": "vod-optouts",
+      "name": "VOD Optouts",
+      "definition": {
+        "root": {
+          "op": "and",
+          "rules": [
+            {
+              "type": "attribute",
+              "field": "tbn_video_on_demand_updates_opt_status",
+              "operator": "is_false"
+            }
+          ],
+          "negate": false
+        },
+        "version": 1
+      },
+      "count": 11654,
+      "oracle_count": 11654,
+      "oracle_sql": "SELECT id FROM audit_people p WHERE attrs->>'tbn_video_on_demand_updates_opt_status'='false'",
+      "oracle_ms": 61.54039099965303,
+      "missing_count": 0,
+      "unexpected_count": 0,
+      "missing_sample": [],
+      "unexpected_sample": [],
+      "expected": 11653.56391008644,
+      "tolerance": 2330.7127820172877,
+      "pass": true,
+      "count_cold_ms": 457.4843280006462,
+      "count_warm_ms": [
+        446.62441600121383,
+        437.20637499973236,
+        415.88971499913896
+      ],
+      "preview_cold_ms": 466.2738380011433,
+      "preview_warm_ms": [
+        487.9845720006415,
+        463.24598000137485,
+        483.0961340012436
+      ],
+      "preview_warm_median_ms": 483.0961340012436,
+      "sample_ms": 967.1352570003364,
+      "sample_rows": 25,
+      "materialize_ms": 789.4573779994971,
+      "materialized_count": 11654,
+      "materialized_identity_match": true
+    },
+    {
+      "key": "vod-viewed",
+      "name": "Customers with VOD Viewed",
+      "definition": {
+        "root": {
+          "op": "and",
+          "rules": [
+            {
+              "name": "vod_viewed",
+              "type": "event",
+              "operator": "is_true",
+              "aggregate": "exists"
+            }
+          ],
+          "negate": false
+        },
+        "version": 1
+      },
+      "count": 9056,
+      "oracle_count": 9056,
+      "oracle_sql": "SELECT id FROM audit_people p WHERE p.id IN (SELECT profile_id FROM events WHERE name='vod_viewed')",
+      "oracle_ms": 59.65484199987259,
+      "missing_count": 0,
+      "unexpected_count": 0,
+      "missing_sample": [],
+      "unexpected_sample": [],
+      "expected": 9056.239072764645,
+      "tolerance": 1811.2478145529292,
+      "pass": true,
+      "count_cold_ms": 69.46292400061793,
+      "count_warm_ms": [
+        26.30202799991821,
+        31.86709600049653,
+        26.029318001747015
+      ],
+      "preview_cold_ms": 23.271127000043634,
+      "preview_warm_ms": [
+        24.408195000432897,
+        21.477973001310602,
+        30.308989000332076
+      ],
+      "preview_warm_median_ms": 24.408195000432897,
+      "sample_ms": 107.25140999966243,
+      "sample_rows": 25,
+      "materialize_ms": 186.1131679997925,
+      "materialized_count": 9056,
+      "materialized_identity_match": true
+    }
+  ],
+  "cold_definition": "Application first execution of each operation for this template in a fresh session, not OS/PostgreSQL cold. Count precedes preview; underlying database pages may already be warm. No application result cache is used.",
+  "warm_definition": "Three repetitions in the same session.",
+  "scope": "Private imported database; compiler/count, API preview/sample and committed materialization. No exports.",
+  "reference_parameters": {
+    "as_of": "2026-10-17T00:00:00+00:00",
+    "timezone": "UTC",
+    "relative_window": "[as_of - interval, as_of)"
+  },
+  "profiles": 50000
+}

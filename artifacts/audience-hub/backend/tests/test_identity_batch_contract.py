@@ -9,8 +9,9 @@ from app.jobs.handlers import run
 
 
 class FakeSession:
-    def __init__(self, *, active=False, phase="importing", large=False):
+    def __init__(self, *, active=False, pending_pull=False, phase="importing", large=False):
         self.active, self.phase, self.large = active, phase, large
+        self.pending_pull = pending_pull
         self.statements = []
         self.commits = 0
 
@@ -22,8 +23,10 @@ class FakeSession:
 
     def scalar(self, statement, params=None):
         sql = str(statement)
-        if "type='import.run'" in sql:
-            return self.active
+        if "FROM source_connections" in sql and "state ? 'pending'" in sql:
+            return self.pending_pull
+        if "FROM jobs" in sql and "type IN ('import.run','source.pull')" in sql:
+            return bool(self.active)
         if "SELECT phase FROM identity_batches" in sql:
             return self.phase
         if "WITH sizes" in sql:
@@ -67,10 +70,21 @@ def harness(monkeypatch):
 
 
 @pytest.mark.parametrize("payload", [{}, {"batch_id": 4}, {"import_id": 9}])
-def test_concurrent_queued_imports_defer_without_any_graph_work(harness, payload):
+@pytest.mark.parametrize("active_job", ["import.run", "source.pull"])
+def test_concurrent_queued_imports_defer_without_any_graph_work(harness, payload, active_job):
     current, calls, enqueue = harness
-    current["db"] = FakeSession(active=True)
+    current["db"] = FakeSession(active=active_job)
     with pytest.raises(IdentityResolutionDeferred):
+        run("identity.resolve_batch", payload, 10)
+    assert calls == ["lock"]
+    enqueue.assert_not_called()
+
+
+@pytest.mark.parametrize("payload", [{}, {"batch_id": 4}, {"import_id": 9}])
+def test_pending_source_recovery_defers_without_any_graph_work(harness, payload):
+    current, calls, enqueue = harness
+    current["db"] = FakeSession(pending_pull=True)
+    with pytest.raises(IdentityResolutionDeferred, match="source pull recovery"):
         run("identity.resolve_batch", payload, 10)
     assert calls == ["lock"]
     enqueue.assert_not_called()
@@ -172,8 +186,13 @@ def test_seed_publishes_jobs_only_after_registration_loop():
     assert "set(files) != set(SEED_SOURCES)" in inspect.getsource(import_seed_files)
 
 
-def test_both_graph_entry_points_exclude_transactional_records():
+def test_both_graph_entry_points_exclude_transactional_records(monkeypatch):
     from app.identity.bulk import resolve_bulk
     from app.identity.resolver import resolve_batch
-    for entry_point in (resolve_bulk, resolve_batch):
-        assert "COALESCE(i.record_type,'contact') NOT IN ('gift','event')" in inspect.getsource(entry_point)
+    assert "COALESCE(i.record_type,'contact') NOT IN ('gift','event')" in inspect.getsource(resolve_bulk)
+    calls = []
+    monkeypatch.setattr("app.identity.bulk.resolve_bulk",
+                        lambda db, **kwargs: calls.append((db, kwargs)) or {"records": 0})
+    session = object()
+    assert resolve_batch(session, limit=17, job_id=8) == {"records": 0}
+    assert calls == [(session, {"limit": 17, "job_id": 8, "mode": "incremental"})]

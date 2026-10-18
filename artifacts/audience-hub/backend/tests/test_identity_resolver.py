@@ -339,10 +339,12 @@ def test_resolver_sql_statement_count_is_bounded_by_batch_not_record_count():
             FROM generate_series(1, 200) n
         """), {"source_id": source_id, "prefix": prefix})
         statements = [0]
+        statement_sql = []
         connection = db.connection()
 
         def count_statement(*_args):
             statements[0] += 1
+            statement_sql.append(_args[2][:150])
 
         event.listen(connection, "before_cursor_execute", count_statement)
         try:
@@ -350,7 +352,7 @@ def test_resolver_sql_statement_count_is_bounded_by_batch_not_record_count():
         finally:
             event.remove(connection, "before_cursor_execute", count_statement)
         assert result["records"] == 200
-        assert statements[0] <= 25
+        assert statements[0] <= 25, statement_sql
         db.rollback()
 
 

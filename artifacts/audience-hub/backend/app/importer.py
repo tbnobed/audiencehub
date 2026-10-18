@@ -58,6 +58,9 @@ def _mapping(headers: list[str], record_type: str) -> dict:
     elif record_type == "enrichment":
         # An enrichment import has exactly one identifier target.
         columns = {"contact_external_id": "contact_external_id"}
+        for header in ("vendor", "license_id", "append_date", "sensitive"):
+            if header in headers:
+                columns[header] = header
         if "external_id" in headers:
             columns["external_id"] = "external_id"
         for header, data_type in (

@@ -20,7 +20,8 @@ def refresh_dashboard_rollups(db, *, as_of: date | None = None):
       INSERT INTO dashboard_donor_daily
       SELECT g.profile_id,g.gift_date,count(*),sum(g.amount),bool_or(g.is_recurring)
       FROM gifts g JOIN active_profiles p ON p.id=g.profile_id
-      WHERE g.gift_date IS NOT NULL GROUP BY g.profile_id,g.gift_date
+      WHERE g.gift_date IS NOT NULL AND COALESCE(g.attributes->>'is_refund','false')<>'true'
+      GROUP BY g.profile_id,g.gift_date
     """))
     db.execute(text("""
       INSERT INTO dashboard_donor_patterns(days,gift_counts,recurring_flags,donors)
@@ -34,10 +35,13 @@ def refresh_dashboard_rollups(db, *, as_of: date | None = None):
     db.execute(text("""
       INSERT INTO dashboard_daily(day,source_id,fund,campaign,channel,
         gift_count,gift_amount,donor_count,new_donor_count,active)
-      WITH firsts AS (SELECT profile_id,min(gift_date) AS day FROM gifts GROUP BY profile_id)
-      SELECT g.gift_date,g.source_id,g.fund,g.campaign,g.channel,count(*),sum(g.amount),
-        count(DISTINCT g.profile_id),
-        count(DISTINCT g.profile_id) FILTER(WHERE f.day=g.gift_date),p.id IS NOT NULL
+      WITH firsts AS (SELECT profile_id,min(gift_date) AS day FROM gifts
+        WHERE COALESCE(attributes->>'is_refund','false')<>'true' GROUP BY profile_id)
+      SELECT g.gift_date,g.source_id,g.fund,g.campaign,g.channel,
+        count(*) FILTER(WHERE COALESCE(g.attributes->>'is_refund','false')<>'true'),sum(g.amount),
+        count(DISTINCT g.profile_id) FILTER(WHERE COALESCE(g.attributes->>'is_refund','false')<>'true'),
+        count(DISTINCT g.profile_id) FILTER(WHERE f.day=g.gift_date
+          AND COALESCE(g.attributes->>'is_refund','false')<>'true'),p.id IS NOT NULL
       FROM gifts g LEFT JOIN active_profiles p ON p.id=g.profile_id
       LEFT JOIN firsts f ON f.profile_id=g.profile_id WHERE g.gift_date IS NOT NULL
       GROUP BY g.gift_date,g.source_id,g.fund,g.campaign,g.channel,p.id IS NOT NULL
@@ -45,13 +49,16 @@ def refresh_dashboard_rollups(db, *, as_of: date | None = None):
     db.execute(text("""
       INSERT INTO dashboard_giving_daily
       SELECT gift_date,appeal_code,
-        CASE WHEN amount<25 THEN '$1–24' WHEN amount<50 THEN '$25–49'
+        CASE WHEN COALESCE(g.attributes->>'is_refund','false')='true' THEN 'Returns'
+          WHEN amount<25 THEN '$1–24' WHEN amount<50 THEN '$25–49'
           WHEN amount<100 THEN '$50–99' WHEN amount<250 THEN '$100–249'
           WHEN amount<500 THEN '$250–499' WHEN amount<1000 THEN '$500–999'
           WHEN amount<5000 THEN '$1k–4.9k' ELSE '$5k+' END,
-        CASE WHEN amount<25 THEN 1 WHEN amount<50 THEN 2 WHEN amount<100 THEN 3
+        CASE WHEN COALESCE(g.attributes->>'is_refund','false')='true' THEN 0
+          WHEN amount<25 THEN 1 WHEN amount<50 THEN 2 WHEN amount<100 THEN 3
           WHEN amount<250 THEN 4 WHEN amount<500 THEN 5 WHEN amount<1000 THEN 6
-          WHEN amount<5000 THEN 7 ELSE 8 END,count(*),sum(amount)
+          WHEN amount<5000 THEN 7 ELSE 8 END,
+        count(*) FILTER(WHERE COALESCE(g.attributes->>'is_refund','false')<>'true'),sum(amount)
       FROM gifts g JOIN active_profiles p ON p.id=g.profile_id
       WHERE gift_date IS NOT NULL GROUP BY 1,2,3,4
     """))
@@ -63,7 +70,8 @@ def refresh_dashboard_rollups(db, *, as_of: date | None = None):
     db.execute(text("""
       INSERT INTO dashboard_conversion_daily
       WITH e AS (SELECT profile_id,min((occurred_at AT TIME ZONE 'UTC')::date) AS day FROM events GROUP BY profile_id),
-           g AS (SELECT profile_id,min(gift_date) AS day FROM gifts GROUP BY profile_id)
+           g AS (SELECT profile_id,min(gift_date) AS day FROM gifts
+             WHERE COALESCE(attributes->>'is_refund','false')<>'true' GROUP BY profile_id)
       SELECT g.day,count(*) FROM g JOIN e USING(profile_id) WHERE e.day<g.day GROUP BY g.day
     """))
     def put(key, value):

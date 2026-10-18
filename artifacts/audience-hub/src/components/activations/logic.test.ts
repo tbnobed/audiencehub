@@ -127,3 +127,55 @@ test('destination deactivate copy says retained inactive', () => {
   assert.match(DEACTIVATE_DEST_COPY.body, /retained as inactive, not permanently removed/);
   assert.doesNotMatch(DEACTIVATE_DEST_COPY.body + DEACTIVATE_DEST_COPY.title('x'), /archive/i);
 });
+
+/* ---------- Step 6: SFTP, attribute_mode, crosswalk, manifest ---------- */
+import { blankSftp, clearSftpSecrets, crosswalkErrors, manifestSummary, mappingProblems as mp6, activationToForm as a2f, buildActivationWrite as baw, toggleActiveBody as tab6 } from './logic.ts';
+
+const sftpForm = () => ({ ...destinationToForm(null), name: 'CP drop', type: 'sftp' as const, include_pii: true,
+  sftp: { ...blankSftp(), host: 'sftp.customerpulse.example', username: 'kinship', private_key: '-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----', host_key_sha256: 'SHA256:abc', passphrase: 'pw' } });
+
+test('sftp write uses exact backend config + credentials keys', () => {
+  const b = buildDestinationWrite(sftpForm());
+  assert.deepEqual(b.config, { output_dir: '/exports', gzip: false, include_pii: true, delimiter: ',', export_kind: 'audience' });
+  assert.deepEqual(Object.keys(b.credentials!).sort(), ['host', 'host_key_sha256', 'port', 'private_key', 'private_key_passphrase', 'username']);
+  assert.equal(b.credentials!.port, 22);
+});
+test('sftp edit without replacing credentials omits them (server keeps encrypted set)', () => {
+  const f = destinationToForm({ id: 3, name: 'x', type: 'sftp', config: { output_dir: '/out', export_kind: 'audience' }, is_active: true, has_secret: true, has_credentials: true, secret_last4: null, header_names: [], created_at: '' });
+  assert.equal(f.sftp.replaceCredentials, false);
+  assert.equal(f.include_pii, true);
+  assert.equal('credentials' in buildDestinationWrite(f), false);
+  assert.deepEqual(destinationFormErrors(f), {});
+});
+test('sftp validation: path, purpose for crosswalk, key shape', () => {
+  const f = sftpForm();
+  f.sftp = { ...f.sftp, output_dir: 'exports/../x', export_kind: 'crosswalk', private_key: 'nope' };
+  const e = destinationFormErrors(f);
+  assert.ok(e.output_dir && e.approved_purpose && e.private_key);
+  f.sftp = { ...f.sftp, output_dir: '/x', approved_purpose: 'CP match', private_key: '-----BEGIN RSA PRIVATE KEY-----' };
+  assert.deepEqual(destinationFormErrors(f), {});
+  assert.equal(buildDestinationWrite(f).config.include_pii, true, 'crosswalk forces PII');
+});
+test('secrets are cleared from form state', () => {
+  const s = clearSftpSecrets(sftpForm().sftp);
+  assert.equal(s.private_key, ''); assert.equal(s.passphrase, ''); assert.equal(s.host, 'sftp.customerpulse.example');
+});
+test('attribute_mode round-trips and allows empty mapping only for all', () => {
+  const f = { ...a2f(null), name: 'n', segment_id: 1, destination_id: 2, attribute_mode: 'all' as const };
+  assert.equal(baw(f, 'sftp', 'admin').attribute_mode, 'all');
+  assert.ok(!mp6([], [], null, 'all').includes('Map at least one column.'));
+  assert.ok(mp6([], [], null, 'selected').includes('Map at least one column.'));
+  const a = { id: 1, name: 'a', segment_id: 1, segment_name: '', destination_id: 2, destination_name: '', destination_type: 'sftp' as const, field_mapping: {}, required_consent: null, schedule: '0 0 2 * *', timezone: 'America/New_York', is_active: false, created_by: null, last_run: null, next_run_at: null, attribute_mode: 'all' as const };
+  assert.equal(tab6(a, true).attribute_mode, 'all');
+  assert.equal(a2f(a).schedule.preset !== undefined, true);
+});
+test('crosswalk requires admin, consent, purpose', () => {
+  const dest = { config: { export_kind: 'crosswalk' as const } };
+  assert.equal(crosswalkErrors({ required_consent: null, is_active: true }, dest, 'analyst').length, 3);
+  assert.deepEqual(crosswalkErrors({ required_consent: 'email', is_active: true }, { config: { export_kind: 'crosswalk', approved_purpose: 'match' } }, 'admin'), []);
+  assert.deepEqual(crosswalkErrors({ required_consent: null, is_active: true }, { config: { export_kind: 'audience' } }, 'viewer'), []);
+});
+test('manifest summary totals', () => {
+  assert.deepEqual(manifestSummary({ files: [{ row_count: 3, bytes: 10 }, { row_count: 4, bytes: 5 }] }), { files: 2, rows: 7, bytes: 15 });
+  assert.equal(manifestSummary(null), null);
+});

@@ -29,6 +29,9 @@ export default defineConfig({
     strictPort: true,
     host: '0.0.0.0',
     allowedHosts: true,
+    watch: {
+      ignored: ['**/backend/**', '**/.data/**', '**/dist/**'],
+    },
     fs: {
       strict: true,
     },

@@ -46,7 +46,9 @@ SECRET_KEYS = {"secret", "secrets", "password", "token", "access_token", "refres
 def alias_pattern(aliases):
     patterns = []
     for kind, value in sorted(set(aliases)):
-        if not value or kind not in {"email", "phone", "external"}:
+        if not value or kind not in {"email", "phone", "external", "email_md5", "email_sha256",
+                                      "donor_account_number", "hubspot_record_id", "okta_customer_id",
+                                      "zeta_cdp_id", "zeta_uid"}:
             continue
         if kind == "email":
             # A larger address/domain is not this identifier. File suffixes are
@@ -57,7 +59,7 @@ def alias_pattern(aliases):
             # Only source-qualified IDs; never globally redact bare numeric IDs.
             if ":" in value:
                 patterns.append(r"(?<![\w:@-])" + re.escape(value) + r"(?![\w:@-])")
-        else:
+        elif kind == "phone":
             digits = re.sub(r"\D", "", value)
             if not digits:
                 continue
@@ -65,6 +67,10 @@ def alias_pattern(aliases):
             if value.startswith("+1") and len(digits) == 11:
                 formatted = r"(?:1[\s().-]*)?" + r"[\s().-]*".join(digits[1:])
             patterns.append(r"(?<![\w\d])\+?" + formatted + r"(?![\w\d])")
+        else:
+            # Crosswalk values and hashes are identifying even without plain
+            # contact details. Restrict matches to complete tokens.
+            patterns.append(r"(?<![\w:@-])" + re.escape(value) + r"(?![\w:@-])")
     return "|".join(patterns)
 
 
@@ -207,6 +213,8 @@ def redact_known_metadata(db, aliases):
         snapshot = decrypt(encrypted) if encrypted else None
         if activation_id not in activation_ids and redact(snapshot) == snapshot and redact(path) == path:
             continue
+        from app.activations.service import purge_run_artifacts
+        purge_run_artifacts(run_id)
         remove_owned_file(path, get_settings().export_dir)
         db.execute(text("""UPDATE activation_runs SET file_path=NULL,file_sha256=NULL,
           snapshot_encrypted=NULL,revoked_at=COALESCE(revoked_at,now()),

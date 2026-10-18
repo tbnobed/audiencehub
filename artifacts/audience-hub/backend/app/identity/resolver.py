@@ -73,6 +73,17 @@ def _record_identifiers(record: dict, source_key: str) -> set[tuple[str, str]]:
     attrs = record.get("attributes") or {}
     if isinstance(attrs, str):
         attrs = json.loads(attrs)
+    from app.identity.master import SYSTEM_KEYS
+    import hashlib
+    for kind in SYSTEM_KEYS:
+        if attrs.get(kind):
+            value = str(attrs[kind]).strip()
+            values.add((kind, value.lower() if kind == "zeta_uid" else value))
+    email = str(record.get("email_norm") or "").strip().lower()
+    for kind, algorithm in (("email_md5", hashlib.md5), ("email_sha256", hashlib.sha256)):
+        value = algorithm(email.encode()).hexdigest() if email else str(attrs.get(kind) or "").strip().lower()
+        if value:
+            values.add((kind, value))
     reference = attrs.get("_identity_reference") or {}
     if isinstance(reference, dict):
         reference_source = reference.get("source_key")
@@ -211,15 +222,17 @@ def _move_profile_references(db: Session, winner_id: int, loser_id: int) -> None
         text("""
             INSERT INTO enrichment_values
               (profile_id, source_id, attribute_key, value_text, value_num, value_bool,
-               value_date, imported_at, license_expires_at)
+               value_date, imported_at, license_expires_at, vendor, license_id, append_date, sensitive)
             SELECT :winner, source_id, attribute_key, value_text, value_num, value_bool,
-                   value_date, imported_at, license_expires_at
+                   value_date, imported_at, license_expires_at, vendor, license_id, append_date, sensitive
             FROM enrichment_values WHERE profile_id=:loser
             ORDER BY source_id, attribute_key
             ON CONFLICT (profile_id, source_id, attribute_key) DO UPDATE SET
               value_text=EXCLUDED.value_text, value_num=EXCLUDED.value_num,
               value_bool=EXCLUDED.value_bool, value_date=EXCLUDED.value_date,
-              imported_at=EXCLUDED.imported_at, license_expires_at=EXCLUDED.license_expires_at
+              imported_at=EXCLUDED.imported_at, license_expires_at=EXCLUDED.license_expires_at,
+              vendor=EXCLUDED.vendor, license_id=EXCLUDED.license_id,
+              append_date=EXCLUDED.append_date, sensitive=EXCLUDED.sensitive
             WHERE enrichment_values.imported_at < EXCLUDED.imported_at
         """),
         {"winner": winner_id, "loser": loser_id},
@@ -252,6 +265,8 @@ def _materialize_source_attributes_batch(db: Session, assignments: list[tuple[di
                 "profile_id": profile_id, "source_id": record["source_id"], "key": key,
                 "data_type": data_type, "value": value.get("value"),
                 "imported_at": record["updated_at"],
+                "vendor": value.get("vendor"), "license_id": value.get("license_id"),
+                "append_date": value.get("append_date"), "sensitive": bool(value.get("sensitive")),
             })
     if consents:
         consents.sort(key=lambda row: (row["profile_id"], row["channel"]))
@@ -275,17 +290,19 @@ def _materialize_source_attributes_batch(db: Session, assignments: list[tuple[di
             text("""
                 INSERT INTO enrichment_values
                   (profile_id, source_id, attribute_key, value_text, value_num, value_bool,
-                   value_date, imported_at)
+                   value_date, imported_at, vendor, license_id, append_date, sensitive)
                 VALUES (:profile_id, :source_id, :key,
                     CASE WHEN :data_type IN ('text','enum') THEN CAST(:value AS text) END,
                     CASE WHEN :data_type='number' THEN CAST(:value AS numeric) END,
                     CASE WHEN :data_type='boolean' THEN CAST(:value AS boolean) END,
                     CASE WHEN :data_type='date' THEN CAST(:value AS date) END,
-                    :imported_at)
+                    :imported_at, :vendor, :license_id, CAST(:append_date AS date), :sensitive)
                 ON CONFLICT (profile_id, source_id, attribute_key) DO UPDATE SET
                   value_text=EXCLUDED.value_text, value_num=EXCLUDED.value_num,
                   value_bool=EXCLUDED.value_bool, value_date=EXCLUDED.value_date,
-                  imported_at=EXCLUDED.imported_at
+                  imported_at=EXCLUDED.imported_at, vendor=EXCLUDED.vendor,
+                  license_id=EXCLUDED.license_id, append_date=EXCLUDED.append_date,
+                  sensitive=EXCLUDED.sensitive
                 WHERE enrichment_values.imported_at < EXCLUDED.imported_at
             """),
             enrichments,
@@ -316,227 +333,12 @@ def _assign_record_references(
 
 
 def resolve_batch(db: Session, limit: int = BATCH_SIZE, job_id: int | None = None) -> dict[str, int]:
-    """Resolve one connected-component group of at most 500 records.
+    """Resolve at most 500 records; caller commits and loops until zero.
 
-    The caller MUST commit after each call, including an empty result, and loop
-    until an empty result (a component boundary can make a group underfull).
-    Components within the discovery window stay together when they fit. An
-    oversized component is streamed through bounded prefixes; every subsequent
-    transaction rebuilds components from fresh source rows and persisted
-    identifiers under the exclusive resolver lock. Never carry a planned winner
-    across commits. Later bridges merge earlier partial profiles using the usual
-    oldest-profile rule and move every dependent reference. Thus interruption
-    leaves only unresolved rows to retry, not a lost in-memory component plan.
+    Components crossing the batch boundary are rebuilt under the exclusive
+    identity lock on every call. Later bridges journal and merge the previously
+    assigned profiles, preserving the oldest issued master.
     """
-    limit = max(1, min(int(limit), BATCH_SIZE))
-    acquire_resolver_lock(db)
-    pending = db.execute(
-        text("""
-            SELECT sr.*, s.key AS source_key, s.priority, i.record_type AS imported_record_type
-            FROM source_records sr JOIN sources s ON s.id=sr.source_id
-            LEFT JOIN imports i ON i.id=sr.last_import_id
-            WHERE sr.resolved_at IS NULL
-              AND COALESCE(i.record_type,'contact') NOT IN ('gift','event')
-            ORDER BY sr.id LIMIT :limit
-        """),
-        {"limit": COMPONENT_SCAN_SIZE},
-    ).mappings().all()
-    if not pending:
-        return {"records": 0, "profiles_created": 0, "merges": 0}
-
-    records = [dict(row) for row in pending]
-    identifiers = {record["id"]: _record_identifiers(record, record["source_key"]) for record in records}
-    key_set = {identifier for values in identifiers.values() for identifier in values}
-    blocked = _blocked(db, key_set)
-    blocked |= _auto_block_high_cardinality(db, key_set)
-    key_set -= blocked
-    for record_id, values in identifiers.items():
-        identifiers[record_id] = {identifier for identifier in values if identifier not in blocked}
-
-    # The exclusive transaction lock precedes discovery: no participating
-    # importer or resolver can change these rows while the group is planned.
-    key_pairs = sorted(key_set)
-    existing = db.execute(
-        text("""
-            SELECT candidate.kind, candidate.value, matched.profile_id
-            FROM unnest(CAST(:types AS text[]), CAST(:values AS text[]))
-                 AS candidate(kind, value)
-            CROSS JOIN LATERAL (
-                SELECT i.profile_id FROM identifiers i
-                WHERE i.type=candidate.kind AND i.value=candidate.value
-                LIMIT 1
-            ) AS matched
-        """),
-        {"types": [kind for kind, _ in key_pairs], "values": [value for _, value in key_pairs]},
-    ).all()
-    key_profiles: dict[tuple[str, str], int] = {(kind, value): profile_id
-                                                for kind, value, profile_id in existing}
-    uf = UnionFind()
-    for record in records:
-        uf.add(("record", record["id"]))
-        if record.get("profile_id"):
-            uf.union(("record", record["id"]), ("profile", record["profile_id"]))
-        for kind, value in identifiers[record["id"]]:
-            if (kind, value) in key_profiles:
-                uf.union(("record", record["id"]), ("profile", key_profiles[(kind, value)]))
-    key_records: dict[tuple[str, str], list[int]] = defaultdict(list)
-    for record_id, values in identifiers.items():
-        for kind, value in values:
-            key_records[(kind, value)].append(record_id)
-    for related in key_records.values():
-        for record_id in related[1:]:
-            uf.union(("record", related[0]), ("record", record_id))
-
-    components: dict[Any, list[int]] = defaultdict(list)
-    for record in records:
-        components[uf.find(("record", record["id"]))].append(record["id"])
-    # Stable component order follows the first pending record. Do not hold row
-    # or identifier locks for the entire discovery window.
-    selected_components = []
-    remaining = limit
-    for component_records in components.values():
-        if len(component_records) > remaining:
-            if not selected_components:
-                selected_components.append(component_records[:remaining])
-            break
-        selected_components.append(component_records)
-        remaining -= len(component_records)
-        if not remaining:
-            break
-    selected_ids = {rid for component in selected_components for rid in component}
-    records = [record for record in records if record["id"] in selected_ids]
-    record_by_id = {record["id"]: record for record in records}
-    key_set = {key for rid in selected_ids for key in identifiers[rid]}
-    acquire_identifier_locks(db, key_set)
-
-    component_plans = []
-    existing_profile_ids = {key_profiles[key] for key in key_set if key in key_profiles}
-    existing_profile_ids.update(
-        record["profile_id"] for record in records if record.get("profile_id")
-    )
-    for component_records in selected_components:
-        # On a split component, only merge profiles reached by this prefix.
-        # Its remaining bridges are re-read in the next transaction.
-        profile_ids = {
-            key_profiles[key] for rid in component_records
-            for key in identifiers[rid] if key in key_profiles
-        }
-        profile_ids.update(record_by_id[rid]["profile_id"]
-                           for rid in component_records if record_by_id[rid].get("profile_id"))
-        component_plans.append((component_records, profile_ids))
-
-    profile_first_seen = {}
-    if existing_profile_ids:
-        profile_rows = db.execute(
-            text("SELECT id, first_seen_at FROM profiles WHERE id=ANY(:ids)"),
-            {"ids": list(existing_profile_ids)},
-        ).all()
-        profile_first_seen = {row.id: row.first_seen_at for row in profile_rows}
-    new_profile_components = [
-        component_records for component_records, profile_ids in component_plans if not profile_ids
-    ]
-    created_profile_ids = []
-    if new_profile_components:
-        created_profile_ids = db.execute(
-            text("""
-                INSERT INTO profiles (first_seen_at, last_seen_at)
-                SELECT now(), now() FROM generate_series(1, :count)
-                RETURNING id
-            """),
-            {"count": len(new_profile_components)},
-        ).scalars().all()
-
-    component_profile_ids = {}
-    new_profile_iterator = iter(created_profile_ids)
-    for component_records, profile_ids in component_plans:
-        if not profile_ids:
-            component_profile_ids[tuple(component_records)] = next(new_profile_iterator)
-        else:
-            component_profile_ids[tuple(component_records)] = min(
-                profile_ids, key=lambda profile_id: (profile_first_seen[profile_id], profile_id)
-            )
-
-    profiles_created = len(new_profile_components)
-    merges = 0
-    affected: set[int] = set()
-    record_profiles: dict[int, int] = {}
-    key_profiles_to_write: dict[tuple[str, str], int] = {}
-    for component_records, profile_ids in component_plans:
-        profile_id = component_profile_ids[tuple(component_records)]
-        affected.add(profile_id)
-        record_profiles.update({record_id: profile_id for record_id in component_records})
-        for record_id in component_records:
-            for kind, value in identifiers[record_id]:
-                key_profiles_to_write[(kind, value)] = profile_id
-        for loser in sorted(profile_ids - {profile_id}):
-            link = next(
-                (
-                    {"type": kind, "value": value}
-                    for rid in component_records
-                    for kind, value in identifiers[rid]
-                    if key_profiles.get((kind, value)) == loser
-                ),
-                {
-                    "type": "external",
-                    "value": next(
-                        (
-                            f"{record_by_id[rid]['source_key']}:{record_by_id[rid]['external_id']}"
-                            for rid in component_records
-                            if record_by_id[rid].get("profile_id") == loser
-                        ),
-                        record_by_id[component_records[0]]["external_id"],
-                    ),
-                },
-            )
-            _move_profile_references(db, profile_id, loser)
-            db.execute(
-                text("UPDATE profiles SET merged_into_id=:winner WHERE id=:loser"),
-                {"winner": profile_id, "loser": loser},
-            )
-            db.execute(
-                text("""
-                    INSERT INTO profile_merges (winner_id, loser_id, reason, job_id)
-                    VALUES (:winner, :loser, CAST(:reason AS jsonb), :job_id)
-                """),
-                {"winner": profile_id, "loser": loser,
-                 "reason": json.dumps(link), "job_id": job_id},
-            )
-            merges += 1
-
-    _assign_record_references(db, record_by_id, record_profiles)
-    if key_profiles_to_write:
-        key_rows = sorted(key_profiles_to_write.items())
-        db.execute(
-            text("""
-                INSERT INTO identifiers (type, value, profile_id)
-                SELECT key_type, key_value, profile_id
-                FROM unnest(CAST(:types AS text[]), CAST(:values AS text[]),
-                            CAST(:profile_ids AS bigint[]))
-                     AS keys(key_type, key_value, profile_id)
-                ORDER BY key_type, key_value
-                ON CONFLICT (type, value) DO UPDATE SET profile_id=EXCLUDED.profile_id
-                WHERE identifiers.profile_id IS DISTINCT FROM EXCLUDED.profile_id
-            """),
-            {
-                "types": [item[0][0] for item in key_rows],
-                "values": [item[0][1] for item in key_rows],
-                "profile_ids": [item[1] for item in key_rows],
-            },
-        )
-    recompute_profiles_fields(db, affected)
-    if affected:
-        db.execute(
-            text("DELETE FROM profile_traits WHERE profile_id=ANY(CAST(:profile_ids AS bigint[]))"),
-            {"profile_ids": list(affected)},
-        )
-        # Re-resolution may change gift/event ownership or merge profiles. Reset
-        # the debounce timestamp on conflict so traits run ten minutes after the
-        # final resolution activity for each profile.
-        db.execute(text("""
-            INSERT INTO trait_dirty_profiles (profile_id, dirtied_at)
-            SELECT DISTINCT profile_id, clock_timestamp()
-            FROM unnest(CAST(:profile_ids AS bigint[])) AS changed(profile_id)
-            ORDER BY profile_id
-            ON CONFLICT (profile_id) DO UPDATE SET dirtied_at=EXCLUDED.dirtied_at
-        """), {"profile_ids": list(affected)})
-    return {"records": len(records), "profiles_created": profiles_created, "merges": merges}
+    # Both paths use the same set-based conflict-safe graph and journal.
+    from app.identity.bulk import resolve_bulk
+    return resolve_bulk(db, job_id=job_id, mode="incremental", limit=limit)

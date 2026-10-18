@@ -134,3 +134,4 @@ from app.models.milestone2 import (  # noqa: E402,F401
     TraitDirtyProfile,
 )
 from app.models.dashboard import DashboardDaily, DashboardKPI, DashboardCache
+from app.models.resources import SourceCode, Product, VodTitle

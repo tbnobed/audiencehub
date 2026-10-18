@@ -209,6 +209,7 @@ def test_child_failure_or_sigterm_cleans_owned_schema(admin, tmp_path, monkeypat
 
     monkeypatch.setattr("app.schema_benchmark.subprocess.Popen", lambda *args, **kwargs: Child())
     args = SimpleNamespace(traits=mode == "traits", segments=mode == "segments",
+                           isolated=True,
                            imports=False, dashboards=False, overview=False, scale="small",
                            test_suite=False, profiles=1500, output_dir=str(tmp_path), seed_dir=None)
     with pytest.raises(KeyboardInterrupt if terminate else RuntimeError):
@@ -223,26 +224,48 @@ def test_child_failure_or_sigterm_cleans_owned_schema(admin, tmp_path, monkeypat
 
 
 def test_production_cli_smoke_keeps_public_untouched(admin, tmp_path):
+    """Production-configured segments use existing data, never schema fixtures.
+
+    Restricted-role provisioning and interruption cleanup are exercised above;
+    this smoke checks the new default rather than running a trait/seed oracle.
+    """
+    from test_readonly_benchmark_pg import durable_counts
+
     engine, url = admin
+    before = durable_counts(engine)
     with engine.connect() as db:
-        before = db.execute(text("SELECT count(*) FROM public.jobs")).scalar_one()
         roles = set(db.execute(text("SELECT rolname FROM pg_roles WHERE rolname LIKE 'kinship_bench_%'")).scalars())
+        schemas = set(db.execute(text("SELECT nspname FROM pg_namespace WHERE nspname LIKE 'kinship_bench_%'")).scalars())
     env = dict(os.environ, DATABASE_URL=url, APP_ENV="production", AUTH_MODE="oidc",
                OIDC_ISSUER="https://oidc.invalid", OIDC_CLIENT_ID="fixture",
                OIDC_CLIENT_SECRET="fixture", PUBLIC_BASE_URL="https://fixture.invalid",
                SECRET_KEY="x" * 40, KINSHIP_BENCHMARK_BACKEND="schema",
                KINSHIP_BENCHMARK_OUTPUT=str(tmp_path))
-    result = subprocess.run(["kinship", "benchmark", "--traits", "--profiles", "1500"],
-                            env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    result = subprocess.run(["kinship", "benchmark", "--segments",
+                             "--profiles", "500000", "--as-of", "2025-01-01"],
+                            env=env, text=True, stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, timeout=120)
     assert result.returncode == 0, result.stdout[-10000:]
-    output = next(tmp_path.glob("traits-*/traits.json"))
+    output = next(tmp_path.glob("segments-readonly-*/segments.json"))
     report = json.loads(output.read_text())
-    assert report["compared_profiles"] == 1000
-    assert not report["discrepancies"]
-    assert json.loads((output.parent / "isolation.json").read_text())["cleanup"] == "complete"
+    assert report["status"] == "passed"
+    assert report["mode"] == "existing-app-database-readonly"
+    assert report["read_only"] is True
+    assert report["population"]["profiles"] == before["public.profiles"]
+    assert report["profiles_option_ignored"] == 500000
+    assert report["as_of"] == "2025-01-01T00:00:00+00:00"
+    assert len(report["templates"]) == 23
+    assert report["materialization"]["status"] == "skipped"
+    assert all(row["status"] == "passed"
+               and row["materialization"]["status"] == "skipped"
+               for row in report["templates"])
+    assert not list(tmp_path.glob("traits-*"))
+    assert not list(tmp_path.glob("**/isolation.json"))
+    assert not list(tmp_path.glob("**/seed"))
+    assert durable_counts(engine) == before
     with engine.connect() as db:
-        assert db.scalar(text("SELECT count(*) FROM public.jobs")) == before
         assert set(db.execute(text("SELECT rolname FROM pg_roles WHERE rolname LIKE 'kinship_bench_%'")).scalars()) == roles
+        assert set(db.execute(text("SELECT nspname FROM pg_namespace WHERE nspname LIKE 'kinship_bench_%'")).scalars()) == schemas
 
 
 def test_actual_cli_sigterm_during_workload_cleans_up(admin, tmp_path):

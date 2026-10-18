@@ -1,5 +1,44 @@
 # M4 verification
 
+## Audit-feed refund/reference correction
+
+The audit-seeded CLI remains a real trait correctness check, separate from the
+read-only segment CLI smoke. Its independent raw-row reference now recognizes
+both canonical `vod_viewed` and legacy `Video Watched` events. Explicit
+`is_refund` ledger entries contribute signed lifetime/recent monetary totals and
+transaction activity, but do not count as donations, reset donation recency,
+activate recurring giving, or enter gross gift size averages. Refund-only
+profiles remain prospects outside the RFM donor population.
+
+This review also fixed actual computation inconsistencies: global RFM population
+frequency/recency had still counted refunds, and historical snapshots had still
+used refunds for first/last donation dates and donation gaps. Both now match the
+live trait semantics; monetary ranking and snapshot totals remain net of refunds.
+No seed or segment compiler inputs were changed.
+
+The hand-computed PostgreSQL regression independently checks net amounts, gift
+counts/averages, refund-only prospects, a lapsed donor with a recent return,
+global and incremental RFM, historical snapshots, future-row exclusion, and both
+video event names. The production-configured CLI regression actually executes
+`benchmark --traits --profiles 50 --as-of 2026-01-15` using the default audit
+fixture in a restricted disposable schema, checking public counts plus
+role/schema cleanup before and after. It does not substitute a segment test or
+pin the legacy generator.
+
+Small positive profile counts are now accepted by the schema trait runner
+(the Python oracle already compares `min(1000, population)` profiles). Reports
+explicitly label fewer than 1,000 requested profiles `small-population-smoke`;
+these are not scale/performance acceptance measurements.
+
+Latest focused run: **21 passed in 35.66 s**, evidence
+`backend/.cache/refund-traits-verification/imports-ee1067p_/pytest.txt`.
+The real CLI smoke compared all **50** active profiles, with **11 gifts, 77
+events, 191 source records, zero unresolved records and zero discrepancies**.
+Import time was **1.435 s**, identity **0.205 s**, full trait production path
+including commit **0.166 s**, independent reference **0.024 s**. Restricted role
+and schema cleanup completed and public tables stayed unchanged. No 500k or
+large seeded benchmark was run for this correction.
+
 ## M4 handoff status
 
 **Correctness signed off; final timing pending the production-server run (16 cores).**

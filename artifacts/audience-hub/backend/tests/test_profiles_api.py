@@ -9,7 +9,7 @@ def test_viewer_masking_recurses_across_profile_payload():
     }, mask_pii=True)
 
     assert result["email"] == "p***@example.org"
-    assert result["identifiers"][0]["value"] == "***-***-3647"
+    assert result["identifiers"][0]["value"] == "[redacted]"
     assert "person@example.org" not in result["attributes"]["note"]
     assert "214-748-3647" not in result["attributes"]["note"]
 
@@ -17,6 +17,28 @@ def test_viewer_masking_recurses_across_profile_payload():
 def test_non_viewer_profile_payload_keeps_identifiers_unmasked():
     result = _json_safe({"email": "person@example.org", "phone": "214-748-3647"})
     assert result == {"email": "person@example.org", "phone": "214-748-3647"}
+
+
+def test_viewer_opaque_identifiers_and_nested_source_keys_are_redacted():
+    result = _json_safe({
+        "master_id": "kin_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        "identifiers": [{"type": kind, "value": "opaque-secret"}
+                        for kind in ("donor_account_number", "custom_identifier", "email_sha256", "email")],
+        "attributes": {"nested": {"donorAccountNumber": "donor-secret",
+                                  "hubspot_record_ids": ["hubspot-secret"],
+                                  "okta_customer_id": "okta-secret",
+                                  "zeta_uid": "zeta-secret",
+                                  "zeta_cdp_id": "cdp-secret",
+                                  "email_md5": "hash-secret",
+                                  "custom_identifier": "custom-secret"},
+                       "status": "active"},
+        "external_id": "source-secret",
+    }, mask_pii=True)
+    import json
+    assert "secret" not in json.dumps(result)
+    assert all(item["value"] == "[redacted]" for item in result["identifiers"])
+    assert result["master_id"] == "kin_01ARZ3NDEKTSV4RRFFQ69G5FAV"
+    assert result["attributes"]["status"] == "active"
 
 
 def test_profile_and_data_health_contract_routes_registered():

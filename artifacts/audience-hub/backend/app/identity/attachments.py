@@ -19,19 +19,30 @@ def attach_transactions(db, progress_callback=None):
           JOIN sources s ON s.id=sr.source_id
           WHERE i.record_type IN ('gift','event')
             AND (sr.resolved_at IS NULL OR sr.profile_id IS NULL)
-        ), candidates AS (
-          SELECT p.id, k.rank, i.profile_id
+        ), keys AS (
+          SELECT p.id,k.rank,k.kind,k.value
           FROM pending p CROSS JOIN LATERAL (VALUES
             (0, 'external', COALESCE(p.attributes->'_identity_reference'->>'source_key',p.source_key)
               || ':' || NULLIF(p.attributes->'_identity_reference'->>'contact_external_id','')),
             (1, 'email', NULLIF(lower(btrim(p.email_norm::text)),'')),
             (1, 'phone', NULLIF(p.phone_e164,''))
           ) k(rank,kind,value)
+          WHERE k.value IS NOT NULL
+            AND NOT EXISTS (SELECT 1 FROM identifier_blocklist b
+                            WHERE b.type=k.kind AND b.value=k.value)
+        ), candidates AS (
+          SELECT k.id,k.rank,owner.id AS profile_id FROM keys k
+          JOIN identity_xref x ON x.key_type=
+            CASE k.kind WHEN 'phone' THEN 'mobile_phone' ELSE k.kind END AND x.key_value=k.value
+          JOIN profiles owner ON owner.master_id=x.master_id
+            AND NOT owner.is_deleted AND owner.merged_into_id IS NULL
+          UNION
+          SELECT k.id,k.rank,i.profile_id FROM keys k
           JOIN identifiers i ON i.type=k.kind AND i.value=k.value
           JOIN profiles owner ON owner.id=i.profile_id
             AND NOT owner.is_deleted AND owner.merged_into_id IS NULL
-          WHERE NOT EXISTS (SELECT 1 FROM identifier_blocklist b
-                            WHERE b.type=k.kind AND b.value=k.value)
+          WHERE NOT EXISTS (SELECT 1 FROM identity_xref x WHERE x.key_type=
+            CASE k.kind WHEN 'phone' THEN 'mobile_phone' ELSE k.kind END AND x.key_value=k.value)
         ), ranked AS (
           SELECT *, min(rank) OVER (PARTITION BY id) AS best FROM candidates
         ), winners AS (

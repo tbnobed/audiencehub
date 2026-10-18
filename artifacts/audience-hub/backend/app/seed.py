@@ -125,8 +125,13 @@ def _mark_messiness(stats: dict[str, dict[str, int]], filename: str,
 
 def generate_seed(profiles: int = 50_000, scale: str = "small",
                   random_seed: int = 20250308, output_dir: str | Path | None = None,
-                  as_of: date | None = None) -> dict[str, Any]:
+                  as_of: date | None = None, mode: str = "audit") -> dict[str, Any]:
     """Write five deterministic CSVs and ground_truth.json; return output metadata."""
+    if mode == "audit":
+        from app.seed_audit import generate_audit_seed
+        return generate_audit_seed(profiles, scale, random_seed, output_dir, as_of)
+    if mode != "legacy":
+        raise ValueError("mode must be audit or legacy")
     if profiles < 1:
         raise ValueError("--profiles must be at least 1")
     if scale not in SCALE_DENSITY:
@@ -399,6 +404,7 @@ def generate_seed(profiles: int = 50_000, scale: str = "small",
     enrichment_handle, enrichment_writer = _write_csv(enrichment_path, (
         "external_id", "contact_external_id", "email", "phone", "hh_income_band",
         "age_band", "interests", "donor_propensity_score", "enriched_at",
+        "vendor", "license_id", "append_date", "sensitive",
     ))
     enrichment_rng = random.Random(random_seed ^ 0x2E7A)
     duplicated_enrichment = False
@@ -416,6 +422,11 @@ def generate_seed(profiles: int = 50_000, scale: str = "small",
                 "interests": enrichment_rng.choice(INTERESTS),
                 "donor_propensity_score": f"{enrichment_rng.random():.4f}",
                 "enriched_at": _mixed_datetime(enriched, enrichment_rng),
+                # Explicitly synthetic provenance, never a claimed vendor license.
+                "vendor": "kinship-synthetic-demo",
+                "license_id": "synthetic-demo-only",
+                "append_date": enriched.date().isoformat(),
+                "sensitive": "false",
             }
             enrichment_writer.writerow(row)
             _record_truth(records, "zeta_enrichment", enrichment_id, person["person_id"],
@@ -524,4 +535,6 @@ def load_generated_files(files: dict[str, Path]) -> list[int]:
             "--load requested, but app.importer.import_seed_files(files: Mapping[str, Path]) "
             "is not callable."
         )
+    from app.seed_audit import load_resources
+    load_resources(next(iter(files.values())).parent)
     return hook(files)

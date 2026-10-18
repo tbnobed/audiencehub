@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { useAuth } from '@/hooks/use-auth';
 import { useActivations } from '@/hooks/use-activations';
+import { BootstrapReferencesButton } from '@/components/activations/bootstrap-button';
 import { DestinationsPanel } from '@/components/activations/destinations';
 import { ActivationWizard } from '@/components/activations/wizard';
 import { ActivationDetail } from '@/components/activations/detail';
@@ -34,7 +35,8 @@ function ActivationList({ isAdmin }: { isAdmin: boolean }) {
   return <div className="space-y-3">
     <div className="flex items-end justify-between">
       <div><h1 className="kin-title">Activations</h1><p className="text-[12px] text-ink-muted">Send active segments to partner destinations. Consent and suppressions apply on every run.</p></div>
-      <Button size="sm" className="h-7" onClick={() => nav('/activations/new')} data-testid="button-new-activation"><Plus size={13} /> New activation</Button>
+      <div className="flex gap-2">{isAdmin && <BootstrapReferencesButton />}
+      <Button size="sm" className="h-7" onClick={() => nav('/activations/new')} data-testid="button-new-activation"><Plus size={13} /> New activation</Button></div>
     </div>
     <Tabs value={tab} onValueChange={setTab}>
       <TabsList className="h-7"><TabsTrigger value="activations" className="text-xs h-6" data-testid="tab-activations">Activations <span className="ml-1 font-mono text-[10px] text-ink-muted">{q.data?.items.length ?? ''}</span></TabsTrigger><TabsTrigger value="destinations" className="text-xs h-6" data-testid="tab-destinations">Destinations</TabsTrigger></TabsList>

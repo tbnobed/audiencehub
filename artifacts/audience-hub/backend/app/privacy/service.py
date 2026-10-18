@@ -29,6 +29,8 @@ KNOWN_REFERENCES = {
     "client_errors": {"profile_id"}, "activation_run_members": {"profile_id"},
     "activation_last_members": {"profile_id"},
     "dashboard_donor_daily": {"profile_id"},
+    "identity_merge_journal": {"winner_id", "loser_id", "new_profile_id"},
+    "identity_xref": {"master_id"},
 }
 PROFILE_KEYS = {"profile_id", "profile_ids", "matched_profile_ids", "winner_id", "loser_id", "merged_into_id"}
 
@@ -107,6 +109,8 @@ def aliases(db, ids):
     rows = db.execute(text("""SELECT 'email' AS kind,lower(email::text) AS value FROM profiles WHERE id=ANY(:ids)
       UNION SELECT 'phone',phone FROM profiles WHERE id=ANY(:ids)
       UNION SELECT type,value FROM identifiers WHERE profile_id=ANY(:ids) AND type IN ('email','phone','external')
+      UNION SELECT CASE x.key_type WHEN 'mobile_phone' THEN 'phone' ELSE x.key_type END,x.key_value
+        FROM identity_xref x JOIN profiles p ON p.master_id=x.master_id WHERE p.id=ANY(:ids)
       UNION SELECT 'email',lower(email_norm::text) FROM source_records WHERE profile_id=ANY(:ids)
       UNION SELECT 'phone',phone_e164 FROM source_records WHERE profile_id=ANY(:ids)
       UNION SELECT 'external',s.key || ':' || sr.external_id FROM source_records sr JOIN sources s ON s.id=sr.source_id
@@ -198,6 +202,8 @@ def counts_for(db, ids):
     present = {r["table_name"] for r in check_inventory(db)}
     quote = db.get_bind().dialect.identifier_preparer.quote
     for table, columns in KNOWN_REFERENCES.items():
+        if table == "identity_xref":
+            continue
         if table == "profiles" or table not in present:
             continue
         predicate = " OR ".join(f"{quote(c)}=ANY(:ids)" for c in sorted(columns))
@@ -432,11 +438,34 @@ def execute_deletion(db, request_id):
         exports = db.execute(text("""SELECT DISTINCT r.id,r.file_path FROM activation_runs r
           JOIN activation_run_members m ON m.run_id=r.id WHERE m.profile_id=ANY(:ids)"""), {"ids": ids}).all()
         for run_id, file_path in exports:
+            from app.activations.service import purge_run_artifacts
+            purge_run_artifacts(run_id)
             remove_owned_file(file_path, get_settings().export_dir)
             db.execute(text("""UPDATE activation_runs SET file_path=NULL,file_sha256=NULL,
               snapshot_encrypted=NULL,revoked_at=now(),
               error='Export revoked after an approved privacy request.' WHERE id=:id"""), {"id": run_id})
     revoke_import_history(db, ids, tombstones)
+    # Delete reversible snapshots before generic metadata processing. Keeping
+    # even a scrubbed journal could resurrect an erased source/event on unmerge.
+    identity_purge = """
+      DELETE FROM identity_merge_journal j
+      WHERE winner_id=ANY(:ids) OR loser_id=ANY(:ids) OR new_profile_id=ANY(:ids)
+        OR EXISTS (
+          SELECT 1 FROM jsonb_array_elements(
+            COALESCE(j.sides->'winner'->'source_records','[]'::jsonb) ||
+            COALESCE(j.sides->'loser'->'source_records','[]'::jsonb)) r
+          JOIN source_records s ON s.id=(r->>'id')::bigint
+          WHERE s.profile_id=ANY(:ids)
+        );
+      DELETE FROM master_id_aliases WHERE retired_id IN
+        (SELECT master_id FROM profiles WHERE id=ANY(:ids))
+        OR survivor_id IN (SELECT master_id FROM profiles WHERE id=ANY(:ids));
+      DELETE FROM identity_xref WHERE master_id IN
+        (SELECT master_id FROM profiles WHERE id=ANY(:ids))
+    """
+    for statement in identity_purge.split(";"):
+        if statement.strip():
+            db.execute(text(statement), {"ids": ids})
     from app.privacy.metadata import redact_known_metadata
     counts.update(redact_known_metadata(db, tombstones))
     # Remove keyed JSON references in every table, not only today's jobs/audit payloads.

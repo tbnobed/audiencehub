@@ -11,15 +11,23 @@ run history includes funnel counts and audited downloads. Admins can manage
 consent, suppressions and two-admin deletion requests. Google/Meta API sync is
 not included.
 
-Run production-scale segment checks only in the isolated benchmark schema:
+Measure the existing application population without database writes:
 
 ```sh
-docker compose exec api kinship benchmark --segments --profiles 500000 --scale medium
+docker compose exec api kinship benchmark --segments
 ```
 
-This prints each template's count, first-query and warm-median preview latency,
-sample time and materialization time. “Cold” does not mean flushed database/OS
-caches. See [M5 verification](docs/M5_VERIFICATION.md) for independent SQL
+This reads all 23 code-defined templates in a PostgreSQL-enforced read-only
+transaction, reports actual profile counts and first/warm count, preview and
+sample timings, and explicitly skips materialization. It never seeds, migrates,
+installs templates or writes jobs/audit records. `--profiles` is ignored here.
+Use `--segments --isolated --profiles 500000 --scale medium` to retain the
+synthetic six-template benchmark, or `--audit-segments --profiles 500000 --scale
+medium` for fresh isolated 23-template identity/materialization acceptance.
+These explicit isolated modes create and clean up private data.
+See [segment benchmarking](docs/SEGMENTS.md#benchmark-modes) for safety and flag
+semantics. “First” never means flushed database/OS caches.
+See [M5 verification](docs/M5_VERIFICATION.md) for historical independent SQL
 plausibility checks on the 50,000-person small seed, and
 [M7 verification](docs/M7_VERIFICATION.md) for required-test coverage.
 [Earlier-item merge audit](docs/PRE_M7_MERGE_AUDIT.md) records commit IDs and the

@@ -1,10 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { fetchApi } from '@/lib/api';
-import type { Segment, SegmentDefinition, SegmentField, SegmentHistory, SegmentPreview, SegmentSample, SegmentWrite, PartnerSample } from '@/lib/segments';
+import type { SegmentFieldCatalog, Segment, SegmentDefinition, SegmentField, SegmentHistory, SegmentPreview, SegmentSample, SegmentWrite, PartnerSample } from '@/lib/segments';
 
 const base = '/api/segments';
 const post = <T,>(url: string, body: unknown, signal?: AbortSignal) => fetchApi(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal, timeoutMs: 15000 }) as Promise<T>;
-export function useSegmentFields() { return useQuery({ queryKey: ['segment-fields'], queryFn: () => fetchApi(`${base}/fields`) as Promise<{ fields: SegmentField[]; gift_values: Record<string, string[]> }>, staleTime: 300000 }); }
+export function useSegmentFields() { return useQuery({ queryKey: ['segment-fields'], queryFn: () => fetchApi(`${base}/fields`) as Promise<SegmentFieldCatalog>, staleTime: 300000 }); }
 export function useSegments(status = '', owner = '') { return useQuery({ queryKey: ['segments', status, owner], queryFn: () => fetchApi(`${base}?${new URLSearchParams({ status, owner })}`) as Promise<{ items: Segment[] }>, staleTime: 10000, refetchInterval: 10000, refetchIntervalInBackground: false }); }
 export function useSegment(id?: number) { return useQuery({ queryKey: ['segment', id], enabled: !!id, queryFn: () => fetchApi(`${base}/${id}`) as Promise<Segment>, refetchInterval: 10000, refetchIntervalInBackground: false }); }
 export function useSegmentHistory(id?: number) { return useQuery({ queryKey: ['segment-history', id], enabled: !!id, queryFn: () => fetchApi(`${base}/${id}/count-history`) as Promise<{ items: SegmentHistory[] }>, refetchInterval: 10000, refetchIntervalInBackground: false }); }

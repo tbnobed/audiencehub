@@ -4,6 +4,7 @@ from datetime import date, timedelta
 from sqlalchemy import text
 
 from test_consent_ingestion_pg import db
+from test_schema_benchmark_pg import admin
 from app.traits.engine import recompute_traits, backfill_trait_snapshots
 from app.traits.verification import donor_status, quintiles
 
@@ -19,6 +20,100 @@ def fixture(db):
                             "VALUES(1,:key,:p,:amount,:day)"),
                        dict(key=f"{p}-{n}", p=p, amount=p * 10, day=pinned - timedelta(days=age)))
     return pinned, ages
+
+
+def test_handcomputed_refund_reference_rfm_snapshots_and_canonical_video(db):
+    """Net money, gross donation frequency/recency; refund-only is a prospect."""
+    import json
+    from decimal import Decimal
+    from app.traits.verification import reference
+    db.execute(text("INSERT INTO sources(id,key,name,kind) OVERRIDING SYSTEM VALUE VALUES(1,'refund_test','Refund test','csv')"))
+    db.execute(text("INSERT INTO profiles(id) OVERRIDING SYSTEM VALUE SELECT generate_series(1,5)"))
+    ledger = [
+        (1, "old", 100, "2023-01-01", False, False),
+        (1, "recent", 50, "2024-12-01", False, False),
+        (1, "return", -25, "2024-12-31", True, True),
+        (1, "future", 1000, "2025-01-01", False, True),
+        (2, "peer", 130, "2024-12-15", False, False),
+        (3, "refund_only", -10, "2024-11-29", True, True),
+        (5, "lapsed", 30, "2022-01-01", False, False),
+        (5, "lapsed_return", -5, "2024-11-30", True, True),
+    ]
+    for profile, external_id, amount, day, refund, recurring in ledger:
+        db.execute(text("""INSERT INTO gifts(source_id,external_id,profile_id,amount,gift_date,is_recurring,attributes)
+            VALUES(1,:external_id,:profile,:amount,:day,:recurring,CAST(:attributes AS jsonb))"""),
+                   {"external_id": external_id, "profile": profile, "amount": amount, "day": date.fromisoformat(day),
+                    "recurring": recurring, "attributes": json.dumps({"is_refund": refund})})
+    for name, day in (("vod_viewed", "2024-12-30"), ("Video Watched", "2024-12-29"), ("vod_viewed", "2024-11-01")):
+        db.execute(text("""INSERT INTO events(source_id,profile_id,type,name,occurred_at)
+            VALUES(1,1,'track',:name,CAST(:day AS timestamptz))"""), {"name": name, "day": day})
+    pinned = date(2024, 12, 31)
+    raw = reference(db, [1, 2, 3, 4, 5], pinned)
+    golden = {
+        1: {"gift_count_total": 2, "ltv_total": Decimal(125), "gift_amount_12m": Decimal(25),
+            "gift_count_12m": 1, "first_gift_date": date(2023, 1, 1), "last_gift_date": date(2024, 12, 1),
+            "largest_gift_amount": Decimal(100), "avg_gift_amount": Decimal(75),
+            "is_recurring_active": False, "days_since_last_gift": 30, "donor_status": "active",
+            "rfm_score": "454", "video_views_30d": 2},
+        2: {"gift_count_total": 1, "ltv_total": Decimal(130), "rfm_score": "545"},
+        3: {"gift_count_total": 0, "ltv_total": Decimal(-10), "gift_amount_12m": Decimal(-10),
+            "gift_count_12m": 0, "last_gift_date": None, "avg_gift_amount": None,
+            "is_recurring_active": False, "donor_status": "prospect", "rfm_score": None},
+        4: {"gift_count_total": 0, "ltv_total": Decimal(0), "rfm_score": None},
+        5: {"gift_count_total": 1, "ltv_total": Decimal(25), "gift_amount_12m": Decimal(-5),
+            "last_gift_date": date(2022, 1, 1), "donor_status": "lapsed", "rfm_score": "333"},
+    }
+    for profile, fields in golden.items():
+        for key, value in fields.items():
+            assert raw[profile][key] == value, (profile, key)
+    recompute_traits(db, as_of=pinned)
+    for row in db.execute(text("SELECT * FROM profile_traits ORDER BY profile_id")).mappings():
+        for key, value in raw[row["profile_id"]].items():
+            assert row[key] == value, (row["profile_id"], key)
+    # Recomputing only a refund-only profile and one donor must not rank within
+    # this subset or admit refund-only profiles into the global donor population.
+    recompute_traits(db, as_of=pinned, profile_ids=[1, 3], write_snapshot=False)
+    assert db.scalar(text("SELECT rfm_score FROM profile_traits WHERE profile_id=1")) == "454"
+    assert db.scalar(text("SELECT rfm_score FROM profile_traits WHERE profile_id=3")) is None
+    backfill_trait_snapshots(db, as_of=pinned)
+    assert db.execute(text("""SELECT profile_count,ltv_sum,giving_12m_sum FROM trait_snapshots
+        WHERE month='2024-11-01' AND donor_status='lapsed'""")).one() == (1, Decimal(25), Decimal(-5))
+    assert db.execute(text("""SELECT profile_count,ltv_sum FROM trait_snapshots
+        WHERE month='2024-11-01' AND donor_status='prospect'""")).one() == (3, Decimal(-10))
+
+
+def test_production_traits_cli_smoke_50_audit_profiles(admin, tmp_path):
+    """Exercise the real audit-seeded CLI/oracle, independent of segment smoke."""
+    import json
+    import os
+    import subprocess
+    import sys
+    engine, url = admin
+    def public_state():
+        with engine.connect() as connection:
+            counts = {table: connection.scalar(text(f"SELECT count(*) FROM public.{table}"))
+                      for table in ("profiles", "source_records", "gifts", "events", "jobs")}
+            roles = set(connection.scalars(text("SELECT rolname FROM pg_roles WHERE rolname LIKE 'kinship_bench_%'")))
+            schemas = set(connection.scalars(text("SELECT nspname FROM pg_namespace WHERE nspname LIKE 'kinship_bench_%'")))
+        return counts, roles, schemas
+    before = public_state()
+    env = dict(os.environ, DATABASE_URL=url, APP_ENV="production", AUTH_MODE="oidc",
+               OIDC_ISSUER="https://oidc.invalid", OIDC_CLIENT_ID="fixture",
+               OIDC_CLIENT_SECRET="fixture", PUBLIC_BASE_URL="https://fixture.invalid",
+               SECRET_KEY="x" * 40, KINSHIP_BENCHMARK_BACKEND="schema",
+               KINSHIP_BENCHMARK_OUTPUT=str(tmp_path))
+    result = subprocess.run([sys.executable, "-m", "app.cli", "benchmark",
+                             "--traits", "--profiles", "50", "--as-of", "2026-01-15"],
+                            env=env, text=True, stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, timeout=120)
+    (tmp_path / "production-traits-cli.txt").write_text(result.stdout)
+    assert result.returncode == 0, result.stdout[-10000:]
+    report = json.loads(next(tmp_path.glob("traits-*/traits.json")).read_text())
+    assert report["status"] == "passed" and report["requested_people"] == 50
+    assert report["verification_scope"] == "small-population-smoke"
+    assert report["as_of"] == "2026-01-15" and report["discrepancies"] == []
+    assert report["unresolved_records"] == 0 and report["compared_profiles"] > 0
+    assert public_state() == before
 
 
 def test_sql_boundaries_pinned_date_and_global_incremental_rfm(db):

@@ -17,28 +17,29 @@ all_active_profiles AS MATERIALIZED (
     WHERE p.merged_into_id IS NULL AND p.is_deleted=false
 ),
 gift_base AS MATERIALIZED (
-    SELECT g.profile_id, g.id, g.amount, g.gift_date, g.is_recurring
+    SELECT g.profile_id, g.id, g.amount, g.gift_date, g.is_recurring,
+           COALESCE(g.attributes->>'is_refund','false')='true' AS is_refund
     FROM gifts g
     JOIN target_profiles p ON p.profile_id=g.profile_id
     WHERE g.gift_date IS NULL OR g.gift_date <= CAST(:as_of AS date)
 ),
 gift_rollup AS (
     SELECT p.profile_id,
-           count(g.id)::integer AS gift_count_total,
+           (count(g.id) FILTER (WHERE NOT g.is_refund))::integer AS gift_count_total,
            COALESCE(sum(g.amount), 0)::numeric(14,2) AS ltv_total,
            COALESCE(sum(g.amount) FILTER (
                WHERE g.gift_date >= CAST(:as_of AS date) - 364
                  AND g.gift_date <= CAST(:as_of AS date)
            ), 0)::numeric(14,2) AS gift_amount_12m,
            count(g.id) FILTER (
-               WHERE g.gift_date >= CAST(:as_of AS date) - 364
+                WHERE NOT g.is_refund AND g.gift_date >= CAST(:as_of AS date) - 364
                  AND g.gift_date <= CAST(:as_of AS date)
            )::integer AS gift_count_12m,
-           min(g.gift_date) AS first_gift_date,
-           max(g.gift_date) AS last_gift_date,
-           max(g.amount)::numeric(14,2) AS largest_gift_amount,
-           avg(g.amount)::numeric(14,2) AS avg_gift_amount,
-           COALESCE(bool_or(g.is_recurring AND g.gift_date >= CAST(:as_of AS date) - 44
+            min(g.gift_date) FILTER (WHERE NOT g.is_refund) AS first_gift_date,
+            max(g.gift_date) FILTER (WHERE NOT g.is_refund) AS last_gift_date,
+            (max(g.amount) FILTER (WHERE NOT g.is_refund))::numeric(14,2) AS largest_gift_amount,
+            (avg(g.amount) FILTER (WHERE NOT g.is_refund))::numeric(14,2) AS avg_gift_amount,
+            COALESCE(bool_or(NOT g.is_refund AND g.is_recurring AND g.gift_date >= CAST(:as_of AS date) - 44
                             AND g.gift_date <= CAST(:as_of AS date)), false) AS is_recurring_active
     FROM target_profiles p
     LEFT JOIN gift_base g ON g.profile_id=p.profile_id
@@ -49,7 +50,7 @@ dated_gifts AS (
            lag(g.gift_date) OVER (PARTITION BY g.profile_id ORDER BY g.gift_date, g.id) AS previous_gift_date,
            row_number() OVER (PARTITION BY g.profile_id ORDER BY g.gift_date DESC, g.id DESC) AS newest_rank
     FROM gift_base g
-    WHERE g.gift_date IS NOT NULL
+    WHERE g.gift_date IS NOT NULL AND NOT g.is_refund
 ),
 latest_gap AS (
     SELECT profile_id, previous_gift_date
@@ -64,7 +65,7 @@ event_rollup AS (
            )::integer AS event_count_30d,
            max(e.occurred_at) AS last_event_at,
            count(e.id) FILTER (
-               WHERE e.name='Video Watched'
+                WHERE e.name IN ('Video Watched','vod_viewed')
                  AND e.occurred_at >= ((CAST(:as_of AS date) - 29)::timestamp AT TIME ZONE 'UTC')
                  AND e.occurred_at < ((CAST(:as_of AS date) + 1)::timestamp AT TIME ZONE 'UTC')
            )::integer AS video_views_30d
@@ -135,14 +136,16 @@ ranked_donors AS (
            (6 - ntile(5) OVER (ORDER BY gift_count_total DESC, profile_id))::smallint AS rfm_frequency,
            (6 - ntile(5) OVER (ORDER BY ltv_total DESC, profile_id))::smallint AS rfm_monetary
     FROM (
-        SELECT p.profile_id, count(g.id)::integer AS gift_count_total,
+        SELECT p.profile_id,
+               (count(g.id) FILTER (WHERE COALESCE(g.attributes->>'is_refund','false')<>'true'))::integer AS gift_count_total,
                COALESCE(sum(g.amount), 0)::numeric(14,2) AS ltv_total,
-               (CAST(:as_of AS date) - max(g.gift_date))::integer AS days_since_last_gift
+               (CAST(:as_of AS date) - max(g.gift_date) FILTER (
+                   WHERE COALESCE(g.attributes->>'is_refund','false')<>'true'))::integer AS days_since_last_gift
         FROM all_active_profiles p
         JOIN gifts g ON g.profile_id=p.profile_id
         WHERE g.gift_date IS NULL OR g.gift_date <= CAST(:as_of AS date)
         GROUP BY p.profile_id
-        HAVING count(g.id) > 0
+        HAVING count(g.id) FILTER (WHERE COALESCE(g.attributes->>'is_refund','false')<>'true') > 0
     ) donor_population
 ),
 trait_rows AS (
@@ -291,8 +294,8 @@ def backfill_trait_snapshots(db: Session, *, as_of: date | None = None) -> int:
         ),
         gift_stats AS (
             SELECT pm.profile_id, pm.month, pm.month_end,
-                   min(g.gift_date) AS first_gift_date,
-                   max(g.gift_date) AS last_gift_date,
+                   min(g.gift_date) FILTER (WHERE COALESCE(g.attributes->>'is_refund','false')<>'true') AS first_gift_date,
+                   max(g.gift_date) FILTER (WHERE COALESCE(g.attributes->>'is_refund','false')<>'true') AS last_gift_date,
                    count(g.id)::integer AS gift_count_total,
                    COALESCE(sum(g.amount), 0)::numeric(14,2) AS ltv_total,
                    COALESCE(sum(g.amount) FILTER (
@@ -311,6 +314,7 @@ def backfill_trait_snapshots(db: Session, *, as_of: date | None = None) -> int:
                        row_number() OVER (PARTITION BY pm.profile_id, pm.month ORDER BY g.gift_date DESC, g.id DESC) AS newest_rank
                 FROM profile_months pm
                 JOIN gifts g ON g.profile_id=pm.profile_id AND g.gift_date <= pm.month_end
+                  AND COALESCE(g.attributes->>'is_refund','false')<>'true'
             ) ordered
             GROUP BY profile_id, month
         ),

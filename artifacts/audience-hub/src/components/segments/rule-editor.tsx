@@ -4,7 +4,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
 import { useSegmentTypeahead } from '@/hooks/use-segments';
 import type { Segment, SegmentField, SegmentRule } from '@/lib/segments';
-import { GIFT_WHERE, OP_LABEL, VALUELESS, defaultValue, withOperator } from './model';
+import { GIFT_WHERE, OP_LABEL, RESOURCE_OPS, RESOURCE_WHERE, VALUELESS, defaultValue, isResourceKey, resourceLabel, withOperator } from './model';
 
 export const ctl = 'h-7 rounded-sm border border-line bg-surface-raised px-2 text-xs text-ink outline-none focus-visible:border-signal focus-visible:ring-1 focus-visible:ring-signal disabled:opacity-60 disabled:cursor-not-allowed';
 const ctlErr = (bad?: boolean) => bad ? ' border-danger/70' : '';
@@ -143,7 +143,7 @@ export function OperatorValue({ rule, dataType, operators, enumValues, typeahead
       {dataType === 'number' ? <NumberBox value={pair[1]} onChange={x => set(1, x)} disabled={disabled} invalid={bad || issueAt(`.${valueField}[1]`)} label="To" testId={`${testId}-to`} />
         : <DateBox value={pair[1]} onChange={x => set(1, x)} disabled={disabled} invalid={bad || issueAt(`.${valueField}[1]`)} label="To date" testId={`${testId}-to`} />}
     </span>;
-  } else if (op === 'in_last_days' || op === 'not_in_last_days') input = <span className="inline-flex items-center gap-1"><NumberBox value={v} onChange={setV} min={1} disabled={disabled} invalid={bad} label="Days" testId={`${testId}-days`} width="w-16" /><span className="text-[11px] text-ink-muted">days</span></span>;
+  } else if (op === 'in_last_days' || op === 'not_in_last_days' || op === 'within_previous_days') input = <span className="inline-flex items-center gap-1"><NumberBox value={v} onChange={setV} min={1} disabled={disabled} invalid={bad} label="Days" testId={`${testId}-days`} width="w-16" /><span className="text-[11px] text-ink-muted">days</span></span>;
   else if (dataType === 'number') input = <NumberBox value={v} onChange={setV} disabled={disabled} invalid={bad} label="Value" testId={`${testId}-value`} />;
   else if (dataType === 'date' || dataType === 'timestamp') input = <DateBox value={v} onChange={setV} disabled={disabled} invalid={bad} label="Date" testId={`${testId}-value`} />;
   else input = <TextValue value={v} onChange={setV} typeaheadKey={typeaheadKey} disabled={disabled} invalid={bad} testId={`${testId}-value`} label="Value" />;
@@ -160,12 +160,13 @@ export function OperatorValue({ rule, dataType, operators, enumValues, typeahead
 export function WindowEditor({ window: w, onChange, disabled, issueAt, testId }: { window: unknown; onChange: (w: unknown) => void; disabled?: boolean; issueAt: (s: string) => boolean; testId: string }) {
   const win = (w ?? null) as Record<string, unknown> | null;
   const kind = win ? String(win.kind) : 'all';
-  const set = (k: string) => onChange(k === 'all' ? undefined : k === 'last_days' ? { kind: k, days: 90 } : k === 'between' ? { kind: k, from: '', to: '' } : { kind: k, date: '' });
+  const set = (k: string) => onChange(k === 'all' ? undefined : k === 'last_days' || k === 'previous_days' ? { kind: k, days: 90 } : k === 'previous_years' ? { kind: k, years: 5 } : k === 'between' ? { kind: k, from: '', to: '' } : { kind: k, date: '' });
   return <span className="inline-flex items-center gap-1">
     <NativeSelect aria-label="Time window" data-testid={`${testId}-window`} value={kind} disabled={disabled} invalid={issueAt('.window') || issueAt('.window.kind')} onChange={e => set(e.target.value)}>
       <option value="all">all time</option><option value="last_days">in last N days</option><option value="between">between dates</option><option value="before">before</option><option value="after">after</option>
+      <option value="previous_days">previous N complete UTC days</option><option value="previous_years">previous 5 calendar years</option>
     </NativeSelect>
-    {win?.kind === 'last_days' && <><NumberBox value={win.days} min={1} onChange={d => onChange({ ...win, days: d })} disabled={disabled} invalid={issueAt('.window.days')} label="Window days" testId={`${testId}-window-days`} width="w-16" /><span className="text-[11px] text-ink-muted">days</span></>}
+    {(win?.kind === 'last_days' || win?.kind === 'previous_days') && <><NumberBox value={win.days} min={1} onChange={d => onChange({ ...win, days: d })} disabled={disabled} invalid={issueAt('.window.days')} label="Window days" testId={`${testId}-window-days`} width="w-16" /><span className="text-[11px] text-ink-muted">days</span></>}
     {win?.kind === 'between' && <><DateBox value={win.from} onChange={d => onChange({ ...win, from: d })} disabled={disabled} invalid={issueAt('.window')} label="Window from" testId={`${testId}-window-from`} /><span className="text-[11px] text-ink-muted">to</span><DateBox value={win.to} onChange={d => onChange({ ...win, to: d })} disabled={disabled} invalid={issueAt('.window')} label="Window to" testId={`${testId}-window-to`} /></>}
     {(win?.kind === 'before' || win?.kind === 'after') && <DateBox value={win.date} onChange={d => onChange({ ...win, date: d })} disabled={disabled} invalid={issueAt('.window.date')} label="Window date" testId={`${testId}-window-date`} />}
   </span>;
@@ -199,7 +200,7 @@ export function GiftWhere({ where, onChange, giftValues, disabled, issueAt, test
   </div>;
 }
 
-/** Event property filters: properties.<key> text equality only. */
+/** Event property filters use the same bound text operators as resource filters. */
 export function EventWhere({ where, onChange, disabled, issueAt, testId }: { where: unknown; onChange: (w: Record<string, Cond> | undefined) => void; disabled?: boolean; issueAt: (s: string) => boolean; testId: string }) {
   const entries = Object.entries((where ?? {}) as Record<string, Cond>);
   const write = (list: [string, Cond][]) => onChange(list.length ? Object.fromEntries(list) : undefined);
@@ -208,18 +209,34 @@ export function EventWhere({ where, onChange, disabled, issueAt, testId }: { whe
       <span className="text-[11px] text-ink-muted font-mono">properties.</span>
       <input aria-label="Property key" data-testid={`${testId}-prop-key-${i}`} disabled={disabled} value={k.slice(11)} aria-invalid={issueAt(`.where.${k}`) || undefined}
         onChange={e => { const n = [...entries]; n[i] = [`properties.${e.target.value.replace(/[^\w.-]/g, '')}`, c]; write(n); }} className={`${ctl}${ctlErr(issueAt(`.where.${k}`))} w-28 font-mono`} placeholder="key" />
-      <span className="text-[11px] text-ink-muted">=</span>
-      <input aria-label="Property value" data-testid={`${testId}-prop-value-${i}`} disabled={disabled} value={String(c.value ?? '')}
-        onChange={e => { const n = [...entries]; n[i] = [k, { operator: 'eq', value: e.target.value }]; write(n); }} className={`${ctl} w-32`} placeholder="text value" />
+      <OperatorValue rule={c} dataType="text" operators={RESOURCE_OPS} onChange={value => { const n = [...entries]; n[i] = [k, value]; write(n); }} disabled={disabled} issueAt={s => issueAt(`.where.${k}${s}`) || issueAt(`.where.${k}`)} testId={`${testId}-prop-value-${i}`} />
       {!disabled && <button type="button" aria-label="Remove property filter" onClick={() => write(entries.filter((_, j) => j !== i))} className="text-ink-muted hover:text-danger p-0.5"><X size={12} /></button>}
     </div>)}
     {!disabled && <button type="button" data-testid={`${testId}-add-prop`} onClick={() => write([...entries, [`properties.key${entries.length + 1}`, { operator: 'eq', value: '' }]])} className="w-fit text-[11px] text-ink-muted hover:text-signal inline-flex items-center gap-1"><Plus size={11} /> property filter</button>}
   </div>;
 }
 
+/** Resource join filters (source code / product / VOD title) shared by gift and event rules. */
+export function ResourceWhere({ where, filters, onChange, disabled, issueAt, testId }: { where: Record<string, Cond>; filters: Record<string, string>; onChange: (w: Record<string, Cond>) => void; disabled?: boolean; issueAt: (s: string) => boolean; testId: string }) {
+  const keys = Object.keys(where);
+  const unused = Object.keys(filters).filter(k => !keys.includes(k));
+  const put = (k: string, c: Cond | null) => { const n = { ...where }; if (c) n[k] = c; else delete n[k]; onChange(n); };
+  return <div className="flex flex-col gap-1">
+    {keys.map(k => <div key={k} className="flex flex-wrap items-center gap-1 pl-3 border-l border-signal/40" data-testid={`${testId}-resource-${k}`}>
+      <span className="text-[11px] text-ink-muted w-28">{resourceLabel(k)}</span>
+      <OperatorValue rule={where[k]} dataType="text" operators={RESOURCE_OPS} onChange={c => put(k, c)} disabled={disabled} issueAt={s => issueAt(`.where.${k}${s}`) || issueAt(`.where.${k}`)} testId={`${testId}-resource-${k}`} />
+      {!disabled && <button type="button" aria-label={`Remove ${resourceLabel(k)} filter`} data-testid={`${testId}-remove-resource-${k}`} onClick={() => put(k, null)} className="text-ink-muted hover:text-danger p-0.5"><X size={12} /></button>}
+    </div>)}
+    {!disabled && unused.length > 0 && <NativeSelect aria-label="Add resource filter" data-testid={`${testId}-add-resource`} value="" className="w-fit text-ink-muted"
+      onChange={e => { const k = e.target.value; if (k) put(k, { operator: 'eq', value: '' }); }}>
+      <option value="">+ resource filter</option>{unused.map(k => <option key={k} value={k}>{resourceLabel(k)}</option>)}
+    </NativeSelect>}
+  </div>;
+}
+
 /** Type-specific controls for a single rule. Fields stay exactly as the DSL defines them. */
-export function RuleControls({ rule, field, fields, giftValues, segments, currentId, onChange, disabled, issueAt, testId }: {
-  rule: SegmentRule; field?: SegmentField; fields: SegmentField[]; giftValues: Record<string, string[]>; segments: Segment[]; currentId?: number;
+export function RuleControls({ rule, field, fields, giftValues, resourceFilters = RESOURCE_WHERE, eventNames = [], segments, currentId, onChange, disabled, issueAt, testId }: {
+  rule: SegmentRule; field?: SegmentField; fields: SegmentField[]; giftValues: Record<string, string[]>; resourceFilters?: Record<string, string>; eventNames?: readonly string[]; segments: Segment[]; currentId?: number;
   onChange: (r: SegmentRule) => void; disabled?: boolean; issueAt: (s: string) => boolean; testId: string;
 }) {
   const set = (patch: Partial<SegmentRule>) => onChange({ ...rule, ...patch });
@@ -261,16 +278,25 @@ export function RuleControls({ rule, field, fields, giftValues, segments, curren
   }
   if (!field) return <span className="text-[11px] text-danger">Field not in registry — pick another.</span>;
   if (rule.type === 'gift' || rule.type === 'event') {
+    const allWhere = (rule.where ?? {}) as Record<string, Cond>;
+    const ownWhere = Object.fromEntries(Object.entries(allWhere).filter(([k]) => !isResourceKey(k, resourceFilters)));
+    const resWhere = Object.fromEntries(Object.entries(allWhere).filter(([k]) => isResourceKey(k, resourceFilters)));
+    const writeWhere = (own: Record<string, Cond> | undefined, res: Record<string, Cond>) => {
+      const merged = { ...(own ?? {}), ...res }; const n = { ...rule };
+      if (Object.keys(merged).length) n.where = merged; else delete n.where; onChange(n);
+    };
     return <div className="flex flex-col gap-1.5 w-full">
       <div className="flex flex-wrap items-center gap-1">
-        {rule.type === 'event' && <input aria-label="Event name" data-testid={`${testId}-event-name`} disabled={disabled} value={String(rule.name ?? '')} placeholder="Event name, e.g. Video Watched"
+        {rule.type === 'event' && <input aria-label="Event name" data-testid={`${testId}-event-name`} disabled={disabled} value={String(rule.name ?? '')} list={`${testId}-event-names`} placeholder="Event name, e.g. vod_viewed"
           aria-invalid={issueAt('.name') || undefined} onChange={e => set({ name: e.target.value })} className={`${ctl}${ctlErr(issueAt('.name'))} w-48`} />}
         <OperatorValue rule={rule} dataType={field.data_type} operators={field.operators} onChange={c => onChange({ ...rule, ...c } as SegmentRule)} disabled={disabled} issueAt={issueAt} testId={testId} />
         <WindowEditor window={rule.window} onChange={w => { const n = { ...rule }; if (w) n.window = w; else delete n.window; onChange(n); }} disabled={disabled} issueAt={issueAt} testId={testId} />
       </div>
+      {rule.type === 'event' && eventNames.length > 0 && <datalist id={`${testId}-event-names`}>{eventNames.map(n => <option key={n} value={n} />)}</datalist>}
       {rule.type === 'gift'
-        ? <GiftWhere where={rule.where} giftValues={giftValues} onChange={w => { const n = { ...rule }; if (w) n.where = w; else delete n.where; onChange(n); }} disabled={disabled} issueAt={issueAt} testId={testId} />
-        : <EventWhere where={rule.where} onChange={w => { const n = { ...rule }; if (w) n.where = w; else delete n.where; onChange(n); }} disabled={disabled} issueAt={issueAt} testId={testId} />}
+        ? <GiftWhere where={ownWhere} giftValues={giftValues} onChange={w => writeWhere(w, resWhere)} disabled={disabled} issueAt={issueAt} testId={testId} />
+        : <EventWhere where={ownWhere} onChange={w => writeWhere(w, resWhere)} disabled={disabled} issueAt={issueAt} testId={testId} />}
+      <ResourceWhere where={resWhere} filters={resourceFilters} onChange={r => writeWhere(ownWhere, r)} disabled={disabled} issueAt={issueAt} testId={testId} />
     </div>;
   }
   return <OperatorValue rule={rule} dataType={field.data_type} operators={field.operators} enumValues={field.enum_values}

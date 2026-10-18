@@ -188,7 +188,12 @@ def test_bulk_transitive_pending_and_existing_owner_closure():
         assert resolve_bulk(db) == {"records": 3, "profiles_created": 3, "merges": 0}
         ids = dict(db.execute(text("SELECT external_id,profile_id FROM source_records WHERE source_id=:s"),
                               {"s": source}).all())
-        # The newest numeric ID is deliberately the oldest person.
+        # Profile dates are mutable source facts; changing one must not change
+        # which immutable master was issued first.
+        oldest = db.scalar(text("""
+          SELECT p.id FROM profiles p JOIN master_id_registry r ON r.master_id=p.master_id
+          WHERE p.id=ANY(:ids) ORDER BY left(p.master_id,14),r.issued_at,p.id LIMIT 1
+        """), {"ids": list(ids.values())})
         db.execute(text("UPDATE profiles SET first_seen_at='2000-01-01' WHERE id=:id"), {"id": ids["c"]})
         db.execute(text("""
             INSERT INTO identifiers(type,value,profile_id)
@@ -201,7 +206,7 @@ def test_bulk_transitive_pending_and_existing_owner_closure():
         """), {"s": source})
         assert resolve_bulk(db) == {"records": 2, "profiles_created": 0, "merges": 2}
         assert db.scalars(text("SELECT DISTINCT profile_id FROM source_records WHERE source_id=:s"),
-                          {"s": source}).all() == [ids["c"]]
+                          {"s": source}).all() == [oldest]
         assert resolve_bulk(db)["records"] == 0
         db.rollback()
 
