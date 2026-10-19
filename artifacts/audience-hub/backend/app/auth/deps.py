@@ -7,6 +7,13 @@ from app.models import User
 
 ORDER = {"viewer": 0, "analyst": 1, "admin": 2}
 
+def clear_authentication(request: Request):
+    """Drop authenticated state without invalidating a displayed login form."""
+    csrf = request.session.get("csrf")
+    request.session.clear()
+    if csrf:
+        request.session["csrf"] = csrf
+
 
 def current_user(request: Request, db: Session = Depends(session_scope)) -> User:
     from app.config import get_settings
@@ -20,12 +27,15 @@ def current_user(request: Request, db: Session = Depends(session_scope)) -> User
             RETURNING user_id,mfa_verified"""),
             {"hash": token_hash(sid), "activity": request.headers.get("X-Kinship-Activity", "1") == "1"}).mappings().first() if sid else None
         if not row:
-            request.session.clear()
+            # Anonymous requests may run alongside the login CSRF bootstrap.
+            # Never erase its token just because no authenticated session exists.
+            if sid or request.session.get("uid"):
+                clear_authentication(request)
             raise HTTPException(401, "Sign in required")
         user = db.get(User, row["user_id"])
         if not user or not user.is_active or user.role not in ORDER:
             db.rollback()
-            request.session.clear()
+            clear_authentication(request)
             raise HTTPException(401, "Account inactive")
         required = user.role == "admin" and db.scalar(text("SELECT require_admin_totp FROM operations_policy WHERE id=1"))
         enabled = db.scalar(text("SELECT totp_secret IS NOT NULL FROM local_credentials WHERE user_id=:id"), {"id": user.id})
@@ -43,11 +53,11 @@ def current_user(request: Request, db: Session = Depends(session_scope)) -> User
     issued = request.session.get("issued", 0)
     touched = request.session.get("touched", 0)
     if not uid or time.time() - touched > 8 * 3600:
-        request.session.clear()
+        clear_authentication(request)
         raise HTTPException(401, detail="Sign in required")
     user = db.get(User, uid)
     if not user or not user.is_active or user.role not in ORDER:
-        request.session.clear()
+        clear_authentication(request)
         raise HTTPException(401, detail="Account inactive")
     # Signed cookie session's idle timestamp is refreshed on each request.
     request.session["touched"] = int(time.time())

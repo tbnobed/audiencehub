@@ -44,7 +44,7 @@ export async function fetchApi(url: string, options: ApiRequestOptions = {}) {
   headers.set('X-Kinship-Activity', Date.now() - lastInteraction < 60_000 ? '1' : '0');
   
   if (options.method && options.method !== 'GET' && options.method !== 'HEAD') {
-    if (csrfToken) {
+    if (csrfToken && !headers.has('X-CSRF-Token')) {
       headers.set('X-CSRF-Token', csrfToken);
     }
   }

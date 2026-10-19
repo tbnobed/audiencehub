@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { setCsrfToken } from '@/lib/api';
+import { API_TIMEOUT_MS, fetchApi, setCsrfToken } from '@/lib/api';
 import { useAuth, Role } from '@/hooks/use-auth';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -8,6 +8,16 @@ import { Input } from '@/components/ui/input';
 import { useQuery } from '@tanstack/react-query';
 import { brandAsset, useTheme } from '@/lib/theme';
 import { ThemeToggle } from '@/components/theme/theme-toggle';
+
+async function loginCsrf(signal?: AbortSignal): Promise<string> {
+  const data = await fetchApi('/auth/local/session', {
+    method: 'GET', cache: 'no-store', signal, timeoutMs: API_TIMEOUT_MS,
+  });
+  if (typeof data.csrf_token !== 'string' || !data.csrf_token) {
+    throw new Error('Could not prepare a secure sign-in session. Please try again.');
+  }
+  return data.csrf_token;
+}
 
 export default function Login() {
   const { login } = useAuth();
@@ -37,16 +47,22 @@ export default function Login() {
   const [csrf, setCsrf] = useState('');
   useEffect(() => {
     if (auth?.mode !== 'local') return;
-    fetch('/auth/local/session', { credentials: 'include' }).then(r => r.json()).then(d => setCsrf(d.csrf_token)).catch(() => setErrorMessage('Cannot reach the authentication service'));
+    const controller = new AbortController();
+    loginCsrf(controller.signal).then(setCsrf).catch(() => {
+      if (!controller.signal.aborted) setErrorMessage('Cannot reach the authentication service');
+    });
+    return () => controller.abort();
   }, [auth?.mode]);
   const post = async (path: string, body: object) => {
-    const r = await fetch(path, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf }, body: JSON.stringify(body) });
-    if (!r.ok) {
-      let m = 'Sign-in failed';
-      try { const d = await r.json(); m = d.error?.message || d.message || m; } catch { /* ignore */ }
-      throw new Error(m);
-    }
-    const data = await r.json().catch(() => ({}));
+    // Another tab or an expired session may have changed the cookie since mount.
+    // Await its matching fresh token/cookie before sending credentials.
+    const currentCsrf = await loginCsrf();
+    setCsrf(currentCsrf);
+    const data = await fetchApi(path, {
+      method: 'POST', timeoutMs: API_TIMEOUT_MS,
+      headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': currentCsrf },
+      body: JSON.stringify(body),
+    });
     if (token) window.history.replaceState(null, '', window.location.pathname);
     if (data.login_required) {
       setToken(null); setPassword(''); setAgain(''); setNeedTotp(true);

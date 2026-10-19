@@ -87,6 +87,35 @@ def test_idle_session_expires_on_server(local_client, db):
     assert client.get("/api/me").status_code == 401
 
 
+def test_anonymous_checks_preserve_login_csrf(local_client):
+    client, user = local_client
+    csrf = client.headers["X-CSRF-Token"]
+    for _ in range(3):
+        assert client.get("/api/me").status_code == 401
+    assert client.get("/auth/local/session").json()["csrf_token"] == csrf
+    assert client.post("/auth/local/login", json={"email": user.email, "password": PASSWORD}).status_code == 200
+    assert client.get("/api/me").status_code == 200
+
+
+def test_csrf_is_still_required_for_login(local_client):
+    client, user = local_client
+    assert client.post("/auth/local/login", headers={"X-CSRF-Token": "incorrect"},
+                       json={"email": user.email, "password": PASSWORD}).status_code == 403
+    assert client.post("/auth/local/login", json={"email": user.email, "password": PASSWORD}).status_code == 200
+
+
+def test_expired_session_keeps_csrf_for_reauthentication(local_client, db):
+    client, user = local_client
+    assert client.post("/auth/local/login", json={"email": user.email, "password": PASSWORD}).status_code == 200
+    csrf = client.get("/auth/local/session").json()["csrf_token"]
+    client.headers["X-CSRF-Token"] = csrf
+    db.execute(text("UPDATE local_sessions SET last_seen=now()-interval '8 hours 1 second'"))
+    db.commit()
+    assert client.get("/api/me").status_code == 401
+    assert client.get("/auth/local/session").json()["csrf_token"] == csrf
+    assert client.post("/auth/local/login", json={"email": user.email, "password": PASSWORD}).status_code == 200
+
+
 def test_last_admin_cannot_be_demoted(local_client, db):
     _, user = local_client
     from fastapi import HTTPException

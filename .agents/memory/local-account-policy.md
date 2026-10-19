@@ -23,6 +23,16 @@ handler can recreate the query repeatedly and keep the login screen loading.
 **How to apply:** keep login/logout/session-expiration transitions separate from
 generic API failure handling and bound the initial session request.
 
+Anonymous authentication checks must not invalidate the CSRF session of an open
+login form. Remove authentication privileges separately from the anonymous token.
+
+**Why:** read-only session checks can run while a login form is open; clearing the
+whole cookie makes its legitimate CSRF header mismatch before password checking.
+
+**How to apply:** preserve anonymous CSRF during unauthorized reads, avoid polling
+when signed out, and refresh the token/cookie pair before submitting credentials.
+Do not fix these failures by weakening CSRF validation.
+
 Suppression peppers cannot simply be replaced and discarded. Deleted identifiers
 may have no remaining cleartext from which to regenerate permanent tombstones.
 

@@ -1,7 +1,7 @@
 // Run: node --test src/lib/api.test.ts (Node >= 22.18)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { apiUrl, ApiError, ApiTimeoutError, fetchApi } from './api.ts';
+import { apiUrl, ApiError, ApiTimeoutError, fetchApi, setCsrfToken } from './api.ts';
 
 test('API and download paths respect the artifact base without double-prefixing', () => {
   assert.equal(apiUrl('/api/activation-runs/12/download', '/audience-hub/'),
@@ -75,5 +75,24 @@ test('an anonymous session check returns a typed 401 without expiring its own qu
     globalThis.fetch = originalFetch;
     if (originalWindow) Object.defineProperty(globalThis, 'window', originalWindow);
     else Reflect.deleteProperty(globalThis, 'window');
+  }
+});
+
+test('an explicit fresh CSRF token is not replaced by a stale cached token', async () => {
+  const originalFetch = globalThis.fetch;
+  let received = '';
+  globalThis.fetch = async (_input, init) => {
+    received = new Headers(init?.headers).get('X-CSRF-Token') ?? '';
+    return Response.json({ ok: true });
+  };
+  try {
+    setCsrfToken('stale-token');
+    await fetchApi('/auth/local/login', {
+      method: 'POST', headers: { 'X-CSRF-Token': 'fresh-token' },
+    });
+    assert.equal(received, 'fresh-token');
+  } finally {
+    setCsrfToken(null);
+    globalThis.fetch = originalFetch;
   }
 });

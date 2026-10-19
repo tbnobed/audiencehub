@@ -45,8 +45,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     },
     retry: false,
     staleTime: 60_000,
-    refetchInterval: 60_000,
+    refetchInterval: query => query.state.data ? 60_000 : false,
     refetchIntervalInBackground: false,
+    refetchOnWindowFocus: query => query.state.data !== null,
   });
   const resetSession = useCallback(() => {
     setCsrfToken(null);
