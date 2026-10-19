@@ -1,4 +1,10 @@
 export let csrfToken: string | null = null;
+let lastInteraction = Date.now();
+if (typeof window !== 'undefined') {
+  for (const event of ['pointerdown', 'keydown', 'touchstart']) {
+    window.addEventListener(event, () => { lastInteraction = Date.now(); }, { passive: true });
+  }
+}
 
 export function setCsrfToken(token: string | null) {
   csrfToken = token;
@@ -25,6 +31,8 @@ export async function fetchApi(url: string, options: ApiRequestOptions = {}) {
   const { timeoutMs = url.startsWith('/api/dashboards/') ? API_TIMEOUT_MS : undefined, signal, ...requestOptions } = options;
   if (signal?.aborted) throw new DOMException('The request was cancelled.', 'AbortError');
   const headers = new Headers(options.headers || {});
+  // Background polling must not keep an unattended session alive forever.
+  headers.set('X-Kinship-Activity', Date.now() - lastInteraction < 60_000 ? '1' : '0');
   
   if (options.method && options.method !== 'GET' && options.method !== 'HEAD') {
     if (csrfToken) {
@@ -59,6 +67,9 @@ export async function fetchApi(url: string, options: ApiRequestOptions = {}) {
     return await Promise.race([(async () => {
       const response = await fetch(apiUrl(url), fetchOptions);
       if (!response.ok) {
+        if (response.status === 401 && url.startsWith('/api/')) {
+          window.dispatchEvent(new Event('kinship-session-expired'));
+        }
         let message = 'API Error';
         try {
           const data = await response.json();

@@ -64,6 +64,10 @@ def run(job_type: str, payload: dict, job_id: int | None = None) -> None:
         from app.privacy.jobs import run_deletion
         run_deletion(int(payload["request_id"]), job_id=job_id)
         return
+    if job_type == "maintenance.run":
+        from app.operations.maintenance import run as run_maintenance
+        run_maintenance(job_id)
+        return
     if job_type == "privacy.expire_uploads":
         from app.privacy.jobs import run_upload_retention
         run_upload_retention()

@@ -9,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
-from app.auth import dev, oidc
+from app.auth import dev
 from app.auth.deps import check_csrf, current_user, require_role
 from app.config import get_settings
 from app.db import engine, session_scope
@@ -34,7 +34,6 @@ from app.resources import router as resources_router
 async def lifespan(app: FastAPI):
     settings = get_settings()  # Fail closed before accepting requests.
     configure_logging(settings.log_level)
-    oidc.configure_oidc()
     queue.startup_selfcheck(engine)
     from app.segments.service import ensure_templates
     with Session(engine) as db:
@@ -52,7 +51,6 @@ app.include_router(ingestion_router)
 app.include_router(identity_router)
 app.include_router(resources_router)
 app.include_router(dev.router)
-app.include_router(oidc.router)
 app.include_router(sources_router)
 app.include_router(imports_router)
 app.include_router(profiles_router)
@@ -64,6 +62,10 @@ app.include_router(zeta_router)
 app.include_router(source_jobs_router)
 from app.hubspot_api import router as hubspot_router
 app.include_router(hubspot_router)
+from app.auth.local import router as local_auth_router
+from app.operations.api import router as operations_router
+app.include_router(local_auth_router)
+app.include_router(operations_router)
 
 
 @app.exception_handler(HTTPException)
@@ -88,6 +90,8 @@ async def secure_headers(request: Request, call_next):
             return JSONResponse({"error": {"code": "csrf_failed", "message": "Invalid CSRF token"}},
                                 status_code=403, headers={"X-Content-Type-Options": "nosniff"})
     response = await call_next(request)
+    if request.url.path.startswith(("/api/", "/auth/")):
+        response.headers["Cache-Control"] = "no-store"
     if "Content-Security-Policy" not in response.headers:
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
@@ -145,6 +149,8 @@ def readyz():
 def me(request: Request, user: User = Depends(current_user)):
     return {"id": user.id, "email": user.email, "name": user.name, "role": user.role,
             "csrf_token": request.session["csrf"], "auth_mode": settings.auth_mode,
+            "mfa_enabled": getattr(request.state, "mfa_enabled", False),
+            "mfa_required": getattr(request.state, "mfa_required", False),
             "app_env": settings.app_env}
 
 
@@ -156,6 +162,12 @@ def auth_mode():
 @app.post("/auth/logout")
 def logout(request: Request, user: User = Depends(current_user)):
     check_csrf(request)
+    if settings.auth_mode == "local":
+        from app.auth.passwords import token_hash
+        with Session(engine) as db:
+            db.execute(text("DELETE FROM local_sessions WHERE token_hash=:hash"),
+                       {"hash": token_hash(request.session.get("sid", ""))})
+            db.commit()
     request.session.clear()
     return {"ok": True}
 

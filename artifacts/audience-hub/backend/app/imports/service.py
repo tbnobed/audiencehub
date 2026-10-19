@@ -218,11 +218,14 @@ def _identifiers_blocked_batch(
         return {identity: (False, False, False) for identity in identities}
     email_hash_values: dict[str, set[str]] = {}
     phone_hash_values: dict[str, set[str]] = {}
+    from app.keyring import pii_hashes
     for email in emails:
         for value in {email, email.casefold()}:
-            email_hash_values.setdefault(_identity_hash(pepper, value), set()).add(email)
+            for hashed in pii_hashes(value, pepper):
+                email_hash_values.setdefault(hashed, set()).add(email)
     for phone in phones:
-        phone_hash_values.setdefault(_identity_hash(pepper, phone), set()).add(phone)
+        for hashed in pii_hashes(phone, pepper):
+            phone_hash_values.setdefault(hashed, set()).add(phone)
 
     deletion_emails: set[str] = set()
     deletion_phones: set[str] = set()
@@ -837,12 +840,14 @@ def _run_import(import_id: int, progress_callback=None, db: Session | None = Non
             identity_checks = _identifiers_blocked_batch(db, identities, pepper)
             from app.identity.master import SYSTEM_KEYS
             identity_hashes = {}
+            from app.keyring import pii_hashes
             for line, _, converted, values in batch_rows:
                 if not converted["errors"]:
                     attrs = values.get("attributes", {})
                     identity_hashes[line] = {
-                        (key, _identity_hash(pepper, str(attrs[key]).strip()))
+                        (key, hashed)
                         for key in (*SYSTEM_KEYS, "email_md5", "email_sha256") if attrs.get(key)
+                        for hashed in pii_hashes(str(attrs[key]).strip(), pepper)
                     }
             candidates = sorted({pair for pairs in identity_hashes.values() for pair in pairs})
             blocked_identity = set(db.execute(text("""
@@ -864,7 +869,7 @@ def _run_import(import_id: int, progress_callback=None, db: Session | None = Non
                     candidates.add(f"{source_key}:{values['message_id']}")
                 if values.get("contact_external_id") and options.get("reference_source"):
                     candidates.add(f"{options['reference_source']}:{values['contact_external_id']}")
-                external_hashes[line] = {_identity_hash(pepper, value) for value in candidates}
+                external_hashes[line] = {hashed for value in candidates for hashed in pii_hashes(value, pepper)}
             blocked_external = set(db.scalars(text("""SELECT value_hash FROM suppressions
                 WHERE type='external' AND reason='deletion_request' AND value_hash=ANY(:hashes)"""),
                 {"hashes": list(set().union(*external_hashes.values())) if external_hashes else []}))

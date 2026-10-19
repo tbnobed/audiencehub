@@ -2,6 +2,11 @@
 
 Build in this order. Each milestone ends with its acceptance checks passing, tests green (`pytest -q` and `npm run build && npm run lint`), the README updated, and a short summary to me.
 
+**Current scope:** M8 implements local accounts only; OIDC/SSO is disabled for now.
+Operational instructions and server-only release checks are in `OPERATIONS.md`.
+The historical generator/source descriptions below are superseded by the audited
+seven-feed generator and UTC-relative dates in `ZETA_ALIGNMENT.md`.
+
 **User-directed order update:** after M5, implement **M7 before M6**, then M8.
 Milestone numbers remain unchanged. M5 is accepted pending production-scale checks.
 

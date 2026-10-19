@@ -10,7 +10,9 @@ class Settings(BaseSettings):
     secret_key: str
     fernet_key: str
     pii_hash_pepper: str
-    auth_mode: str = "oidc"
+    fernet_keys_previous: str = ""
+    pii_hash_peppers_previous: str = ""
+    auth_mode: str = "local"
     oidc_issuer: str = ""
     oidc_client_id: str = ""
     oidc_client_secret: str = ""
@@ -43,12 +45,8 @@ class Settings(BaseSettings):
     def validate_auth(self):
         if self.app_env == "production" and self.auth_mode == "dev":
             raise ValueError("AUTH_MODE=dev is forbidden in production")
-        if self.auth_mode not in ("dev", "oidc"):
-            raise ValueError("AUTH_MODE must be dev or oidc")
-        if self.auth_mode == "oidc" and not all(
-            (self.oidc_issuer, self.oidc_client_id, self.oidc_client_secret, self.public_base_url)
-        ):
-            raise ValueError("OIDC requires issuer, client ID, client secret and public base URL")
+        if self.auth_mode not in ("dev", "local"):
+            raise ValueError("AUTH_MODE must be local (dev is allowed only outside production); SSO is disabled")
         if self.app_env == "production" and len(self.secret_key) < 32:
             raise ValueError("SECRET_KEY must be at least 32 characters in production")
         return self

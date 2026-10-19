@@ -19,6 +19,8 @@ const Sources = lazy(() => import('@/pages/sources'));
 const DataHealth = lazy(() => import('@/pages/data-health'));
 const Admin = lazy(() => import('@/pages/admin'));
 const System = lazy(() => import('@/pages/system'));
+const Account = lazy(() => import('@/pages/account'));
+const MfaGate = lazy(() => import('@/pages/mfa-gate'));
 const NotFound = lazy(() => import('@/pages/not-found'));
 
 const routeLoading = <div role="status" className="p-8 text-muted-foreground">Loading page…</div>;
@@ -29,6 +31,7 @@ function Router() {
   const { user, isLoading } = useAuth();
   if (isLoading) return <div className="min-h-screen bg-background text-foreground p-8">Loading console…</div>;
   if (!user) return <Suspense fallback={routeLoading}><Login /></Suspense>;
+  if (user.mfa_required && !user.mfa_enabled) return <Suspense fallback={routeLoading}><MfaGate /></Suspense>;
   return (
     <ErrorBoundary>
       <Layout>
@@ -50,6 +53,7 @@ function Router() {
           <Route path="/sources" element={user.role === 'viewer' ? <Navigate to="/" /> : <Sources />} />
           <Route path="/admin" element={user.role === 'admin' ? <Admin /> : <Navigate to="/" />} />
           <Route path="/system" element={user.role === 'admin' ? <System /> : <Navigate to="/" />} />
+          <Route path="/account" element={<Account />} />
           <Route path="*" element={<NotFound />} />
         </Routes>
         </Suspense>

@@ -21,19 +21,23 @@ RUN PORT=5000 BASE_PATH=/ npm run build
 FROM python:3.12-slim-bookworm
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
 ENV KINSHIP_BENCHMARK_MIGRATIONS=/app/backend/alembic.ini
-RUN apt-get update && apt-get install -y --no-install-recommends libpq5 tini curl \
+RUN apt-get update && apt-get install -y --no-install-recommends libpq5 tini curl libstdc++6 \
   && rm -rf /var/lib/apt/lists/*
 RUN useradd --create-home --uid 10001 app
 WORKDIR /app
 COPY backend/pyproject.toml ./backend/
-COPY backend/app/__init__.py ./backend/app/
+COPY backend/requirements.lock ./backend/
 # Install pinned dependencies in a cacheable layer.
-RUN pip install --upgrade pip && pip install ./backend
+RUN pip install --upgrade pip && pip install --require-hashes -r backend/requirements.lock
 COPY backend/ ./backend/
 # Replace the minimal package with the complete app and console entry point.
 RUN pip install --no-deps ./backend
 COPY --from=web /web/dist/public ./static
 COPY --from=web /web/dist/sdk ./static/sdk
+COPY --from=web /usr/local/bin/node /usr/local/bin/node
+COPY --from=web /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
+RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm
+COPY package.json package-lock.json /app/audit/
 COPY scripts/ ./scripts/
 RUN chmod +x scripts/*.sh && mkdir -p /data/uploads /data/exports \
   && chown -R app:app /data /app

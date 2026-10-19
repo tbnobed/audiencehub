@@ -1,4 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import { setCsrfToken } from '@/lib/api';
 import { useAuth, Role } from '@/hooks/use-auth';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -14,7 +16,7 @@ export default function Login() {
   const [name, setName] = useState('');
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
-  const { data: auth, isLoading } = useQuery<{ mode: 'dev' | 'oidc' }>({
+  const { data: auth, isLoading } = useQuery<{ mode: 'dev' | 'local' }>({
     queryKey: ['auth-mode'],
     queryFn: async () => {
       const response = await fetch('/api/auth-mode');
@@ -23,6 +25,50 @@ export default function Login() {
     },
     retry: false,
   });
+
+  const qc = useQueryClient();
+  const [token, setToken] = useState(() => new URLSearchParams(window.location.search).get('token'));
+  const [notice, setNotice] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [again, setAgain] = useState('');
+  const [totp, setTotp] = useState('');
+  const [needTotp, setNeedTotp] = useState(false);
+  const [csrf, setCsrf] = useState('');
+  useEffect(() => {
+    if (auth?.mode !== 'local') return;
+    fetch('/auth/local/session', { credentials: 'include' }).then(r => r.json()).then(d => setCsrf(d.csrf_token)).catch(() => setErrorMessage('Cannot reach the authentication service'));
+  }, [auth?.mode]);
+  const post = async (path: string, body: object) => {
+    const r = await fetch(path, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf }, body: JSON.stringify(body) });
+    if (!r.ok) {
+      let m = 'Sign-in failed';
+      try { const d = await r.json(); m = d.error?.message || d.message || m; } catch { /* ignore */ }
+      throw new Error(m);
+    }
+    const data = await r.json().catch(() => ({}));
+    if (token) window.history.replaceState(null, '', window.location.pathname);
+    if (data.login_required) {
+      setToken(null); setPassword(''); setAgain(''); setNeedTotp(true);
+      setNotice('Password set. Sign in with your password and authenticator code.');
+      return;
+    }
+    setCsrfToken(null);
+    await qc.invalidateQueries({ queryKey: ['me'] });
+  };
+  const handleLocal = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (token && password !== again) { setErrorMessage('Passwords do not match.'); return; }
+    setLoading(true); setErrorMessage('');
+    try {
+      if (token) await post('/auth/local/accept', { token, password });
+      else await post('/auth/local/login', { email, password, ...(totp ? { totp } : {}) });
+    } catch (error) {
+      const m = error instanceof Error ? error.message : 'Sign-in failed';
+      if (/totp|authenticator|code/i.test(m)) setNeedTotp(true);
+      setErrorMessage(m);
+    } finally { setLoading(false); }
+  };
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -47,9 +93,13 @@ export default function Login() {
           <CardDescription>{auth?.mode === 'dev' ? 'Select a role to enter the development console.' : 'Sign in to the operations console.'}</CardDescription>
         </CardHeader>
         <CardContent>
-          {isLoading ? <p>Checking sign-in settings…</p> : auth?.mode === 'oidc' ? (
-            <a href="/auth/login" className="block rounded bg-primary px-4 py-2 text-center text-primary-foreground">Sign in with your organization</a>
-          ) : auth?.mode === 'dev' ? <form onSubmit={handleLogin} className="space-y-4">
+          {isLoading ? <p>Checking sign-in settings…</p> : auth?.mode === 'local' ? <form onSubmit={handleLocal} className="space-y-4">
+            {token ? <p className="text-sm text-muted-foreground">Choose a password to activate your account or finish a reset.</p> : <div className="space-y-2"><label className="text-sm font-medium" htmlFor="login-email">Email</label><Input id="login-email" data-testid="input-login-email" type="email" autoComplete="username" value={email} onChange={e => setEmail(e.target.value)} required /></div>}
+            <div className="space-y-2"><label className="text-sm font-medium" htmlFor="login-password">{token ? 'New password' : 'Password'}</label><Input id="login-password" data-testid="input-login-password" type="password" autoComplete={token ? 'new-password' : 'current-password'} value={password} onChange={e => setPassword(e.target.value)} required /></div>
+            {token && <div className="space-y-2"><label className="text-sm font-medium" htmlFor="login-again">Confirm password</label><Input id="login-again" data-testid="input-login-confirm" type="password" autoComplete="new-password" value={again} onChange={e => setAgain(e.target.value)} required /></div>}
+            {!token && <div className="space-y-2"><label className="text-sm font-medium" htmlFor="login-totp">Authenticator code{needTotp ? '' : ' (if enabled)'}</label><Input id="login-totp" data-testid="input-login-totp" inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={totp} onChange={e => setTotp(e.target.value.replace(/\D/g, ''))} required={needTotp} /></div>}
+            <Button data-testid="button-login" type="submit" className="w-full" disabled={loading || !csrf}>{loading ? 'Working…' : token ? 'Set password and continue' : 'Sign in'}</Button>
+          </form> : auth?.mode === 'dev' ? <form onSubmit={handleLogin} className="space-y-4">
             <div className="space-y-2">
               <label className="text-sm font-medium">Name</label>
               <Input 
@@ -79,6 +129,7 @@ export default function Login() {
               {loading ? 'Logging in...' : 'Enter Console'}
             </Button>
           </form> : <p className="text-destructive">Authentication is unavailable. Check the API connection.</p>}
+          {notice ? <p role="status" className="mt-4 text-sm text-ok">{notice}</p> : null}
           {errorMessage ? <p role="alert" className="mt-4 text-sm text-destructive">{errorMessage}</p> : null}
         </CardContent>
       </Card>

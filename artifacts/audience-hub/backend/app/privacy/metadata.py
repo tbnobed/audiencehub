@@ -271,13 +271,14 @@ def metadata_match_counts(db, aliases):
 def repair_completed_request(db, request_id, kind, value):
     """Targeted, audited metadata-only repair; caller commits; no profile recreation."""
     from app.privacy.service import normalize_identifier, digest, audit
+    from app.keyring import pii_matches
     privacy_exclusive(db)
     request = db.execute(text("SELECT * FROM deletion_requests WHERE id=:id FOR UPDATE"),
                          {"id": request_id}).mappings().first()
     normalized = normalize_identifier(kind, value)
     if (not request or request["status"] != "completed" or not request["approved_by"]
             or not request["approved_at"] or request["identifier_type"] != kind
-            or not hmac.compare_digest(request["identifier_value_hash"], digest(normalized))):
+            or not pii_matches(normalized, request["identifier_value_hash"])):
         raise ValueError("Metadata repair requires the matching identifier of a completed deletion request.")
     counts = redact_known_metadata(db, {(kind, normalized)})
     audit(db, None, "deletion.metadata_repair", "deletion_request", request_id, counts)

@@ -68,8 +68,9 @@ def preview(identifier: int, db: Session = Depends(session_scope), user: User = 
         FROM active_profiles p JOIN identity_xref x ON x.master_id=p.master_id AND x.key_type='hubspot_record_id'
         JOIN consents c ON c.profile_id=p.id AND c.channel='email' AND c.status='opted_in'
         WHERE p.id=ANY(:ids) LIMIT 100"""), {"ids": ids}).mappings().all()
-    hashes = {row["hubspot_record_id"]: digest(normalize_email(row["email"]) or "") for row in rows}
+    from app.keyring import pii_hashes
+    hashes = {row["hubspot_record_id"]: pii_hashes(normalize_email(row["email"]) or "") for row in rows}
     blocked = set(db.scalars(text("SELECT value_hash FROM suppressions WHERE type='email' AND value_hash=ANY(:hashes)"),
-                            {"hashes": list(hashes.values())}))
-    return {"items": [dict(row) for row in rows if row["email"] and hashes[row["hubspot_record_id"]] not in blocked],
+                            {"hashes": [hashed for candidates in hashes.values() for hashed in candidates]}))
+    return {"items": [dict(row) for row in rows if row["email"] and not blocked.intersection(hashes[row["hubspot_record_id"]])],
             "limit": 100}

@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { SuppressionsPanel } from '@/components/privacy/suppressions-panel';
 import { DeletionPanel } from '@/components/privacy/deletion-panel';
+import { AdminUsersPanel, AuditPanel, MaintenancePanel } from '@/components/admin/admin-panels';
 import { useAuth } from '@/hooks/use-auth';
 import { useAdminSettings, useUpdateAdminSettings, type DashboardSettingsPatch } from '@/hooks/use-dashboards';
 import { validateCustomRange, type DashboardDefaultRange } from '@/lib/date-range';
@@ -64,7 +65,10 @@ export default function Admin() {
     </header>
 
     <Tabs defaultValue="settings">
-      <TabsList className="mb-4"><TabsTrigger data-testid="tab-admin-settings" value="settings">Settings</TabsTrigger><TabsTrigger data-testid="tab-admin-suppressions" value="suppressions">Suppressions</TabsTrigger><TabsTrigger data-testid="tab-admin-deletions" value="deletions">Deletion requests</TabsTrigger></TabsList>
+      <TabsList className="mb-4"><TabsTrigger data-testid="tab-admin-settings" value="settings">Settings</TabsTrigger><TabsTrigger data-testid="tab-admin-suppressions" value="suppressions">Suppressions</TabsTrigger><TabsTrigger data-testid="tab-admin-deletions" value="deletions">Deletion requests</TabsTrigger><TabsTrigger data-testid="tab-admin-users" value="users">Users</TabsTrigger><TabsTrigger data-testid="tab-admin-audit" value="audit">Audit log</TabsTrigger><TabsTrigger data-testid="tab-admin-maintenance" value="maintenance">Maintenance</TabsTrigger></TabsList>
+      <TabsContent value="users"><AdminUsersPanel /></TabsContent>
+      <TabsContent value="audit"><AuditPanel /></TabsContent>
+      <TabsContent value="maintenance"><MaintenancePanel /></TabsContent>
       <TabsContent value="suppressions"><SuppressionsPanel /></TabsContent>
       <TabsContent value="deletions"><DeletionPanel /></TabsContent>
       <TabsContent value="settings">

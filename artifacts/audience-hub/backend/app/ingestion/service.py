@@ -27,12 +27,13 @@ def identities(source, message):
 
 
 def suppressed(db, values):
-    pairs = sorted(values)
+    from app.keyring import pii_hashes
+    pairs = sorted((kind, hashed) for kind, value in values for hashed in pii_hashes(value))
     return db.scalar(text("""SELECT EXISTS(
       SELECT 1 FROM suppressions s JOIN
       unnest(CAST(:types AS text[]),CAST(:hashes AS text[])) v(kind,hash)
       ON s.type=v.kind AND s.value_hash=v.hash)"""),
-      {"types": [k for k, v in pairs], "hashes": [digest(v) for k, v in pairs]})
+      {"types": [k for k, v in pairs], "hashes": [v for k, v in pairs]})
 
 
 def ingest(db, source, messages):

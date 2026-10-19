@@ -29,6 +29,9 @@ DATA_TABLES = (
 RETAINED_TABLES = (
     "users", "sources", "enrichment_attributes", "admin_settings", "master_id_registry",
     "source_connections", "canonical_field_catalog",
+    "local_credentials", "local_sessions", "local_account_tokens",
+    "local_login_limits", "operations_policy",
+    "operations_cleanup_files",
 )
 KNOWN_TABLES = frozenset((*DATA_TABLES, *RETAINED_TABLES, "alembic_version"))
 
@@ -61,20 +64,22 @@ def busy_sessions(engine):
     ) or "No other busy sessions visible (check PostgreSQL monitoring permissions)."
 
 
-def reset_demo(engine: Engine, *, yes: bool = False, force: bool = False) -> None:
+def reset_demo(engine: Engine, *, yes: bool = False, force: bool = False,
+               confirm_database: str | None = None, go_live: bool = False) -> None:
     """Reset dataset rows only; refuse active jobs and unexpected schema changes."""
-    environment = os.environ.get("APP_ENV", "").strip().lower()
-    print("Reset scope (rows and identities): " + ", ".join(DATA_TABLES))
+    from app.operations.guards import production_guard
+    production_guard(engine, allow=force, database=confirm_database)
+    dataset_tables = tuple(name for name in DATA_TABLES
+                           if not go_live or name not in ("destinations", "audit_log"))
+    print("Reset scope (rows and identities): " + ", ".join(dataset_tables))
     print("Preserved (including source settings; per-import mappings are erased): "
           + ", ".join(RETAINED_TABLES))
     print("Source connections preserve encrypted credentials/configuration; incremental cursors "
           "and pending pull recovery state are cleared atomically with receipts.")
-    print("Guard: APP_ENV=production requires both --force and --yes; "
+    print("Guard: APP_ENV=production requires --force, --yes and --confirm-database; "
           "all environments require --yes. Running jobs or busy tables block reset.")
     if not yes:
         raise ValueError("Refusing reset-demo without --yes.")
-    if environment == "production" and not force:
-        raise ValueError("Refusing reset-demo in APP_ENV=production without --force AND --yes.")
 
     try:
         with engine.begin() as conn:
@@ -107,8 +112,33 @@ def reset_demo(engine: Engine, *, yes: bool = False, force: bool = False) -> Non
 
             # No CASCADE; PostgreSQL verifies every FK, including new ones from
             # protected tables, and rolls back every table if anything fails.
-            tables = ", ".join("public." + name for name in DATA_TABLES)
+            tables = ", ".join("public." + name for name in dataset_tables)
             conn.execute(text(f"LOCK TABLE {tables}, public.source_connections IN ACCESS EXCLUSIVE MODE NOWAIT"))
+            if go_live:
+                nonseed = conn.scalar(text("""SELECT count(*) FROM source_records r
+                    LEFT JOIN imports i ON i.id=r.last_import_id
+                    WHERE i.id IS NULL OR NOT coalesce(i.file_path ~ '/seed-[a-f0-9]{16}-',false)"""))
+                nonsynthetic_events = conn.scalar(text("""SELECT count(*) FROM events
+                    WHERE NOT context @> '{"synthetic":true}'::jsonb"""))
+                orphan_profiles = conn.scalar(text("""SELECT count(*) FROM profiles p WHERE NOT EXISTS
+                    (SELECT 1 FROM source_records r WHERE r.profile_id=p.id)
+                    AND NOT p.is_deleted AND p.merged_into_id IS NULL"""))
+                nonseed_gifts = conn.scalar(text("""SELECT count(*) FROM gifts g
+                    LEFT JOIN source_records r ON r.id=g.source_record_id
+                    LEFT JOIN imports i ON i.id=r.last_import_id
+                    WHERE i.id IS NULL OR NOT coalesce(i.file_path ~ '/seed-[a-f0-9]{16}-',false)"""))
+                if nonseed or nonsynthetic_events or orphan_profiles or nonseed_gifts:
+                    raise ValueError("Go-live wipe refused: real, mixed or unproven dataset evidence exists. No rows changed.")
+                # Keep every destination/config/secret, but prevent a scheduled
+                # empty managed-list sync before the real dataset is loaded.
+                conn.execute(text("UPDATE destinations SET is_active=false,updated_at=now()"))
+                # Durable cleanup receipts survive the dataset wipe. If the
+                # process dies after commit, daily maintenance finishes removal.
+                conn.execute(text("""INSERT INTO operations_cleanup_files(path)
+                    SELECT file_path FROM imports WHERE file_path IS NOT NULL
+                    UNION SELECT error_file_path FROM imports WHERE error_file_path IS NOT NULL
+                    UNION SELECT file_path FROM activation_runs WHERE file_path IS NOT NULL
+                    ON CONFLICT DO NOTHING"""))
             # CLI pulls also hold this advisory mutex, even while waiting on
             # remote I/O with no active database transaction or running job.
             for source_id in conn.execute(text("SELECT source_id FROM public.source_connections")).scalars():
@@ -123,6 +153,10 @@ def reset_demo(engine: Engine, *, yes: bool = False, force: bool = False) -> Non
             from app.segments.service import ensure_templates
             with Session(bind=conn) as db:
                 ensure_templates(db)
+                if go_live:
+                    from app.models import AuditLog
+                    db.add(AuditLog(actor_type="system", action="maintenance.demo_wiped",
+                                    entity_type="dataset", details={"destinations_preserved": True}))
                 db.commit()  # Joins, but does not commit, the outer transaction.
     except OperationalError as exc:
         if getattr(exc.orig, "sqlstate", None) == "55P03":
@@ -131,4 +165,8 @@ def reset_demo(engine: Engine, *, yes: bool = False, force: bool = False) -> Non
                 "Stop workers and other writers before retrying.\n" + busy_sessions(engine)
             ) from exc
         raise
+    if go_live:
+        from app.operations.files import cleanup_registered_files
+        cleanup_registered_files(engine)
+        print("Destinations preserved but paused for safety. Review real consented data before re-enabling deliveries.")
     print("Dataset reset complete. Users, sources, encrypted connections and admin settings preserved; source cursors and recovery state cleared.")

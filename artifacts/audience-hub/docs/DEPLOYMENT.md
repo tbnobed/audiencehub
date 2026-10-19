@@ -244,14 +244,7 @@ DATABASE_URL=postgresql+psycopg://audience:change-me@db:5432/audience_hub
 SECRET_KEY=generate-with-openssl-rand-hex-32
 FERNET_KEY=generate-with-python-cryptography-Fernet.generate_key
 PII_HASH_PEPPER=generate-with-openssl-rand-hex-32
-AUTH_MODE=oidc
-OIDC_ISSUER=https://sso.obtv.io/application/o/audience-hub/
-OIDC_CLIENT_ID=
-OIDC_CLIENT_SECRET=
-OIDC_ROLE_CLAIM=groups
-OIDC_ADMIN_GROUPS=ah-admins
-OIDC_ANALYST_GROUPS=ah-analysts
-OIDC_VIEWER_GROUPS=ah-viewers
+AUTH_MODE=local
 INGEST_CORS_ORIGINS=https://www.tbn.org,https://watch.tbn.org
 DEFAULT_PHONE_REGION=US
 EVENT_RETENTION_DAYS=730
@@ -269,14 +262,18 @@ LOG_LEVEL=INFO
 
 ```bash
 git clone <repo> /opt/audience-hub && cd /opt/audience-hub
-cp .env.example .env && nano .env        # fill secrets
+# Provision the settings in .env.example through your server secret configuration.
 docker compose build
 docker compose up -d
 docker compose logs -f api               # wait for "Application startup complete"
-docker compose exec api python -m app.cli create-admin --email you@obtv.io   # optional bootstrap
+docker compose exec api kinship local-admin --email ADMIN_EMAIL
 ```
 
-Then in Authentik: create an OAuth2/OIDC provider (confidential, redirect URI `https://audience.obtv.io/auth/callback`, scopes `openid email profile`, include the `groups` claim) and an application, and create the three groups.
+M8 uses local accounts, not SSO. The command prompts privately for the initial
+password. Enroll TOTP under Account security, invite a second administrator and
+then enable the admin-role requirement if desired. Follow [OPERATIONS.md](OPERATIONS.md)
+for current installation, account recovery, key rotation, maintenance, connection
+setup, production command guards and verification procedures.
 
 ## Upgrades
 

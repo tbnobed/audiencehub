@@ -70,6 +70,7 @@ def schedule_once(db: Session, task: str, window_key: str, job_type: str,
 
 def tick(db: Session) -> None:
     now = datetime.now(timezone.utc)
+    schedule_once(db, "maintenance.daily", now.strftime("%Y-%m-%d"), "maintenance.run", {})
     from app.source_pulls import tick_sources
     tick_sources(db, now)
     from app.activations.schedule import tick_activations

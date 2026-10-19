@@ -2,7 +2,7 @@ import { useState, useEffect, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/hooks/use-auth';
 import { Button } from '@/components/ui/button';
-import { Search, LogOut } from 'lucide-react';
+import { Search, LogOut, ShieldCheck } from 'lucide-react';
 import { JobsIcon } from '@/components/icons/KinshipIcons';
 import { JobActivityDrawer } from './job-activity-drawer';
 import { useQuery } from '@tanstack/react-query';
@@ -84,6 +84,9 @@ export function TopBar() {
             {showUserMenu && (
               <div role="menu" className="absolute right-0 mt-1 w-52 bg-popover border border-line rounded-md shadow-md py-1 z-50">
                 <div className="px-4 py-2 border-b border-line"><p className="text-sm font-medium truncate">{user.email}</p></div>
+                <button role="menuitem" data-testid="menu-account-security" onClick={() => { setShowUserMenu(false); navigate('/account'); }} className="w-full text-left px-4 py-2 text-sm text-ink hover:bg-surface-raised flex items-center">
+                  <ShieldCheck size={16} strokeWidth={1.75} className="mr-2" /> Account security
+                </button>
                 <button role="menuitem" onClick={() => logout()} className="w-full text-left px-4 py-2 text-sm text-danger hover:bg-surface-raised flex items-center">
                   <LogOut size={16} strokeWidth={1.75} className="mr-2" /> Sign out
                 </button>

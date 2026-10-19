@@ -1,4 +1,4 @@
-import { createContext, useContext, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, type ReactNode } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { fetchApi, setCsrfToken } from '@/lib/api';
 
@@ -12,6 +12,8 @@ export interface User {
   csrf_token: string;
   auth_mode: string;
   app_env: string;
+  mfa_required?: boolean;
+  mfa_enabled?: boolean;
 }
 
 interface AuthContextType {
@@ -34,8 +36,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return data;
     },
     retry: false,
-    staleTime: Infinity, // Avoid re-fetching too frequently
+    staleTime: 60_000,
+    refetchInterval: 60_000,
+    refetchIntervalInBackground: false,
   });
+  useEffect(() => {
+    const expired = () => {
+      setCsrfToken(null);
+      queryClient.clear();
+      queryClient.setQueryData(['me'], null);
+    };
+    window.addEventListener('kinship-session-expired', expired);
+    return () => window.removeEventListener('kinship-session-expired', expired);
+  }, [queryClient]);
 
   const loginMutation = useMutation({
     mutationFn: async ({ role, name }: { role: Role; name: string }) => {

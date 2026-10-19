@@ -124,7 +124,7 @@ def deliver(db, run, snapshot):
             db.execute(text("""DROP TABLE IF EXISTS pg_temp.hs_ids;
                 DROP TABLE IF EXISTS pg_temp.hs_desired; DROP TABLE IF EXISTS pg_temp.hs_current;
                 CREATE TEMP TABLE hs_ids(contact_id text PRIMARY KEY,master_id text,profile_id bigint) ON COMMIT DROP;
-                CREATE TEMP TABLE hs_desired(contact_id text PRIMARY KEY,email_hash text) ON COMMIT DROP;
+                CREATE TEMP TABLE hs_desired(contact_id text PRIMARY KEY,email_hashes text[]) ON COMMIT DROP;
                 CREATE TEMP TABLE hs_current(contact_id text PRIMARY KEY) ON COMMIT DROP"""))
             db.execute(text("""INSERT INTO hs_ids SELECT x.key_value,min(p.master_id),min(p.id)
                 FROM segment_membership sm JOIN active_profiles p ON p.id=sm.profile_id
@@ -146,17 +146,18 @@ def deliver(db, run, snapshot):
                 contacts, updated, unchanged = sync_master_ids(client, expected)
                 result["master_ids_updated"] += updated
                 result["master_ids_unchanged"] += unchanged
-                hashes = {str(c["id"]): digest(normalize_email(c["properties"].get("email")) or "")
+                from app.keyring import pii_hashes
+                hashes = {str(c["id"]): pii_hashes(normalize_email(c["properties"].get("email")) or "")
                           for c in contacts}
                 suppressed = set(db.scalars(text("SELECT value_hash FROM suppressions WHERE type='email' AND value_hash=ANY(:hashes)"),
-                                           {"hashes": list(hashes.values())}))
-                db.execute(text("""UPDATE hs_desired d SET email_hash=h.value
-                    FROM jsonb_each_text(CAST(:hashes AS jsonb)) h WHERE d.contact_id=h.key"""),
+                                           {"hashes": [hashed for candidates in hashes.values() for hashed in candidates]}))
+                db.execute(text("""UPDATE hs_desired d SET email_hashes=ARRAY(SELECT jsonb_array_elements_text(h.value))
+                    FROM jsonb_each(CAST(:hashes AS jsonb)) h WHERE d.contact_id=h.key"""),
                            {"hashes": json.dumps(hashes)})
                 blocked = []
                 for contact in contacts:
                     identifier, props = str(contact["id"]), contact["properties"]
-                    if (not normalize_email(props.get("email")) or hashes[identifier] in suppressed
+                    if (not normalize_email(props.get("email")) or suppressed.intersection(hashes[identifier])
                             or str(props.get("hs_email_optout", "")).lower() == "true"):
                         blocked.append(identifier)
                 if blocked:
@@ -180,7 +181,7 @@ def deliver(db, run, snapshot):
             prune = """DELETE FROM hs_desired d USING hs_ids h WHERE h.contact_id=d.contact_id
                 AND (NOT EXISTS(SELECT 1 FROM consents c WHERE c.profile_id=h.profile_id
                       AND c.channel='email' AND c.status='opted_in')
-                  OR EXISTS(SELECT 1 FROM suppressions s WHERE s.type='email' AND s.value_hash=d.email_hash))"""
+                  OR EXISTS(SELECT 1 FROM suppressions s WHERE s.type='email' AND s.value_hash=ANY(d.email_hashes)))"""
             db.execute(text(prune))
             for operation, left, right in (("remove", "hs_current", "hs_desired"),
                                            ("add", "hs_desired", "hs_current"),

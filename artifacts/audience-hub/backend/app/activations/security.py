@@ -40,7 +40,8 @@ def decrypt(value):
     if value is None:
         return {}
     try:
-        return json.loads(Fernet(get_settings().fernet_key.encode()).decrypt(bytes(value)))
+        from app.keyring import fernet_ring
+        return json.loads(fernet_ring().decrypt(bytes(value)))
     except (InvalidToken, ValueError, TypeError):
         raise DeliveryError("Destination credentials could not be decrypted.") from None
 

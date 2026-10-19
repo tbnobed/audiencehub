@@ -222,13 +222,13 @@ def safe_file(run):
 
 def suppressed_ids(db, rows, channel, all_channels=False):
     from app.identity.normalize import normalize_email, normalize_phone
-    pepper = get_settings().pii_hash_pepper.encode()
+    from app.keyring import pii_hashes
     lookup = {}
     for row in rows:
         for kind, value in (("email", normalize_email(row.get("email"))), ("phone", normalize_phone(row.get("phone")))):
             if value:
-                digest = hmac.new(pepper, value.encode(), hashlib.sha256).hexdigest()
-                lookup.setdefault((kind, digest), set()).add(row["id"])
+                for digest in pii_hashes(value):
+                    lookup.setdefault((kind, digest), set()).add(row["id"])
     if not lookup:
         return set()
     result = set()

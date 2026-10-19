@@ -33,6 +33,7 @@ def _compute_seed_traits(import_ids: list[int], *, as_of: date | None = None) ->
 
 
 def main():
+    import json
     parser = argparse.ArgumentParser(
         description="Audience Hub administration and deterministic synthetic CSV generation."
     )
@@ -69,9 +70,26 @@ def main():
                         help="Maximum monitoring wait in seconds (default: 14400 / 4h); does not cancel work.")
     admin = commands.add_parser("create-admin")
     admin.add_argument("--email", required=True)
+    admin.add_argument("--name", default="Administrator")
+    admin.add_argument("--reset-password", action="store_true")
+    admin.add_argument("--reset-totp", action="store_true")
     reset = commands.add_parser("reset-demo", help="Erase dataset rows, preserving users and configuration.")
     reset.add_argument("--yes", action="store_true", help="Required explicit acknowledgement.")
     reset.add_argument("--force", action="store_true", help="With --yes, permit APP_ENV=production.")
+    reset.add_argument("--confirm-database", help="Required exact database name in production.")
+    wipe = commands.add_parser("wipe-demo", help="Guarded go-live wipe of proven demo data; preserve users, sources, destinations, settings and audit.")
+    wipe.add_argument("--yes", action="store_true", required=True)
+    wipe.add_argument("--allow-production", action="store_true")
+    wipe.add_argument("--confirm-database")
+    security = commands.add_parser("security-audit", help="Run pip-audit and npm audit on the server; write JSON results.")
+    security.add_argument("--output-dir", default="/data/benchmarks")
+    local_admin = commands.add_parser("local-admin", help="Bootstrap/recover a local admin via an interactive password prompt.")
+    local_admin.add_argument("--email", required=True)
+    local_admin.add_argument("--name", default="Administrator")
+    local_admin.add_argument("--reset-password", action="store_true")
+    local_admin.add_argument("--reset-totp", action="store_true")
+    rotation = commands.add_parser("rotate-fernet", help="Offline, transactional rewrap using current/previous keys from server secrets.")
+    rotation.add_argument("--yes", action="store_true", required=True)
     from app.benchmark import add_arguments, run_benchmark
     benchmark = commands.add_parser("benchmark", help="Run isolated synthetic benchmarks (local database or container schema).")
     add_arguments(benchmark)
@@ -88,6 +106,8 @@ def main():
         ),
     )
     seed.add_argument("--profiles", type=int, default=50_000)
+    seed.add_argument("--allow-production", action="store_true")
+    seed.add_argument("--confirm-database", help="Required exact database name in production, including generate-only.")
     seed.add_argument("--scale", choices=("small", "medium", "large"), default="small")
     seed.add_argument("--mode", choices=("audit", "legacy"), default="audit")
     seed.add_argument("--random-seed", type=int, default=20250308)
@@ -132,6 +152,30 @@ def main():
     refresh = segment_commands.add_parser("refresh", help="Queue refreshes for every active audience.")
     refresh.add_argument("--all", action="store_true", required=True)
     args = parser.parse_args()
+    if args.command == "rotate-fernet":
+        from app.operations.rotation import rotate_fernet
+        import json
+        try:
+            print(json.dumps(rotate_fernet(yes=args.yes), indent=2))
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from None
+        return
+    if args.command == "security-audit":
+        from app.operations.dependency_audit import run_audits
+        raise SystemExit(run_audits(args.output_dir))
+    if args.command in ("local-admin", "create-admin"):
+        from app.operations.bootstrap import local_admin_command
+        local_admin_command(args)
+        return
+    if args.command == "wipe-demo":
+        from app.db import engine
+        from app.reset_demo import reset_demo
+        try:
+            reset_demo(engine, yes=args.yes, force=args.allow_production,
+                       confirm_database=args.confirm_database, go_live=True)
+        except (ValueError, RuntimeError) as exc:
+            raise SystemExit(str(exc)) from None
+        return
     if args.command == "segments":
         from app.db import engine
         from app.models import Segment
@@ -277,16 +321,11 @@ def main():
             raise SystemExit(str(exc)) from exc
     if args.command == "reset-demo":
         from app.reset_demo import reset_demo
-        # Do not even create a database engine before the environment guard.
-        if not args.yes or (os.environ.get("APP_ENV", "").strip().lower() == "production"
-                            and not args.force):
-            try:
-                reset_demo(None, yes=args.yes, force=args.force)
-            except ValueError as exc:
-                raise SystemExit(str(exc)) from exc
+        if not args.yes:
+            raise SystemExit("reset-demo requires --yes")
         from app.db import engine
         try:
-            reset_demo(engine, yes=args.yes, force=args.force)
+            reset_demo(engine, yes=args.yes, force=args.force, confirm_database=args.confirm_database)
         except (ValueError, RuntimeError) as exc:
             raise SystemExit(str(exc)) from exc
         return
@@ -294,6 +333,10 @@ def main():
         from app.seed import generate_seed, load_generated_files
 
         try:
+            from app.operations.guards import is_production, production_guard
+            if is_production():
+                from app.db import engine
+                production_guard(engine, allow=args.allow_production, database=args.confirm_database)
             reference = args.as_of or datetime.now(timezone.utc).date()
             result = generate_seed(
                 profiles=args.profiles,
@@ -330,22 +373,7 @@ def main():
         except (ValueError, RuntimeError) as exc:
             raise SystemExit(str(exc)) from exc
         return
-    from app.db import engine
-    from app.models import AuditLog, User
-    with Session(engine) as db:
-        # Break-glass bootstrap uses a future OIDC subject linked by verified email on login.
-        user = db.scalar(select(User).where(User.email == args.email))
-        if not user:
-            user = User(subject="bootstrap:" + args.email, email=args.email,
-                        name="Bootstrap Admin", role="admin")
-            db.add(user)
-            db.flush()
-        else:
-            user.role = "admin"
-        db.add(AuditLog(user_id=user.id, actor_type="system", action="user.create_admin",
-                        entity_type="user", entity_id=str(user.id), details={}))
-        db.commit()
-    print("Admin provisioned. Production login still requires an OIDC admin group.")
+    raise SystemExit("Unknown command")
 
 
 def run_master_id_backfill(engine, batch_size=5000, max_batches=None):

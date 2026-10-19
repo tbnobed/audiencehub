@@ -87,7 +87,8 @@ def change_consent(db, profile_id, channel, status, note, actor):
     source = manual_source(db)
     if channel == "email" and status == "opted_in":
         values = aliases(db, [profile_id])
-        hashes = [digest(v) for kind, v in values if kind == "email"]
+        from app.keyring import pii_hashes
+        hashes = [hashed for kind, v in values if kind == "email" for hashed in pii_hashes(v)]
         if db.scalar(text("""SELECT EXISTS(SELECT 1 FROM suppressions
           WHERE type='email' AND value_hash=ANY(:hashes))"""), {"hashes": hashes}):
             raise ValueError("Remove the email suppression before explicitly opting this partner in.")
@@ -486,10 +487,12 @@ def execute_deletion(db, request_id):
     if not request["identifier_encrypted"]:
         raise ValueError("This legacy privacy request must be recreated before safe execution.")
     try:
-        value = Fernet(get_settings().fernet_key.encode()).decrypt(bytes(request["identifier_encrypted"])).decode()
+        from app.keyring import fernet_ring
+        value = fernet_ring().decrypt(bytes(request["identifier_encrypted"])).decode()
     except (InvalidToken, UnicodeError):
         raise ValueError("Privacy request could not be verified with the configured encryption key.") from None
-    if not hmac.compare_digest(digest(value), request["identifier_value_hash"]):
+    from app.keyring import pii_matches, pii_hashes
+    if not pii_matches(value, request["identifier_value_hash"]):
         raise ValueError("Privacy request could not be verified with the configured suppression key.")
     ids = sorted(set(request["matched_profile_ids"]) |
                  set(matching_ids(db, request["identifier_type"], value)))
@@ -510,8 +513,9 @@ def execute_deletion(db, request_id):
         db.execute(text("""UPDATE deletion_requests SET identifier_encrypted=NULL,
           matched_profile_ids='{}'::bigint[],
           status=CASE WHEN status IN ('pending','approved','failed') THEN 'cancelled' ELSE status END
-          WHERE id<>:request AND identifier_type=:kind AND identifier_value_hash=:hash"""),
-          {"request": request_id, "kind": kind, "hash": hashed})
+          WHERE id<>:request AND identifier_type=:kind AND identifier_value_hash=ANY(:hashes)"""),
+          {"request": request_id, "kind": kind,
+           "hashes": pii_hashes(value) if value is not None else [hashed]})
     tables = {r["table_name"] for r in inventory}
     if "activation_run_members" in tables:
         exports = db.execute(text("""SELECT DISTINCT r.id,r.file_path FROM activation_runs r
