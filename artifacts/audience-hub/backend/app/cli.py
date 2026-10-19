@@ -183,10 +183,6 @@ def main():
     if args.command == "verify-seed":
         from app.verify_seed import verify_seed
         raise SystemExit(verify_seed(args.timeout_seconds, as_of=args.as_of))
-    if args.command in {"sources", "import-zeta"}:
-        import json
-        from pathlib import Path
-        from app.zeta_cli import sources_command, import_folder, print_result
     if args.command == "destinations":
         from app.db import engine
         from app.models import Destination
@@ -203,7 +199,11 @@ def main():
             except ValueError as error:
                 raise SystemExit(str(error)) from None
         return
-    if args.command == "sources":
+    if args.command in {"sources", "import-zeta"}:
+        import json
+        from pathlib import Path
+        from app.zeta_cli import sources_command, import_folder, print_result
+        if args.command == "sources":
             print_result(sources_command(args.source_command, args.source_id, getattr(args, "mapping", None)))
         else:
             counts = json.loads(Path(args.counts).read_text()) if args.counts else None
