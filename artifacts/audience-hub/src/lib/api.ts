@@ -17,6 +17,15 @@ export class ApiTimeoutError extends Error {
   }
 }
 
+export class ApiError extends Error {
+  readonly status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+  }
+}
+
 type ApiRequestOptions = RequestInit & { timeoutMs?: number };
 export const API_TIMEOUT_MS = 15_000;
 
@@ -67,7 +76,9 @@ export async function fetchApi(url: string, options: ApiRequestOptions = {}) {
     return await Promise.race([(async () => {
       const response = await fetch(apiUrl(url), fetchOptions);
       if (!response.ok) {
-        if (response.status === 401 && url.startsWith('/api/')) {
+        // The session query handles its own expected anonymous response.
+        // Dispatching expiration from it can cancel/restart that same query.
+        if (response.status === 401 && url.startsWith('/api/') && url !== '/api/me' && typeof window !== 'undefined') {
           window.dispatchEvent(new Event('kinship-session-expired'));
         }
         let message = 'API Error';
@@ -77,7 +88,7 @@ export async function fetchApi(url: string, options: ApiRequestOptions = {}) {
         } catch {
           // Ignore JSON parse errors for non-JSON responses
         }
-        throw new Error(message);
+        throw new ApiError(response.status, message);
       }
       return response.json();
     })(), aborted]);

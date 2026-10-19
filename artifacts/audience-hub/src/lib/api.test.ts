@@ -1,7 +1,7 @@
 // Run: node --test src/lib/api.test.ts (Node >= 22.18)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { apiUrl, ApiTimeoutError, fetchApi } from './api.ts';
+import { apiUrl, ApiError, ApiTimeoutError, fetchApi } from './api.ts';
 
 test('API and download paths respect the artifact base without double-prefixing', () => {
   assert.equal(apiUrl('/api/activation-runs/12/download', '/audience-hub/'),
@@ -56,5 +56,24 @@ test('a stalled response body also times out, but server errors remain visible',
     await assert.rejects(fetchApi('/api/dashboards/settings'), /Database unavailable/);
   } finally {
     globalThis.fetch = originalFetch;
+  }
+});
+
+test('an anonymous session check returns a typed 401 without expiring its own query', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  const events: string[] = [];
+  Object.defineProperty(globalThis, 'window', { configurable: true,
+    value: { dispatchEvent(event: Event) { events.push(event.type); return true; } } });
+  globalThis.fetch = async () => Response.json({ error: { message: 'Not authenticated' } }, { status: 401 });
+  try {
+    await assert.rejects(fetchApi('/api/me'), error => error instanceof ApiError && error.status === 401);
+    assert.deepEqual(events, []);
+    await assert.rejects(fetchApi('/api/profiles'), error => error instanceof ApiError && error.status === 401);
+    assert.deepEqual(events, ['kinship-session-expired']);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalWindow) Object.defineProperty(globalThis, 'window', originalWindow);
+    else Reflect.deleteProperty(globalThis, 'window');
   }
 });

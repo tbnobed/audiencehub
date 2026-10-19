@@ -1,6 +1,6 @@
-import { createContext, useContext, useEffect, type ReactNode } from 'react';
+import { createContext, useContext, useCallback, useEffect, type ReactNode } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchApi, setCsrfToken } from '@/lib/api';
+import { ApiError, API_TIMEOUT_MS, fetchApi, setCsrfToken } from '@/lib/api';
 
 export type Role = 'admin' | 'analyst' | 'viewer';
 
@@ -28,27 +28,39 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
 
-  const { data: user, isLoading } = useQuery<User>({
+  const { data: user, isLoading } = useQuery<User | null>({
     queryKey: ['me'],
-    queryFn: async () => {
-      const data = await fetchApi('/api/me');
-      setCsrfToken(data.csrf_token);
-      return data;
+    queryFn: async ({ signal }) => {
+      try {
+        const data = await fetchApi('/api/me', { signal, timeoutMs: API_TIMEOUT_MS });
+        setCsrfToken(data.csrf_token);
+        return data;
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 401) {
+          setCsrfToken(null);
+          return null;
+        }
+        throw error;
+      }
     },
     retry: false,
     staleTime: 60_000,
     refetchInterval: 60_000,
     refetchIntervalInBackground: false,
   });
-  useEffect(() => {
-    const expired = () => {
-      setCsrfToken(null);
-      queryClient.clear();
-      queryClient.setQueryData(['me'], null);
-    };
-    window.addEventListener('kinship-session-expired', expired);
-    return () => window.removeEventListener('kinship-session-expired', expired);
+  const resetSession = useCallback(() => {
+    setCsrfToken(null);
+    void queryClient.cancelQueries();
+    // Preserve the observed session query. Removing it during its own request
+    // can recreate it and trap the router in its initial loading state.
+    queryClient.removeQueries({ predicate: query => query.queryKey[0] !== 'me' });
+    queryClient.getMutationCache().clear();
+    queryClient.setQueryData(['me'], null);
   }, [queryClient]);
+  useEffect(() => {
+    window.addEventListener('kinship-session-expired', resetSession);
+    return () => window.removeEventListener('kinship-session-expired', resetSession);
+  }, [resetSession]);
 
   const loginMutation = useMutation({
     mutationFn: async ({ role, name }: { role: Role; name: string }) => {
@@ -67,11 +79,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     mutationFn: async () => {
       await fetchApi('/auth/logout', { method: 'POST' });
     },
-    onSuccess: () => {
-      setCsrfToken(null);
-      queryClient.setQueryData(['me'], null);
-      queryClient.clear();
-    },
+    onSuccess: resetSession,
   });
 
   return (

@@ -13,6 +13,16 @@ requiring a future OIDC option without reworking users.
 **How to apply:** preserve this boundary when changing authentication or deployment
 instructions. A future SSO change needs a new user request.
 
+Keep the observed session query stable when changing authentication state.
+Treat an anonymous session probe as signed-out data, not a global cache-expiration
+event; clear private data without removing that observed query.
+
+**Why:** evicting the session query from inside its own unauthorized-response
+handler can recreate the query repeatedly and keep the login screen loading.
+
+**How to apply:** keep login/logout/session-expiration transitions separate from
+generic API failure handling and bound the initial session request.
+
 Suppression peppers cannot simply be replaced and discarded. Deleted identifiers
 may have no remaining cleartext from which to regenerate permanent tombstones.
 
