@@ -14,6 +14,7 @@ from app.auth.local import audit, credentials, issue_token, revoke, status
 from app.db import session_scope
 from app.models import User
 from app.jobs.queue import enqueue
+from app.operations.email import account_message
 
 router = APIRouter(prefix="/api/admin", tags=["operations"])
 admin = Depends(require_role("admin"))
@@ -82,6 +83,7 @@ def invite(body: Invite, user: User = admin, db: Session = session):
     db.flush()
     credentials(db, saved.id)
     result = issue_token(db, saved.id, "invite")
+    result = account_message(db, saved, result, "invite")
     audit(db, "admin.user_invited", user.id, {"target_user_id": saved.id, "role": body.role})
     db.commit()
     return result
@@ -133,7 +135,9 @@ def reset(user_id: int, body: Reset, user: User = admin, db: Session = session):
     if body.reset_totp:
         db.execute(text("""UPDATE local_credentials SET totp_secret=NULL,pending_totp=NULL,
             pending_totp_until=NULL,totp_counter=-1 WHERE user_id=:id"""), {"id": user_id})
+        db.execute(text("DELETE FROM local_recovery_codes WHERE user_id=:id"), {"id": user_id})
     result = issue_token(db, user_id)
+    result = account_message(db, saved, result, "reset")
     audit(db, "admin.password_reset_issued", user.id, {"target_user_id": user_id, "reset_totp": body.reset_totp})
     db.commit()
     return result

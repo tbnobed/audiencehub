@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { fetchApi, apiUrl, csrfToken } from '@/lib/api';
+import { fetchApi, apiUrl, csrfToken, setCsrfToken } from '@/lib/api';
 
 // React Query retains variables: drop write-only secrets right after serialization, before any await.
 const scrub = <T extends object>(v: T, keys: string[]) => { const body = JSON.stringify(v); keys.forEach(k => { delete (v as Record<string, unknown>)[k]; }); return body; };
@@ -11,7 +11,7 @@ export interface AuditItem { id: number; user_id: number | null; actor_type: str
 export interface AuditFilters { user_id: string; action: string; object: string; from_date: string; to_date: string }
 export interface MaintenanceConfig { event_retention_days: number; audit_retention_days: number; job_retention_days: number; enrichment_retention_days: number; partitions_ahead_months: number }
 export interface MaintenanceRun { id: number; status: string; payload: unknown; progress: unknown; error: string | null; created_at: string; finished_at: string | null }
-export interface IssuedLink { user_id: number; token: string; expires_at: string }
+export interface IssuedLink { user_id: number; token?: string; expires_at: string; email_status?: string; message_id?: number }
 
 export const inviteUrl = (token: string) => `${window.location.origin}${(import.meta.env.BASE_URL ?? '/').replace(/\/$/, '')}/login?token=${encodeURIComponent(token)}`;
 
@@ -21,15 +21,26 @@ export function auditQuery(f: AuditFilters, extra: Record<string, string> = {}) 
   return q.toString();
 }
 
-export const useAccountSecurity = () => useQuery<{ mfa_enabled: boolean; mfa_required: boolean }>({ queryKey: ['account-security'], queryFn: () => fetchApi('/api/account/security') });
+export const useAccountSecurity = () => useQuery<{ mfa_enabled: boolean; mfa_required: boolean; recovery_codes_remaining: number }>({ queryKey: ['account-security'], queryFn: () => fetchApi('/api/account/security') });
 
 export function useAccountActions() {
   const qc = useQueryClient();
   const refresh = () => { qc.invalidateQueries({ queryKey: ['account-security'] }); qc.invalidateQueries({ queryKey: ['me'] }); };
   return {
+    refresh,
     password: useMutation({ mutationFn: (b: { current_password: string; new_password: string; totp?: string }) => fetchApi('/api/account/password', post(b, ['current_password', 'new_password', 'totp'])) }),
-    setup: useMutation<{ secret: string; uri: string }, Error, { password: string }>({ mutationFn: b => fetchApi('/api/account/totp/setup', post(b, ['password'])) }),
-    confirm: useMutation({ mutationFn: (b: { code: string }) => fetchApi('/api/account/totp/confirm', post(b, ['code'])), onSuccess: refresh }),
+    setup: useMutation<{ secret: string; uri: string; qr_data_uri: string; expires_at: string }, Error, { password: string }>({ gcTime: 0, mutationFn: b => fetchApi('/api/account/totp/setup', post(b, ['password'])) }),
+    confirm: useMutation<{ recovery_codes: string[]; csrf_token: string }, Error, { code: string }>({
+      gcTime: 0,
+      mutationFn: b => fetchApi('/api/account/totp/confirm', post(b, ['code'])),
+      // Refresh the rotated CSRF without changing the MFA gate until the user
+      // has saved the one-time recovery codes. Do not retain these in queries.
+      onSuccess: data => { setCsrfToken(data.csrf_token); },
+    }),
+    recovery: useMutation<{ recovery_codes: string[] }, Error, { password: string; code: string }>({
+      gcTime: 0,
+      mutationFn: b => fetchApi('/api/account/totp/recovery', post(b, ['password', 'code'])),
+    }),
     disable: useMutation({ mutationFn: (b: { password: string; code: string }) => fetchApi('/api/account/totp/disable', post(b, ['password', 'code'])), onSuccess: refresh }),
   };
 }

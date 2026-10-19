@@ -1,5 +1,7 @@
 """Local provider: credentials are separate from provider-neutral users."""
 import secrets
+import base64
+import io
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -12,6 +14,7 @@ from app.activations.security import encrypt, decrypt
 from app.config import get_settings
 from app.db import session_scope
 from app.models import AuditLog, User, now
+from app.auth.recovery import replace_codes, verify as verify_second_factor
 
 router = APIRouter()
 
@@ -69,7 +72,8 @@ def local_only():
 def status(db, user):
     row = db.execute(text("SELECT totp_secret IS NOT NULL FROM local_credentials WHERE user_id=:id"), {"id": user.id}).scalar()
     required = user.role == "admin" and bool(db.scalar(text("SELECT require_admin_totp FROM operations_policy WHERE id=1")))
-    return {"mfa_enabled": bool(row), "mfa_required": required}
+    remaining = db.scalar(text("SELECT count(*) FROM local_recovery_codes WHERE user_id=:id"), {"id": user.id})
+    return {"mfa_enabled": bool(row), "mfa_required": required, "recovery_codes_remaining": remaining}
 
 
 def establish(db, request, user, verified=False):
@@ -145,10 +149,10 @@ def login(body: Login, request: Request, db: Session = Depends(session_scope)):
         failed(db, user.id if user else None, limit_key)
     verified = False
     if row["totp_secret"]:
-        counter = totp_counter(decrypt(row["totp_secret"])["secret"], body.totp, row["totp_counter"])
-        if counter is None:
+        if not verify_second_factor(db, user.id, row, body.totp):
             failed(db, user.id, limit_key, "invalid_second_factor")
-        db.execute(text("UPDATE local_credentials SET totp_counter=:counter WHERE user_id=:id"), {"counter": counter, "id": user.id})
+        if len(body.totp) != 6:
+            audit(db, "auth.recovery_code_used", user.id)
         verified = True
     db.execute(text("UPDATE local_credentials SET failures=0,locked_until=NULL WHERE user_id=:id"), {"id": user.id})
     db.execute(text("UPDATE local_login_limits SET failures=0,locked_until=NULL WHERE key_hash=:key"), {"key": limit_key})
@@ -199,10 +203,11 @@ def reauthenticate(db, user, password, code=None):
         db.execute(text("UPDATE local_credentials SET failures=0,locked_until=NULL WHERE user_id=:id"), {"id": user.id})
         row = credentials(db, user.id)
     valid = check_password(password, row["password_hash"])
-    counter = None
+    factor_valid = True
     if code is not None and row["totp_secret"]:
-        counter = totp_counter(decrypt(row["totp_secret"])["secret"], code, row["totp_counter"])
-        valid = valid and counter is not None
+        # Do not consume a recovery code unless the password was valid.
+        factor_valid = valid and verify_second_factor(db, user.id, row, code)
+        valid = valid and factor_valid
     if not valid:
         db.execute(text("""UPDATE local_credentials SET failures=failures+1,
             locked_until=CASE WHEN failures+1>=10 THEN now()+interval '15 minutes' ELSE NULL END WHERE user_id=:id"""), {"id": user.id})
@@ -211,8 +216,8 @@ def reauthenticate(db, user, password, code=None):
             audit(db, "auth.lockout", user.id)
         db.commit()
         raise HTTPException(403, "Current password or authenticator code is incorrect")
-    if counter is not None:
-        db.execute(text("UPDATE local_credentials SET totp_counter=:counter WHERE user_id=:id"), {"id": user.id, "counter": counter})
+    if code and row["totp_secret"] and factor_valid and len(code) != 6:
+        audit(db, "auth.recovery_code_used", user.id)
     return row
 
 
@@ -243,7 +248,14 @@ def setup_totp(body: PasswordOnly, user: User = Depends(current_user), db: Sessi
                {"id": user.id, "secret": encrypt({"secret": secret})})
     audit(db, "auth.totp_setup", user.id)
     db.commit()
-    return {"secret": secret, "uri": f"otpauth://totp/Kinship:{quote(user.email, safe='')}?secret={secret}&issuer=Kinship&digits=6&period=30"}
+    uri = f"otpauth://totp/Kinship:{quote(user.email, safe='')}?secret={secret}&issuer=Kinship&algorithm=SHA1&digits=6&period=30"
+    # Generated locally: never send the shared secret to an external QR service.
+    import segno
+    output = io.BytesIO()
+    segno.make(uri, micro=False).save(output, kind="svg", scale=5, border=4)
+    return {"secret": secret, "uri": uri,
+            "qr_data_uri": "data:image/svg+xml;base64," + base64.b64encode(output.getvalue()).decode(),
+            "expires_at": (now() + timedelta(minutes=10)).isoformat()}
 
 
 @router.post("/api/account/totp/confirm")
@@ -268,9 +280,21 @@ def confirm_totp(body: Code, request: Request, user: User = Depends(current_user
     db.execute(text("""UPDATE local_credentials SET totp_secret=pending_totp,pending_totp=NULL,
         pending_totp_until=NULL,totp_counter=:counter,failures=0,locked_until=NULL WHERE user_id=:id"""), {"id": user.id, "counter": counter})
     revoke(db, user.id)
+    codes = replace_codes(db, user.id)
     audit(db, "auth.totp_enabled", user.id)
     establish(db, request, user, True)
-    return {"ok": True}
+    return {"ok": True, "recovery_codes": codes, "csrf_token": request.session["csrf"]}
+
+
+@router.post("/api/account/totp/recovery")
+def regenerate_recovery(body: Disable, user: User = Depends(current_user), db: Session = Depends(session_scope)):
+    row = reauthenticate(db, user, body.password, body.code)
+    if not row["totp_secret"]:
+        raise HTTPException(409, "Enable an authenticator first")
+    codes = replace_codes(db, user.id)
+    audit(db, "auth.recovery_codes_regenerated", user.id)
+    db.commit()
+    return {"recovery_codes": codes}
 
 
 @router.post("/api/account/totp/disable")
@@ -279,6 +303,7 @@ def disable_totp(body: Disable, request: Request, user: User = Depends(current_u
     if status(db, user)["mfa_required"]:
         raise HTTPException(409, "Authenticator is required for administrators")
     db.execute(text("UPDATE local_credentials SET totp_secret=NULL,pending_totp=NULL,totp_counter=-1 WHERE user_id=:id"), {"id": user.id})
+    db.execute(text("DELETE FROM local_recovery_codes WHERE user_id=:id"), {"id": user.id})
     revoke(db, user.id)
     audit(db, "auth.totp_disabled", user.id)
     establish(db, request, user)

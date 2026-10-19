@@ -6,6 +6,10 @@ class SegmentTraitsRefreshRequired(ValueError):
 
 
 def run(job_type: str, payload: dict, job_id: int | None = None) -> None:
+    if job_type == "account.email":
+        from app.operations.email import deliver
+        deliver(int(payload["message_id"]))
+        return
     if job_type == "hubspot.destination":
         from sqlalchemy.orm import Session as HubspotSession
         from app.db import engine as hubspot_engine

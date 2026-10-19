@@ -54,9 +54,12 @@ the normal migration chain before serving requests.
 
 Admin → Users supports invite, role changes, enable/disable, unlock, password
 reset and explicit authenticator reset. Invites expire in 48 hours; reset links
-expire in one hour. Links are displayed once for secure out-of-band delivery;
-Kinship does not silently claim to send email. Only token hashes are stored.
-Tokens are single use and replaced when another link is issued.
+expire in one hour. When SendGrid is enabled, links are emailed through the worker;
+otherwise links are displayed once for secure out-of-band delivery. Tokens are
+single use and replaced when another link is issued. Authentication stores token
+hashes only; the email outbox temporarily stores Fernet-encrypted message bodies,
+erasing them on provider acceptance or expiration. Tokens and links never enter
+the jobs payload or audit log.
 
 Passwords must contain at least 14 characters and pass the bundled
 `app/auth/breached_passwords.txt` denylist check. The bundled list is a small
@@ -65,8 +68,16 @@ extend it as part of normal security maintenance. Passwords use salted scrypt.
 Ten consecutive account failures cause a 15-minute cooldown. An admin can unlock
 the account; a separate address-level cooldown still limits anonymous spraying.
 TOTP accepts six-digit RFC 6238 codes with a ±30-second clock window, rejects
-replayed codes and encrypts enrollment secrets with Fernet. Keep server clocks
-synchronized. There are no printed recovery codes: use a second administrator or
+replayed codes and encrypts enrollment secrets with Fernet. Any standard TOTP
+authenticator works: SHA-1, six digits, 30-second period (Google/Microsoft
+Authenticator, Authy, 1Password, Bitwarden, etc.). QR codes are generated locally;
+no QR service receives the shared secret. Enrollment expires after ten minutes.
+Keep server and phone clocks synchronized. After confirmation, save the ten
+one-time recovery codes offline; each replaces an authenticator code once.
+Only hashes are stored. Account security can regenerate codes after password and
+second-factor verification, invalidating every old code. An explicit admin or
+server-console TOTP reset also invalidates codes. Neither secrets nor recovery
+codes are emailed. If all codes/devices are lost, use a second administrator or
 the audited server-console recovery command.
 
 An administrator can require TOTP for all admins only after enrolling their own
@@ -80,6 +91,47 @@ and role changes are audited. Admin → Audit log filters by actor, exact action
 object type or `type:id`, and inclusive UTC date range. CSV exports are themselves
 audited, spreadsheet-formula escaped, and capped at 100,000 rows; narrow filters
 instead of accepting silent truncation.
+
+### SendGrid account email relay
+
+Upgrade the API image and run migrations normally (`0042_account_delivery`),
+then open **Admin → Users → Account email relay — SendGrid**:
+
+1. Verify the sending domain/sender in your own SendGrid account (SPF/DKIM;
+   configure DMARC according to your domain policy).
+2. Create a restricted SendGrid API key with **Mail Send** permission. Enter it
+   only in the password-masked relay form, never in chat, logs or CLI arguments.
+   Kinship encrypts it with the existing Fernet key and never returns it to the
+   browser. A blank key when saving keeps the current key.
+3. Set the verified sender address/name and your external HTTPS Kinship URL, e.g.
+   `https://cdp.obtv.io`. The configured URL, not the request Host header, is used
+   for account links. Enable and save the relay.
+4. Send a test to an address you control. Both API and worker need the same
+   database and Fernet configuration. The worker needs outbound HTTPS to
+   `api.sendgrid.com:443`; this implementation uses the fixed public v3 Mail Send
+   API directly, not an SMTP server, proxy, Replit service or SendGrid SDK.
+5. Check recent email delivery history. **Queued** is not sent; **Accepted by
+   SendGrid** means HTTP 202, not inbox delivery. Check provider Email Activity
+   for bounces/suppression and sender issues.
+
+Invites and admin password resets automatically queue email when enabled. There
+is no public, unauthenticated password-reset endpoint; an administrator issues
+resets. An enrolled authenticator remains required after a password-only reset.
+Use “Also reset TOTP” only for intentional, audited second-factor recovery.
+
+The durable worker retries failures five times with its queue backoff, preserving
+the same single-use link. Delivery history exposes safe error summaries and a
+manual Retry for failed, unexpired messages. Reissuing a reset cancels older
+tokens; the worker checks validity and account status before sending. SendGrid
+does not guarantee idempotency: a network disconnect after acceptance can cause
+a duplicate email containing the same single-use link. Click/open tracking is
+disabled for these security messages. No provider response body or bearer
+credential is stored in history. Daily maintenance clears expired message
+ciphertext and removes cleared receipts after 90 days.
+
+Rotate SendGrid credentials by replacing the API key in this form, sending a test,
+then revoking the old key in SendGrid. Disabling the relay prevents sending queued
+messages (they retry/fail), and new account links use explicit manual sharing.
 
 ## Reset, seed and go-live wipe guards
 
@@ -202,8 +254,9 @@ docker compose up -d --force-recreate api worker
 ```
 
 The command is transactional and safe to rerun. It rewraps source/destination
-credentials, activation snapshots, pending privacy identifiers and both active
-and pending TOTP secrets. Unknown/missing keys roll the transaction back. Current
+credentials, activation snapshots, pending privacy identifiers, active/pending
+TOTP secrets, the SendGrid API key and pending encrypted account emails.
+Unknown/missing keys roll the transaction back. Current
 keys write; the keyring can still read older ciphertext during transition.
 External encrypted `identity-filedrop` configuration files and older backups are
 outside this database command: rewrap those in the secured maintenance environment

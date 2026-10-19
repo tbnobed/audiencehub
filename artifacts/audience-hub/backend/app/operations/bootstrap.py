@@ -41,6 +41,7 @@ def local_admin_command(args):
             {"hash": hash_password(password), "id": user.id})
         if args.reset_totp:
             db.execute(text("UPDATE local_credentials SET totp_secret=NULL,pending_totp=NULL,totp_counter=-1 WHERE user_id=:id"), {"id": user.id})
+            db.execute(text("DELETE FROM local_recovery_codes WHERE user_id=:id"), {"id": user.id})
         revoke(db, user.id)
         db.execute(text("DELETE FROM local_account_tokens WHERE user_id=:id"), {"id": user.id})
         audit(db, "admin.console_recovery" if user_id else "admin.console_bootstrap", user.id,

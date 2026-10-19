@@ -8,6 +8,8 @@ from app.keyring import fernet_ring
 from app.models import AuditLog
 
 ENCRYPTED = (
+    ("account_email_settings", "id", "api_key"),
+    ("account_email_outbox", "id", "payload"),
     ("destinations", "id", "secret_encrypted"),
     ("source_connections", "source_id", "credentials"),
     ("activation_runs", "id", "snapshot_encrypted"),

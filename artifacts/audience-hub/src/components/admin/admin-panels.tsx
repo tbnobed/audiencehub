@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useAuth } from '@/hooks/use-auth';
 import { Link } from 'react-router-dom';
+import { EmailRelayPanel } from './email-relay-panel';
 import {
   downloadAuditCsv, fetchAuditPage, inviteUrl, useAdminUsers, useMaintenance, useMaintenanceActions, useSecurityPolicy,
   useUpdateSecurityPolicy, useUserActions, type AuditFilters, type AuditItem, type IssuedLink, type MaintenanceConfig,
@@ -17,12 +18,13 @@ const Box = ({ title, desc, children }: { title: string; desc?: string; children
 const Err = ({ e }: { e: unknown }) => <p role="alert" className="text-xs text-danger">{msg(e)}</p>;
 
 function LinkNotice({ link, label, onClose }: { link: IssuedLink; label: string; onClose: () => void }) {
-  const url = inviteUrl(link.token);
+  const url = link.token ? inviteUrl(link.token) : '';
   const [copied, setCopied] = useState(false);
   return <div role="status" data-testid="notice-one-time-link" className="rounded-sm border border-signal/40 bg-signal/5 p-3 space-y-2 mb-4">
-    <p className="text-xs text-ink">{label} This link is shown once and no email is sent. Expires {when(link.expires_at)}.</p>
-    <div className="flex gap-2"><input readOnly aria-label="One-time link" value={url} onFocus={e => e.currentTarget.select()} className="flex-1 min-w-0 rounded-sm border border-line-strong bg-surface-raised px-2 py-1.5 font-mono text-xs text-ink" />
+    <p className="text-xs text-ink">{label} {link.email_status === 'queued' ? `Email queued as message ${link.message_id}. Check SendGrid delivery history below; queued does not mean delivered.` : 'Email relay is disabled. Share this one-time link securely.'} Expires {when(link.expires_at)}.</p>
+    <div className="flex gap-2">{url && <><input readOnly aria-label="One-time link" value={url} onFocus={e => e.currentTarget.select()} className="flex-1 min-w-0 rounded-sm border border-line-strong bg-surface-raised px-2 py-1.5 font-mono text-xs text-ink" />
       <Button data-testid="button-copy-link" size="sm" variant="outline" onClick={() => navigator.clipboard?.writeText(url).then(() => setCopied(true))}><Copy size={12} className="mr-1" />{copied ? 'Copied' : 'Copy'}</Button>
+      </>}
       <Button size="sm" variant="ghost" onClick={onClose}>Dismiss</Button></div></div>;
 }
 
@@ -44,7 +46,8 @@ export function AdminUsersPanel() {
       <label className="flex items-center gap-2 text-sm text-ink"><input data-testid="toggle-require-admin-totp" type="checkbox" disabled={!policy.data || setPolicy.isPending} checked={!!policy.data?.require_admin_totp} onChange={e => setPolicy.mutate(e.target.checked)} /> Require TOTP for administrators</label>
       {policy.isError && <Err e={policy.error} />}
     </Box>
-    <Box title="Invite user" desc="Creates the account and a one-time setup link to share securely.">
+    <EmailRelayPanel />
+    <Box title="Invite user" desc="Sends a single-use setup link through the enabled SendGrid relay. If disabled, a link is shown for secure manual sharing.">
       {link && <LinkNotice link={link.link} label={link.label} onClose={() => { setLink(null); invite.reset(); reset.reset(); }} />}
       <form className="flex flex-wrap items-end gap-3" onSubmit={e => { e.preventDefault(); invite.mutate({ email, name, role }, { onSuccess: l => { setLink({ link: l, label: `Invite for ${email}.` }); setEmail(''); setName(''); } }); }}>
         <label className="flex flex-col gap-1.5 text-xs text-ink-muted">Email<Input data-testid="input-invite-email" type="email" value={email} onChange={e => setEmail(e.target.value)} required /></label>

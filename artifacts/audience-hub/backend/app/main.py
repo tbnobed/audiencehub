@@ -66,6 +66,8 @@ from app.auth.local import router as local_auth_router
 from app.operations.api import router as operations_router
 app.include_router(local_auth_router)
 app.include_router(operations_router)
+from app.operations.email_api import router as account_email_router
+app.include_router(account_email_router)
 
 
 @app.exception_handler(HTTPException)

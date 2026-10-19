@@ -45,9 +45,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     },
     retry: false,
     staleTime: 60_000,
-    refetchInterval: query => query.state.data ? 60_000 : false,
+    refetchInterval: query => query.state.data && !(query.state.data.mfa_required && !query.state.data.mfa_enabled) ? 60_000 : false,
     refetchIntervalInBackground: false,
-    refetchOnWindowFocus: query => query.state.data !== null,
+    // The enrollment gate owns its completion transition: a background probe
+    // must not unmount one-time recovery codes before the user saves them.
+    refetchOnWindowFocus: query => !!query.state.data && !(query.state.data.mfa_required && !query.state.data.mfa_enabled),
+    refetchOnReconnect: query => !!query.state.data && !(query.state.data.mfa_required && !query.state.data.mfa_enabled),
   });
   const resetSession = useCallback(() => {
     setCsrfToken(null);
