@@ -65,6 +65,7 @@ def timeout_ms(job_type):
     seconds = {
         "import.run": settings.bulk_statement_timeout_seconds,
         "source.pull": settings.bulk_statement_timeout_seconds,
+        "hubspot.finish": settings.bulk_statement_timeout_seconds,
         "zeta.import": settings.bulk_statement_timeout_seconds,
         "zeta.parity": settings.bulk_statement_timeout_seconds,
         "identity.resolve_batch": settings.bulk_statement_timeout_seconds,

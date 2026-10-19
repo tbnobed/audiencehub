@@ -47,6 +47,17 @@ def credentials_for(db, source_id, supplied=None):
 def test_connection(source_id: int, data: ConnectionTest = ConnectionTest(),
                     user: User = Depends(require_role("admin")), db: Session = Depends(session_scope)):
     item = source(db, source_id)
+    if item.kind == "hubspot":
+        from app.hubspot_client import HubSpot
+        try:
+            credentials = data.credentials
+            if credentials is None:
+                encrypted = db.scalar(text("SELECT credentials FROM source_connections WHERE source_id=:id"), {"id": source_id})
+                credentials = security.decrypt(encrypted) if encrypted else {}
+            with HubSpot(credentials) as client:
+                return client.info()
+        except SourceError as error:
+            raise HTTPException(422, str(error)) from None
     if item.kind != "snowflake":
         raise HTTPException(422, "Connection testing here requires a Snowflake source")
     from app.source_connectors import snowflake_connection, identifier
@@ -90,7 +101,7 @@ def source(db, source_id):
     item = db.get(Source, source_id)
     if item is None:
         raise HTTPException(404, "Source not found")
-    if item.kind not in {"sftp_jsonl", "snowflake", "zeta_exit"}:
+    if item.kind not in {"sftp_jsonl", "snowflake", "zeta_exit", "hubspot"}:
         raise HTTPException(422, "Source is not a pull connection")
     return item
 
@@ -122,9 +133,16 @@ def put_connection(source_id: int, data: ConnectionUpdate,
         with source_lock(source_id):
             old = db.execute(text("SELECT credentials,state,config FROM source_connections WHERE source_id=:id"),
                              {"id": source_id}).mappings().first()
-            if old and old["state"].get("pending"):
+            if (old and old["state"].get("pending")
+                    and not (item.kind == "hubspot" and old["config"] == data.config)):
                 raise HTTPException(409, "Recover the pending pull before changing its configuration")
+            if item.kind == "hubspot" and old and old["config"] != data.config:
+                if db.scalar(text("""SELECT EXISTS(SELECT 1 FROM hubspot_pulls WHERE source_id=:id
+                    AND phase NOT IN ('completed','revoked'))"""), {"id": source_id}):
+                    raise HTTPException(409, "Finish the checkpointed HubSpot pull before changing its mapping")
             validate_config(item.kind, data.config)
+            if item.kind == "hubspot":
+                item.record_types = ["contact", "consent"] + (["event"] if data.config.get("engagement") else [])
             if data.credentials is None:
                 if not old:
                     raise SourceError("Credentials are required for a new connection.")
@@ -158,7 +176,13 @@ def put_connection(source_id: int, data: ConnectionUpdate,
 @router.post("/{source_id}/dry-run")
 def dry_run(source_id: int, request: PullRequest = PullRequest(),
             user: User = Depends(require_role("admin")), db: Session = Depends(session_scope)):
-    source(db, source_id)
+    item = source(db, source_id)
+    if item.kind == "hubspot":
+        from app.hubspot_source import preview
+        try:
+            return preview(connection_row(db, source_id))
+        except SourceError as error:
+            raise HTTPException(422, str(error)) from None
     if request.feed is not None and request.feed not in FEEDS:
         raise HTTPException(422, "Unsupported feed")
     try:

@@ -403,9 +403,32 @@ def revoke_import_history(db, ids, identities):
             remove_owned_file(path, get_settings().upload_dir)
             db.execute(text("""UPDATE zeta_migration_files SET file_path='',manifests='[]'::jsonb,
                 status='revoked' WHERE id=:id"""), {"id": upload["id"]})
+    # HubSpot stages canonical CSVs before they become imports. These files
+    # must not survive erasure or permit replay from a failed checkpoint.
+    for pull in db.execute(text("""SELECT id,source_id,manifests FROM hubspot_pulls
+        WHERE manifests<>'[]'::jsonb ORDER BY id FOR UPDATE""")).mappings():
+        revoke = pull["source_id"] in affected
+        for manifest in pull["manifests"]:
+            path = owned_file(manifest["path"], get_settings().upload_dir)
+            if not revoke and path and path.exists():
+                try:
+                    _, rows = csv_reader(path)
+                    with closing(rows):
+                        revoke = any(raw_matches(row) for row in rows)
+                except (SourceError, ValueError, OSError):
+                    revoke = True  # Cannot establish absence: fail closed.
+            if revoke:
+                break
+        if revoke:
+            for manifest in pull["manifests"]:
+                remove_owned_file(owned_file(manifest["path"], get_settings().upload_dir), get_settings().upload_dir)
+            db.execute(text("""UPDATE hubspot_pulls SET manifests='[]'::jsonb,after_id='0',
+                event_cursor=NULL,consent_after_id=0,phase='revoked',updated_at=now() WHERE id=:id"""), {"id": pull["id"]})
 
 
 def expire_import_uploads(db):
+    from app.hubspot_source import expire_checkpoints
+    expire_checkpoints(db, get_settings().upload_retention_days)
     """Caller commits; safely expire completed imports and their diagnostics."""
     days = get_settings().upload_retention_days
     if days < 1:
@@ -440,7 +463,10 @@ def execute_deletion(db, request_id):
     privacy_exclusive(db)
     if db.scalar(text("""SELECT EXISTS(SELECT 1 FROM imports WHERE status='running')
         OR EXISTS(SELECT 1 FROM zeta_migrations m JOIN jobs j ON j.id=m.job_id
-            WHERE j.type='zeta.import' AND j.status IN ('queued','running'))""")):
+            WHERE j.type='zeta.import' AND j.status IN ('queued','running'))
+        OR EXISTS(SELECT 1 FROM jobs WHERE type='hubspot.finish' AND status IN ('queued','running'))
+        OR EXISTS(SELECT 1 FROM jobs j JOIN sources s ON s.id::text=j.payload->>'source_id'
+            WHERE j.type='source.pull' AND s.kind='hubspot' AND j.status IN ('queued','running'))""")):
         raise IdentityResolutionDeferred("Privacy execution waits for active imports to finish.")
     acquire_resolver_lock(db)
     db.execute(text("SELECT pg_advisory_xact_lock(hashtext('audience-hub:trait-recompute'))"))

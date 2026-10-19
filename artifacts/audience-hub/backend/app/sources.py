@@ -37,7 +37,7 @@ class SourceCreate(BaseModel):
     @field_validator("kind")
     @classmethod
     def valid_kind(cls, value: str) -> str:
-        if value not in {"csv", "event_api", "sftp_jsonl", "snowflake", "zeta_exit"}:
+        if value not in {"csv", "event_api", "sftp_jsonl", "snowflake", "zeta_exit", "hubspot"}:
             raise ValueError("Unsupported source kind")
         return value
 
@@ -113,7 +113,7 @@ def read_source(source_id: int, user: User = Depends(require_role("viewer")),
 @router.post("", status_code=201)
 def create_source(data: SourceCreate, user: User = Depends(require_role("admin")),
                   db: Session = Depends(session_scope)):
-    if data.kind in {"sftp_jsonl", "snowflake", "zeta_exit"} and data.settings:
+    if data.kind in {"sftp_jsonl", "snowflake", "zeta_exit", "hubspot"} and data.settings:
         raise HTTPException(422, "Use the encrypted connection endpoint for pull configuration")
     source = Source(**data.model_dump())
     db.add(source)
@@ -131,7 +131,7 @@ def update_source(source_id: int, data: SourceUpdate,
                   user: User = Depends(require_role("admin")),
                   db: Session = Depends(session_scope)):
     source = get_source(db, source_id)
-    if source.kind in {"sftp_jsonl", "snowflake", "zeta_exit"} and data.settings:
+    if source.kind in {"sftp_jsonl", "snowflake", "zeta_exit", "hubspot"} and data.settings:
         raise HTTPException(422, "Use the encrypted connection endpoint for pull configuration")
     priority_changed = data.priority is not None and data.priority != source.priority
     for key, value in data.model_dump(exclude_unset=True).items():

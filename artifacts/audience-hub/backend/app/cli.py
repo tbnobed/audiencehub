@@ -37,6 +37,10 @@ def main():
         description="Audience Hub administration and deterministic synthetic CSV generation."
     )
     commands = parser.add_subparsers(dest="command", required=True)
+    destinations = commands.add_parser("destinations", help="Run a configured HubSpot destination.")
+    destination_commands = destinations.add_subparsers(dest="destination_command", required=True)
+    destination_run = destination_commands.add_parser("run", help="Queue a consent-filtered HubSpot static-list sync.")
+    destination_run.add_argument("destination_id", type=int)
     pull = commands.add_parser("source-pull", help="Pull a configured SFTP/Snowflake/Zeta source through COPY imports.")
     pull.add_argument("--source-id", required=True, type=int)
     pull.add_argument("--feed", choices=["people", "models", "events", "resources", "enrichment", "lookups"])
@@ -106,7 +110,7 @@ def main():
         command = source_commands.add_parser(operation)
         command.add_argument("source_id", type=int)
         if operation != "test":
-            command.add_argument("mapping")
+            command.add_argument("mapping", nargs="?")
     zeta = commands.add_parser("import-zeta", help="Snapshot a Zeta export folder and queue its resumable migration.")
     zeta.add_argument("folder")
     zeta.add_argument("--source-id", type=int)
@@ -158,7 +162,23 @@ def main():
         import json
         from pathlib import Path
         from app.zeta_cli import sources_command, import_folder, print_result
-        if args.command == "sources":
+    if args.command == "destinations":
+        from app.db import engine
+        from app.models import Destination
+        from app.hubspot_destination import enqueue_destination
+        from app.zeta_cli import print_result
+        with Session(engine) as db:
+            destination = db.get(Destination, args.destination_id)
+            if destination is None:
+                raise SystemExit("Destination not found")
+            try:
+                result = enqueue_destination(db, destination)
+                db.commit()
+                print_result(result)
+            except ValueError as error:
+                raise SystemExit(str(error)) from None
+        return
+    if args.command == "sources":
             print_result(sources_command(args.source_command, args.source_id, getattr(args, "mapping", None)))
         else:
             counts = json.loads(Path(args.counts).read_text()) if args.counts else None

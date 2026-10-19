@@ -12,6 +12,7 @@ from sqlalchemy.exc import OperationalError
 DATA_TABLES = (
     "audit_log", "client_errors", "scheduled_runs", "jobs", "source_import_receipts",
     "zeta_migrations", "zeta_migration_files",
+    "hubspot_pulls",
     "imports", "import_batch_diagnostics", "identity_batches",
     "profiles", "source_records", "ingestion_receipts",
     "identifiers", "identifier_blocklist", "profile_merges", "gifts", "events",

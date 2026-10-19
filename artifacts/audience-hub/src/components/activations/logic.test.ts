@@ -179,3 +179,16 @@ test('manifest summary totals', () => {
   assert.deepEqual(manifestSummary({ files: [{ row_count: 3, bytes: 10 }, { row_count: 4, bytes: 5 }] }), { files: 2, rows: 7, bytes: 15 });
   assert.equal(manifestSummary(null), null);
 });
+
+test('hubspot destination form and body', () => {
+  const f = { ...destinationToForm(null), name: 'TBN list', type: 'hubspot' as const };
+  assert.equal(f.hubspot.replaceToken, true);
+  assert.ok(destinationFormErrors(f).segment_id && destinationFormErrors(f).list_name && destinationFormErrors(f).token);
+  const ok = { ...f, hubspot: { ...f.hubspot, list_name: 'Consented', segment_id: '7', token: ' tok ', frequency: 'daily' as const, hour: '5', minute: '30' } };
+  assert.equal(Object.keys(destinationFormErrors(ok)).length, 0);
+  const b = buildDestinationWrite(ok);
+  assert.deepEqual(b.config, { list_name: 'Consented', segment_id: 7, schedule: { frequency: 'daily', timezone: 'America/New_York', minute: 30, hour: 5 } });
+  assert.deepEqual(b.credentials, { access_token: 'tok' });
+  const saved = destinationToForm({ id: 9, name: 'x', type: 'hubspot', config: { list_name: 'L', segment_id: 7 }, is_active: true, has_secret: false, has_credentials: true, secret_last4: null, header_names: [], created_at: '' });
+  assert.equal('credentials' in buildDestinationWrite(saved), false);
+});

@@ -19,7 +19,7 @@ export function RunStatus({ status, testId }: { status: string | null | undefine
   </span>;
 }
 
-const TYPE_ICON: Record<DestinationType, typeof Webhook> = { csv: FileSpreadsheet, webhook: Webhook, google_customer_match: Target, meta_custom_audience: Megaphone, sftp: Server };
+const TYPE_ICON: Record<DestinationType, typeof Webhook> = { csv: FileSpreadsheet, webhook: Webhook, google_customer_match: Target, meta_custom_audience: Megaphone, sftp: Server, hubspot: Target };
 export function TypeBadge({ type }: { type: DestinationType }) {
   const Icon = TYPE_ICON[type] ?? FileSpreadsheet;
   return <span className="inline-flex items-center gap-1 px-1.5 h-5 rounded-sm border border-line bg-surface-raised text-[10px] font-mono uppercase tracking-wider text-ink-muted" data-testid={`badge-type-${type}`}><Icon size={11} />{typeLabel(type)}</span>;

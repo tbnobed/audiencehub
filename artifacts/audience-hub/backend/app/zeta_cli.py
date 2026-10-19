@@ -22,6 +22,11 @@ def sources_command(command, source_id, mapping=None):
         if command == "test":
             return test_connection(source_id, ConnectionTest(), user=None, db=db)
         row = connection_row(db, source_id)
+        if row["kind"] == "hubspot":
+            if command == "preview":
+                from app.hubspot_source import preview
+                return preview(row)
+            mapping = mapping or "contacts"
         if mapping not in {m["id"] for m in row["config"]["mappings"]}:
             raise SourceError("Mapping not found.")
         if command == "preview":

@@ -446,6 +446,7 @@ class ActivationRun(Base):
     file_path: Mapped[str | None] = mapped_column(Text)
     file_sha256: Mapped[str | None] = mapped_column(String(64))
     error: Mapped[str | None] = mapped_column(Text)
+    hubspot_result: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
     triggered_by: Mapped[str] = mapped_column(Text, nullable=False, server_default="manual")
     user_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())

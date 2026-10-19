@@ -107,7 +107,8 @@ function RunHistory({ runs, onRerun, rerunDisabled }: { runs: ReturnType<typeof 
 function RunRow({ r, open, toggle, onRerun, rerunDisabled }: { r: ActivationRun; open: boolean; toggle: () => void; onRerun: () => void; rerunDisabled: boolean }) {
   const failed = runPhase(r.status) === 'failed';
   const ms = manifestSummary(r.manifest);
-  const hasDetail = !!r.error || !!r.manifest || !!r.file_sha256;
+  const hs = r.run_json?.hubspot_result ?? null;
+  const hasDetail = !!r.error || !!r.manifest || !!r.file_sha256 || !!hs;
   return <>
     <tr className="h-10 border-t border-line hover:bg-surface-raised/50" data-testid={`row-run-${r.id}`}>
       <td className="px-3">{hasDetail && <button onClick={toggle} aria-expanded={open} aria-label={r.error ? 'Show error' : 'Show delivery details'} data-testid={`button-expand-run-${r.id}`}>{open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}</button>}</td>
@@ -126,6 +127,13 @@ function RunRow({ r, open, toggle, onRerun, rerunDisabled }: { r: ActivationRun;
       {r.file_sha256 && <div className="font-mono"><span className="text-ink-muted">file sha256 </span><span className="break-all select-all" title={r.file_sha256}>{r.file_sha256}</span></div>}
       {r.manifest && <div><span className="text-ink-muted">manifest.json · run {r.manifest.run_id} · v{r.manifest.version} · {fmtInt(ms?.rows)} rows</span>
         <table className="mt-1 font-mono text-[11px]"><tbody>{r.manifest.files.map(f => <tr key={f.name}><td className="pr-3">{f.name}</td><td className="pr-3 text-right tabular-nums">{fmtInt(f.row_count)} rows</td><td className="pr-3 text-right tabular-nums">{fmtInt(f.bytes)} B</td><td className="text-ink-muted" title={f.sha256}>{shortHash(f.sha256)}</td></tr>)}</tbody></table></div>}
+    </td></tr>}
+    {open && hs && <tr className="border-t border-line bg-surface-raised/40" data-testid={`row-run-hubspot-${r.id}`}><td /><td colSpan={8} className="px-2 py-2 text-[11px] font-mono flex flex-wrap gap-x-5 gap-y-1">
+      <span className="text-ink-muted">HubSpot list {hs.list_id ?? '—'}</span>
+      <span data-testid={`text-hubspot-added-${r.id}`}>added {fmtInt(hs.added ?? 0)}</span>
+      <span data-testid={`text-hubspot-removed-${r.id}`}>removed {fmtInt(hs.removed ?? 0)}</span>
+      <span data-testid={`text-hubspot-updated-${r.id}`}>Master IDs written {fmtInt(hs.master_ids_updated ?? 0)}</span>
+      <span className="text-ink-muted" data-testid={`text-hubspot-unchanged-${r.id}`}>unchanged {fmtInt(hs.master_ids_unchanged ?? 0)}</span>
     </td></tr>}
     {open && r.error && <tr className="border-t border-line"><td /><td colSpan={8} className="px-2 py-2"><pre className="font-mono text-[11px] text-danger whitespace-pre-wrap flex gap-2"><FileWarning size={12} className="shrink-0 mt-0.5" />{r.error}</pre></td></tr>}
   </>;

@@ -17,7 +17,13 @@ export function useDestinationActions() {
   const client = useQueryClient();
   const refresh = () => client.invalidateQueries({ queryKey: ['destinations'] });
   return {
-    save: useMutation({ mutationFn: ({ id, ...body }: DestinationWrite & { id?: number }) => send<Destination>(id ? `/api/destinations/${id}` : '/api/destinations', id ? 'PATCH' : 'POST', body), onSuccess: refresh }),
+    save: useMutation({ mutationFn: (variables: DestinationWrite & { id?: number }) => {
+      const { id, ...body } = variables;
+      const request = send<Destination>(id ? `/api/destinations/${id}` : '/api/destinations', id ? 'PATCH' : 'POST', body); // body serialized synchronously here
+      // React Query retains variables: drop write-only secrets right after serialization, before any await.
+      delete variables.credentials; delete variables.signing_secret; delete variables.headers;
+      return request;
+    }, onSuccess: refresh }),
     archive: useMutation({ mutationFn: (id: number) => send(`/api/destinations/${id}`, 'DELETE'), onSuccess: refresh }),
     test: useMutation({ mutationFn: (id: number) => send<{ delivered: boolean; mode?: 'connection_only' }>(`/api/destinations/${id}/test`, 'POST', {}) }),
   };

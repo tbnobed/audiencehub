@@ -14,6 +14,7 @@ import { toast } from '@/hooks/use-toast';
 import { useAuth } from '@/hooks/use-auth';
 import { SourceEvents } from '@/components/source-events';
 import { SourceConnection } from '@/components/source-connection';
+import { HubspotSourceConnection } from '@/components/hubspot-source-connection';
 import { isPullKind } from '@/hooks/use-source-connection';
 
 export default function Sources() {
@@ -228,7 +229,7 @@ export default function Sources() {
                         {canReadEvents && source.kind === 'event_api' && <DropdownMenuItem onClick={() => setEventSource(source)}>
                           <KeySquare className="mr-2 h-4 w-4" /> SDK & live events
                         </DropdownMenuItem>}
-                        {isAdmin && isPullKind(source.kind) && <DropdownMenuItem data-testid={`menu-connection-${source.id}`} onClick={() => setConnectionSource(source)}>
+                        {isAdmin && (isPullKind(source.kind) || source.kind === 'hubspot') && <DropdownMenuItem data-testid={`menu-connection-${source.id}`} onClick={() => setConnectionSource(source)}>
                           <Plug className="mr-2 h-4 w-4" /> Connection
                         </DropdownMenuItem>}
                         {isAdmin && <DropdownMenuItem onClick={() => handleOpenForm(source)}>
@@ -288,7 +289,7 @@ export default function Sources() {
                     id="kind"
                     data-testid="select-source-kind"
                     value={formData.kind}
-                    onChange={e => setFormData({ ...formData, kind: e.target.value, record_types: e.target.value === 'event_api' ? 'event' : formData.record_types })}
+                    onChange={e => setFormData({ ...formData, kind: e.target.value, record_types: e.target.value === 'event_api' ? 'event' : e.target.value === 'hubspot' ? 'contact' : formData.record_types })}
                     className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
                   >
                     <option value="csv">csv</option>
@@ -296,8 +297,9 @@ export default function Sources() {
                     <option value="sftp_jsonl">sftp_jsonl</option>
                     <option value="snowflake">snowflake</option>
                     <option value="zeta_exit">zeta_exit</option>
+                    <option value="hubspot">hubspot</option>
                   </select>
-                  <p className="text-xs text-muted-foreground">csv: file upload. event_api: browser SDK (event records). sftp_jsonl, snowflake, zeta_exit: scheduled pulls, configured after creation via Connection.</p>
+                  <p className="text-xs text-muted-foreground">csv: file upload. event_api: browser SDK (event records). sftp_jsonl, snowflake, zeta_exit, hubspot: scheduled pulls, configured after creation via Connection.</p>
                 </div>
               )}
               <div className="space-y-2">
@@ -352,7 +354,8 @@ export default function Sources() {
             <DialogTitle>{connectionSource?.name} · Connection</DialogTitle>
             <DialogDescription>Credentials, feed mappings, schedules, dry run and manual pull.</DialogDescription>
           </DialogHeader>
-          {connectionSource && <SourceConnection key={connectionSource.id} source={sources.find(s => s.id === connectionSource.id) || connectionSource} />}
+          {connectionSource && connectionSource.kind === 'hubspot' && <HubspotSourceConnection key={connectionSource.id} source={sources.find(s => s.id === connectionSource.id) || connectionSource} />}
+          {connectionSource && connectionSource.kind !== 'hubspot' && <SourceConnection key={connectionSource.id} source={sources.find(s => s.id === connectionSource.id) || connectionSource} />}
         </DialogContent>
       </Dialog>}
     </div>

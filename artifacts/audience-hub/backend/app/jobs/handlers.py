@@ -6,6 +6,22 @@ class SegmentTraitsRefreshRequired(ValueError):
 
 
 def run(job_type: str, payload: dict, job_id: int | None = None) -> None:
+    if job_type == "hubspot.destination":
+        from sqlalchemy.orm import Session as HubspotSession
+        from app.db import engine as hubspot_engine
+        from app.models import Destination as HubspotDestination
+        from app.hubspot_destination import enqueue_destination
+        with HubspotSession(hubspot_engine) as db:
+            destination = db.get(HubspotDestination, int(payload["destination_id"]))
+            if destination is None or not destination.is_active:
+                return
+            enqueue_destination(db, destination, dedupe_key=f"hubspot-destination-job:{job_id}")
+            db.commit()
+        return
+    if job_type == "hubspot.finish":
+        from app.hubspot_source import finish_hubspot
+        finish_hubspot(int(payload["pull_id"]), job_id=job_id)
+        return
     if job_type == "zeta.import":
         from app.zeta_migrations import run_migration
         run_migration(int(payload["migration_id"]), job_id=job_id, paths=payload.get("paths"))
@@ -15,6 +31,15 @@ def run(job_type: str, payload: dict, job_id: int | None = None) -> None:
         run_parity(int(payload["migration_id"]), job_id=job_id)
         return
     if job_type == "source.pull":
+        from sqlalchemy import text as source_text
+        from sqlalchemy.orm import Session as SourceSession
+        from app.db import engine as source_engine
+        with SourceSession(source_engine) as source_db:
+            source_kind = source_db.scalar(source_text("SELECT kind FROM sources WHERE id=:id"), {"id": payload["source_id"]})
+        if source_kind == "hubspot":
+            from app.hubspot_source import run_hubspot
+            run_hubspot(int(payload["source_id"]), job_id=job_id)
+            return
         from app.source_pulls import run_source
         from app.source_connectors import SourceError
         from app.identity.locking import IdentityResolutionDeferred

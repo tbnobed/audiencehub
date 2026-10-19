@@ -53,7 +53,8 @@ for _key, _meta in FIELDS.items():
     elif _key == "wealth_score":
         _meta["model_date"] = "wealth_score_model_date"
 
-EVENT_NAMES = ("donation", "donation_return", "order_shipped", "vod_viewed", "email_signup",
+EVENT_NAMES = ("email_sent", "email_opened", "email_clicked", "email_bounced",
+               "donation", "donation_return", "order_shipped", "vod_viewed", "email_signup",
                "user_web_signup", "preference_update", "text_signup", "text_web_signup",
                "text_call_center_signup", "text_reply_confirmation", "text_reply_stop")
 ALIASES = {re.sub(r"[^a-z0-9]", "", key): key for key in FIELDS}

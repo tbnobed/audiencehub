@@ -495,3 +495,5 @@ def tick_sources(db, now):
             if key:
                 schedule_once(db, f"source:{row['id']}:{mapping['id']}", key, "source.pull",
                               {"source_id": row["id"], "mapping_id": mapping["id"]})
+    from app.hubspot_destination import tick_destinations
+    tick_destinations(db, now)

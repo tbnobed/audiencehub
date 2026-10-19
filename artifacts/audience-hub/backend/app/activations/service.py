@@ -137,7 +137,8 @@ def enqueue_run(db, activation_id, user_id=None, triggered_by="manual", dedupe_k
         "segment_id": segment.id, "segment_name": segment.name,
         "destination_id": destination.id, "type": destination.type,
         "config": destination.config, "secrets": security.decrypt(destination.secret_encrypted),
-        "mapping": activation_mapping(db, activation, destination.type), "consent": activation.required_consent,
+        "mapping": activation_mapping(db, activation, destination.type),
+        "consent": "email" if destination.type == "hubspot" else activation.required_consent,
     }
     approval_id, selected = sensitive_approval(
         db, activation.id, segment.id, destination.id, snapshot["mapping"], snapshot["consent"])
@@ -148,7 +149,7 @@ def enqueue_run(db, activation_id, user_id=None, triggered_by="manual", dedupe_k
                         triggered_by=triggered_by, snapshot_encrypted=security.encrypt(snapshot))
     db.add(run)
     db.flush()
-    if destination.type != "webhook":
+    if destination.type not in {"webhook", "hubspot"}:
         slug = re.sub(r"[^a-z0-9]+", "-", segment.name.lower()).strip("-")[:80] or "partner-audience"
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         # Persist the filename BEFORE writing any bytes. Together with the
@@ -287,6 +288,13 @@ def track_members_durably(db, run, *, previous=False):
         tracking.commit()
 
 
+def export_suppressed_ids(db, batch, snapshot):
+    result = suppressed_ids(db, batch, snapshot["consent"], snapshot["config"].get("export_kind") == "crosswalk")
+    if any("email" in str(spec.get("key", "")).lower() for spec in snapshot["mapping"].values()):
+        result.update(suppressed_ids(db, batch, "email"))
+    return result
+
+
 def prepare(db, run, snapshot):
     snapshot["mapping"] = export_mapping(snapshot["type"], snapshot["mapping"])
     validate_provider_mapping(snapshot["type"], snapshot["mapping"])
@@ -309,7 +317,8 @@ def prepare(db, run, snapshot):
     run.profiles_excluded_suppressed = run.profiles_excluded_missing_fields = run.profiles_sent = 0
     kind, mapping = snapshot["type"], snapshot["mapping"]
     for batch in _rows(db):
-        suppressed = suppressed_ids(db, batch, consent, snapshot["config"].get("export_kind") == "crosswalk")
+        # A HubSpot unsubscribe is not bypassed by selecting no consent channel.
+        suppressed = export_suppressed_ids(db, batch, snapshot)
         enrichment = fields.enrichments(db, [row["id"] for row in batch])
         missing = set()
         for row in batch:
@@ -472,7 +481,10 @@ def execute(db, run_id):
     run.status, run.started_at = "running", run.started_at or datetime.now(timezone.utc)
     prepare(db, run, snapshot)
     try:
-        if snapshot["type"] == "webhook":
+        if snapshot["type"] == "hubspot":
+            from app.hubspot_destination import deliver
+            deliver(db, run, snapshot)
+        elif snapshot["type"] == "webhook":
             send_webhook(db, run, snapshot)
         elif snapshot["type"] == "sftp" and snapshot["config"].get("export_kind") == "crosswalk":
             from app.activations.crosswalk import export

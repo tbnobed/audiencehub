@@ -62,6 +62,8 @@ app.include_router(client_errors_router)
 from app.zeta_api import router as zeta_router, jobs_router as source_jobs_router
 app.include_router(zeta_router)
 app.include_router(source_jobs_router)
+from app.hubspot_api import router as hubspot_router
+app.include_router(hubspot_router)
 
 
 @app.exception_handler(HTTPException)

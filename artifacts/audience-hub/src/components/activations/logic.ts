@@ -7,6 +7,7 @@ export const DEST_TYPES: { value: DestinationType; label: string; short: string;
   { value: 'google_customer_match', label: 'Google Customer Match file', short: 'Google CM', blurb: 'Normalized, SHA-256 hashed file for manual upload in Google Ads. No API connection.' },
   { value: 'meta_custom_audience', label: 'Meta custom audience file', short: 'Meta CA', blurb: 'Normalized, SHA-256 hashed file for manual upload in Meta Ads Manager. No API connection.' },
   { value: 'webhook', label: 'Webhook', short: 'Webhook', blurb: 'Signed JSON POST in batches to an admin-entered URL.' },
+  { value: 'hubspot', label: 'HubSpot list', short: 'HubSpot', blurb: 'Consented emails from a segment synced to a static HubSpot list; Master IDs written back to contacts.' },
   { value: 'sftp', label: 'SFTP drop', short: 'SFTP', blurb: 'Comma CSV pushed over key-auth SFTP with a pinned host key; manifest.json marks each complete run.' },
 ];
 export const typeLabel = (t: DestinationType) => DEST_TYPES.find(d => d.value === t)?.short ?? t;
@@ -213,7 +214,8 @@ export type SftpForm = { output_dir: string; gzip: boolean; export_kind: ExportK
 export const blankSftp = (): SftpForm => ({ output_dir: '/exports', gzip: false, export_kind: 'audience', approved_purpose: '', replaceCredentials: true, host: '', port: '22', username: '', private_key: '', passphrase: '', host_key_sha256: '' });
 /** Wipe every write-only secret field (used after save/cancel). */
 export const clearSftpSecrets = (s: SftpForm): SftpForm => ({ ...s, private_key: '', passphrase: '' });
-export type DestinationForm = { sftp: SftpForm; id?: number; name: string; type: DestinationType; is_active: boolean; delimiter: string; include_pii: boolean; url: string; batch_size: string; mode: 'full' | 'delta'; allow_internal_network: boolean; secret: string; replaceHeaders: boolean; headers: HeaderRow[] };
+export type DestinationForm = { sftp: SftpForm; id?: number; name: string; type: DestinationType; is_active: boolean; delimiter: string; include_pii: boolean; url: string; batch_size: string; mode: 'full' | 'delta'; allow_internal_network: boolean; secret: string; replaceHeaders: boolean; headers: HeaderRow[]; hubspot: HubspotForm };
+export type HubspotForm = { list_name: string; list_id: string; segment_id: string; frequency: 'manual' | 'hourly' | 'daily' | 'monthly'; hour: string; minute: string; day: string; token: string; replaceToken: boolean };
 export function destinationToForm(d?: Destination | null): DestinationForm {
   return {
     id: d?.id, name: d?.name ?? '', type: d?.type ?? 'csv', is_active: d?.is_active ?? true,
@@ -221,6 +223,7 @@ export function destinationToForm(d?: Destination | null): DestinationForm {
     url: d?.config.url ?? '', batch_size: String(d?.config.batch_size ?? 500), mode: d?.config.mode ?? 'full',
     allow_internal_network: d?.config.allow_internal_network ?? false,
     secret: '', replaceHeaders: !d, headers: [],
+    hubspot: { list_name: d?.config.list_name ?? '', list_id: d?.config.list_id ?? '', segment_id: d?.config.segment_id ? String(d.config.segment_id) : '', frequency: d?.config.schedule?.frequency ?? 'manual', hour: String(d?.config.schedule?.hour ?? 0), minute: String(d?.config.schedule?.minute ?? 0), day: String(d?.config.schedule?.day ?? 1), token: '', replaceToken: !d?.has_credentials },
     sftp: { ...blankSftp(), output_dir: d?.config.output_dir ?? '/exports', gzip: d?.config.gzip ?? false, export_kind: d?.config.export_kind ?? 'audience', approved_purpose: d?.config.approved_purpose ?? '', replaceCredentials: !d?.has_credentials },
   };
 }
@@ -233,6 +236,16 @@ export function destinationFormErrors(f: DestinationForm): Record<string, string
     const b = Number(f.batch_size);
     if (!Number.isInteger(b) || b < 1 || b > 10000) e.batch_size = 'Batch size must be a whole number between 1 and 10,000.';
     if (f.replaceHeaders && f.headers.some(h => !h.name.trim() || !/^[A-Za-z0-9-]+$/.test(h.name.trim()))) e.headers = 'Header names use letters, digits and dashes only.';
+  }
+  if (f.type === 'hubspot') {
+    const h = f.hubspot;
+    if (!h.list_name.trim()) e.list_name = 'List name is required.';
+    if (h.list_id.trim() && !/^\d+$/.test(h.list_id.trim())) e.list_id = 'List ID must be numeric.';
+    if (!h.segment_id) e.segment_id = 'Choose a segment.';
+    if (h.replaceToken && !h.token.trim()) e.token = 'Access token is required.';
+    if (h.frequency !== 'manual' && (Number(h.minute) < 0 || Number(h.minute) > 59)) e.schedule = 'Minute must be 0-59.';
+    if ((h.frequency === 'daily' || h.frequency === 'monthly') && (Number(h.hour) < 0 || Number(h.hour) > 23)) e.schedule = 'Hour must be 0-23.';
+    if (h.frequency === 'monthly' && (Number(h.day) < 1 || Number(h.day) > 28)) e.schedule = 'Day must be 1-28.';
   }
   if (f.type === 'sftp') {
     const s = f.sftp;
@@ -254,12 +267,21 @@ export function buildDestinationWrite(f: DestinationForm): DestinationWrite & { 
   if (f.type === 'csv') config = { delimiter: f.delimiter, include_pii: f.include_pii };
   if (f.type === 'sftp') config = { output_dir: f.sftp.output_dir.trim(), gzip: f.sftp.gzip, include_pii: f.sftp.export_kind === 'crosswalk' ? true : f.include_pii, delimiter: ',', export_kind: f.sftp.export_kind, ...(f.sftp.approved_purpose.trim() ? { approved_purpose: f.sftp.approved_purpose.trim() } : {}) };
   if (f.type === 'webhook') config = { url: f.url.trim(), batch_size: Number(f.batch_size), mode: f.mode, allow_internal_network: f.allow_internal_network };
+  if (f.type === 'hubspot') {
+    const h = f.hubspot;
+    const schedule: NonNullable<DestinationConfig['schedule']> = { frequency: h.frequency, timezone: 'America/New_York' };
+    if (h.frequency !== 'manual') schedule.minute = Number(h.minute) || 0;
+    if (h.frequency === 'daily' || h.frequency === 'monthly') schedule.hour = Number(h.hour) || 0;
+    if (h.frequency === 'monthly') schedule.day = Number(h.day) || 1;
+    config = { list_name: h.list_name.trim(), ...(h.list_id.trim() ? { list_id: h.list_id.trim() } : {}), segment_id: Number(h.segment_id), schedule };
+  }
   const body: DestinationWrite & { id?: number } = { name: f.name.trim(), type: f.type, config, is_active: f.is_active };
   if (f.id) body.id = f.id;
   if (f.type === 'webhook') {
     if (f.secret.trim()) body.signing_secret = f.secret.trim();
     if (f.replaceHeaders) body.headers = Object.fromEntries(f.headers.filter(h => h.name.trim()).map(h => [h.name.trim(), h.value]));
   }
+  if (f.type === 'hubspot' && f.hubspot.replaceToken && f.hubspot.token.trim()) body.credentials = { access_token: f.hubspot.token.trim() };
   if (f.type === 'sftp' && f.sftp.replaceCredentials) {
     const s = f.sftp;
     body.credentials = { host: s.host.trim(), port: Number(s.port), username: s.username.trim(), private_key: s.private_key, host_key_sha256: s.host_key_sha256.trim(), ...(s.passphrase ? { private_key_passphrase: s.passphrase } : {}) };

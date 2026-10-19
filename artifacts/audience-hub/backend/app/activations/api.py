@@ -13,7 +13,7 @@ from app.models import Activation, ActivationRun, Destination, Segment, User
 from app.activations import fields, schedule, security, service
 
 router = APIRouter(prefix="/api", tags=["activations"])
-TYPES = {"csv", "google_customer_match", "meta_custom_audience", "webhook", "sftp"}
+TYPES = {"csv", "google_customer_match", "meta_custom_audience", "webhook", "sftp", "hubspot"}
 
 
 class DestinationWrite(BaseModel):
@@ -92,6 +92,7 @@ def run_json(row, db=None, user=None):
         "id", "activation_id", "status", "started_at", "finished_at", "created_at",
         "profiles_selected", "profiles_excluded_consent", "profiles_excluded_suppressed",
         "profiles_excluded_missing_fields", "profiles_sent", "error", "triggered_by")}
+    result["hubspot_result"] = row.hubspot_result or {}
     try:
         service.safe_file(row)
         downloadable = True
@@ -132,6 +133,11 @@ def activation_json(db, row, user=None):
 
 
 def validate_destination(kind, config, secrets, enabled=True):
+    if kind == "hubspot":
+        from app.hubspot_client import validate_destination as validate_hubspot
+        if set(secrets) - {"credentials"}:
+            raise ValueError("HubSpot accepts only its encrypted private app token.")
+        return validate_hubspot(config, secrets.get("credentials", {}))
     if kind == "snowflake":
         raise ValueError("Snowflake export writer is unsupported; configure SFTP or CSV.")
     if kind not in TYPES:
@@ -248,6 +254,14 @@ def archive_destination(identifier: int, db: Session = Depends(session_scope), u
 @router.post("/destinations/{identifier}/test")
 def test_destination(identifier: int, db: Session = Depends(session_scope), user: User = Depends(require_role("admin"))):
     row = require(db, Destination, identifier)
+    if row.type == "hubspot":
+        from app.hubspot_client import HubSpot
+        from app.source_connectors import SourceError
+        try:
+            with HubSpot(security.decrypt(row.secret_encrypted).get("credentials", {})) as client:
+                return client.info()
+        except SourceError as error:
+            raise HTTPException(422, str(error)) from None
     if row.type == "sftp":
         from app.activations.sftp import connection_config, validate
         from app.identity.filedrop import connect, FiledropError

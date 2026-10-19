@@ -73,6 +73,9 @@ def readonly_query(value):
 
 
 def validate_config(kind, config):
+    if kind == "hubspot":
+        from app.hubspot_client import validate_source
+        return validate_source(config)
     if kind not in {"sftp_jsonl", "snowflake", "zeta_exit"}:
         raise SourceError("Source kind does not support pulling.")
     if not isinstance(config, dict) or set(config) - {"mappings", "schedules"}:
@@ -152,6 +155,9 @@ def window(schedule, now: datetime):
 
 
 def validate_credentials(kind, credentials):
+    if kind == "hubspot":
+        from app.hubspot_client import validate_token
+        return validate_token(credentials)
     if not isinstance(credentials, dict):
         raise SourceError("Credentials must be an object.")
     if kind in {"sftp_jsonl", "zeta_exit"}:
