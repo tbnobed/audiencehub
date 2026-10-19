@@ -1,9 +1,10 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Archive, Copy, MoreHorizontal, Pencil, Plus, RefreshCw, Target } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Checkbox } from '@/components/ui/checkbox';
 import { useSegmentActions, useSegments } from '@/hooks/use-segments';
 import { toast } from '@/hooks/use-toast';
 import type { Segment } from '@/lib/segments';
@@ -19,7 +20,8 @@ export function SegmentList() {
   const { canEdit } = useSegmentRole();
   const listQ = useSegments(status, owner);
   const allQ = useSegments('', '');
-  const { materialize } = useSegmentActions();
+  const { materialize, bulk } = useSegmentActions();
+  const [selected, setSelected] = useState<Set<number>>(new Set());
   const duplicate = useDuplicate();
   const [archiving, setArchiving] = useState<Segment | null>(null);
   const owners = useMemo(() => {
@@ -29,6 +31,28 @@ export function SegmentList() {
   }, [allQ.data]);
   const setFilter = (k: string, v: string) => { const n = new URLSearchParams(params); if (v) n.set(k, v); else n.delete(k); setParams(n, { replace: true }); };
   const items = listQ.data?.items ?? [];
+  useEffect(() => { setSelected(new Set()); }, [status, owner]);
+  useEffect(() => {
+    if (!listQ.data) return;
+    const selectable = new Set(listQ.data.items.filter(s => s.status !== 'archived').map(s => s.id));
+    setSelected(previous => new Set([...previous].filter(id => selectable.has(id))));
+  }, [listQ.data]);
+  const selectable = items.filter(s => s.status !== 'archived');
+  const selection = selectable.filter(s => selected.has(s.id));
+  const allSelected = selectable.length > 0 && selection.length === selectable.length;
+  const toggle = (id: number, checked: boolean) => setSelected(previous => {
+    const next = new Set(previous);
+    if (checked) next.add(id); else next.delete(id);
+    return next;
+  });
+  const runBulk = (action: 'activate' | 'pause' | 'refresh') => bulk.mutate(
+    { ids: selection.map(s => s.id), action },
+    { onSuccess: result => {
+      setSelected(new Set());
+      toast({ title: action === 'refresh' ? 'Refresh queued' : action === 'activate' ? 'Audiences activated' : 'Audiences paused',
+        description: `${result.ids.length} audiences${action === 'pause' ? ' · automatic refresh paused; saved counts retained.' : ` · ${result.job_ids.length} refresh jobs queued or already pending.`}` });
+    }, onError: error => toastError('Bulk action failed', error) },
+  );
   const totals = useMemo(() => ({ active: (allQ.data?.items ?? []).filter(s => s.status === 'active').length, draft: (allQ.data?.items ?? []).filter(s => s.status === 'draft').length }), [allQ.data]);
   const refresh = (s: Segment) => materialize.mutate(s.id, { onSuccess: r => toast({ title: 'Refresh queued', description: `${s.name} · job #${r.job_id}` }), onError: e => toastError('Refresh failed', e) });
 
@@ -47,22 +71,31 @@ export function SegmentList() {
       {canEdit && <Button size="sm" className="h-8 text-xs" asChild data-testid="button-new-segment"><Link to="/segments/new"><Plus size={13} className="mr-1" /> New audience</Link></Button>}
     </header>
 
-    <div className="rounded-sm border border-line bg-surface overflow-x-auto">
+    {canEdit && selection.length > 0 && <div className="flex flex-wrap items-center gap-2 rounded-sm border border-line bg-surface px-3 py-2" role="region" aria-label="Selected audience actions">
+      <span className="text-xs mr-auto">{selection.length} selected</span>
+      <Button size="sm" variant="outline" disabled={bulk.isPending} onClick={() => runBulk('activate')} data-testid="button-bulk-activate">Activate</Button>
+      <Button size="sm" variant="outline" disabled={bulk.isPending} onClick={() => runBulk('pause')} data-testid="button-bulk-pause">Pause</Button>
+      <Button size="sm" variant="outline" disabled={bulk.isPending || selection.some(s => s.status !== 'active')} title={selection.some(s => s.status !== 'active') ? 'Activate selected audiences before refreshing' : undefined} onClick={() => runBulk('refresh')} data-testid="button-bulk-refresh"><RefreshCw size={12} className="mr-1" />Refresh now</Button>
+      <Button size="sm" variant="ghost" disabled={bulk.isPending} onClick={() => setSelected(new Set())}>Clear selection</Button>
+    </div>}
+    <div className="rounded-sm border border-line bg-surface overflow-x-auto" aria-busy={bulk.isPending}>
       <table className="w-full text-xs min-w-[860px]" data-testid="table-segments">
         <thead className="sticky top-0 bg-surface-raised text-ink-muted text-[11px]"><tr className="text-left h-8">
+          {canEdit && <th className="px-2 w-8"><Checkbox aria-label="Select all visible non-archived audiences" checked={allSelected ? true : selection.length ? 'indeterminate' : false} disabled={!selectable.length || bulk.isPending} onCheckedChange={checked => setSelected(checked === true ? new Set(selectable.map(s => s.id)) : new Set())} data-testid="checkbox-select-all-audiences" /></th>}
           <th className="px-3 font-medium">Audience</th><th className="px-2 font-medium">Status</th><th className="px-2 font-medium text-right">Partners</th><th className="px-2 font-medium text-right">Change</th>
           <th className="px-2 font-medium">Last refreshed</th><th className="px-2 font-medium">Owner</th><th className="px-2 font-medium text-right">Activations</th><th className="w-10" />
         </tr></thead>
         <tbody>
-          {listQ.isLoading ? Array.from({ length: 8 }, (_, i) => <tr key={i} className="border-t border-line h-8">{Array.from({ length: 8 }, (_, j) => <td key={j} className="px-2"><Skeleton className="h-3.5 w-full bg-surface-raised" /></td>)}</tr>)
-            : listQ.isError ? <tr><td colSpan={8} className="h-40 text-center"><p className="text-danger">Unable to load audiences</p><p className="text-ink-muted mt-1">{errorMessage(listQ.error)}</p><Button size="sm" variant="outline" className="mt-3 h-7 text-xs" onClick={() => listQ.refetch()} data-testid="button-retry-segments"><RefreshCw size={12} className="mr-1" /> Retry</Button></td></tr>
-            : !items.length ? <tr><td colSpan={8} className="h-48 text-center" data-testid="empty-segments">
+          {listQ.isLoading ? Array.from({ length: 8 }, (_, i) => <tr key={i} className="border-t border-line h-8">{Array.from({ length: canEdit ? 9 : 8 }, (_, j) => <td key={j} className="px-2"><Skeleton className="h-3.5 w-full bg-surface-raised" /></td>)}</tr>)
+            : listQ.isError ? <tr><td colSpan={canEdit ? 9 : 8} className="h-40 text-center"><p className="text-danger">Unable to load audiences</p><p className="text-ink-muted mt-1">{errorMessage(listQ.error)}</p><Button size="sm" variant="outline" className="mt-3 h-7 text-xs" onClick={() => listQ.refetch()} data-testid="button-retry-segments"><RefreshCw size={12} className="mr-1" /> Retry</Button></td></tr>
+            : !items.length ? <tr><td colSpan={canEdit ? 9 : 8} className="h-48 text-center" data-testid="empty-segments">
                 <Target size={22} className="mx-auto text-ink-muted mb-2" />
                 <p className="text-sm text-ink">{status || owner ? 'No audiences match these filters' : 'No partner audiences yet'}</p>
                 <p className="text-ink-muted mt-1">{status || owner ? 'Clear a filter to see more.' : canEdit ? 'Create an audience to define who receives an activation.' : 'An analyst can create the first audience.'}</p>
                 {canEdit && !status && !owner && <Button size="sm" className="mt-3 h-7 text-xs" asChild><Link to="/segments/new"><Plus size={12} className="mr-1" /> New audience</Link></Button>}
               </td></tr>
             : items.map(s => <tr key={s.id} data-testid={`row-segment-${s.id}`} className="border-t border-line h-9 hover:bg-surface-raised cursor-pointer" onClick={() => navigate(`/segments/${s.id}`)}>
+                {canEdit && <td className="px-2" onClick={e => e.stopPropagation()}><Checkbox aria-label={`Select ${s.name}`} checked={selected.has(s.id)} disabled={s.status === 'archived' || bulk.isPending} onCheckedChange={checked => toggle(s.id, checked === true)} data-testid={`checkbox-audience-${s.id}`} /></td>}
                 <td className="px-3 max-w-[320px]"><Link to={`/segments/${s.id}`} onClick={e => e.stopPropagation()} className="text-ink font-medium hover:text-signal" data-testid={`link-segment-${s.id}`}>{s.name}</Link>
                   {s.description && <span className="block text-[11px] text-ink-muted truncate">{s.description}</span>}</td>
                 <td className="px-2"><StatusPill status={s.status} /></td>

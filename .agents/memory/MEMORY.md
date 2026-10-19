@@ -15,3 +15,4 @@
 - [Profile view columns](profile-view-columns.md) — PostgreSQL freezes SELECT-star projections; profile schema changes must refresh dependent views through the migration chain.
 - [Source evidence envelopes](source-evidence-envelopes.md) — shared Zeta keys link people, model and lookup evidence; one feed must not overwrite another's raw record.
 - [HubSpot product rules](hubspot-product-rules.md) — TBN's email platform; real HubSpot contact IDs and opt-outs that govern every email export.
+- [Audience lifecycle](audience-lifecycle.md) — seed/reset activate templates; ordinary startup must preserve deliberate pauses.

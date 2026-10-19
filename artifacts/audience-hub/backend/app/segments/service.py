@@ -1,7 +1,7 @@
 """Transactional saved partner audiences and dependency-ordered membership."""
 from datetime import datetime, timezone
 from sqlalchemy import text, select
-from app.models import Segment, AuditLog
+from app.models import Segment, AuditLog, User
 from app.jobs.queue import enqueue
 from app.segments.compiler import compile_definition, validate_definition
 
@@ -120,9 +120,90 @@ def materialize_for_activation(db, segment_id, as_of=None):
     return materialize(db, segment_id, as_of)
 
 
+def bulk_action(db, segment_ids, action, actor_id=None):
+    """Atomic, dependency-aware actions shared by the UI and CLI; caller commits.
+
+    Pause uses the existing draft state: memberships/history are retained, but
+    scheduled and queued refreshes stop. Repeating any action is safe.
+    """
+    if action not in ("activate", "pause", "refresh"):
+        raise ValueError("Unknown audience action.")
+    graph_lock(db)
+    ids = sorted(set(segment_ids))
+    rows = list(db.scalars(select(Segment).where(Segment.id.in_(ids)).order_by(Segment.id)))
+    if len(rows) != len(ids):
+        raise ValueError("One or more partner audiences no longer exist.")
+    if any(row.status == "archived" for row in rows):
+        raise ValueError("Archived partner audiences cannot be changed in bulk.")
+    if action == "pause":
+        for other in db.scalars(select(Segment).where(Segment.status == "active")):
+            if other.id not in ids and references(other.definition).intersection(ids):
+                raise ValueError(f"Active partner audience '{other.name}' references this selection. Pause it too.")
+    elif action == "refresh" and any(row.status != "active" for row in rows):
+        raise ValueError("Activate all selected partner audiences before refreshing.")
+    for row in rows:
+        if action == "activate":
+            row.status = "active"
+            row.refresh_schedule = "daily"
+            if row.created_by is None:
+                row.created_by = actor_id or first_admin_id(db)
+        elif action == "pause":
+            row.status = "draft"
+        if action != "refresh" and actor_id is not None:
+            row.updated_by = actor_id
+    db.flush()
+    jobs = []
+    for row in rows:
+        if action == "activate":
+            validate_references(db, row.id, row.definition, row.status)
+            compile_definition(db, row.definition, datetime.now(timezone.utc))
+        if action in ("activate", "refresh"):
+            jobs.append(request_materialization(db, row.id).id)
+        db.add(AuditLog(user_id=actor_id, actor_type="user" if actor_id else "system",
+                        action=f"segment.{action}", entity_type="segment",
+                        entity_id=str(row.id), details={}))
+    return {"ids": ids, "job_ids": jobs, "action": action}
+
+
+def first_admin_id(db):
+    return db.scalar(select(User.id).where(User.role == "admin").order_by(User.id).limit(1))
+
+
+def activate_templates(db):
+    """Explicit opt-in for existing drafts, not an every-startup override."""
+    from app.segments.templates import template_definitions
+    ensure_templates(db)
+    if first_admin_id(db) is None:
+        raise ValueError("Create an admin user before activating audited audiences.")
+    keys = [template["key"] for template in template_definitions()]
+    ids = list(db.scalars(select(Segment.id).where(Segment.template_key.in_(keys))))
+    return bulk_action(db, ids, "activate", first_admin_id(db))
+
+
+def materialize_seed_templates(db, as_of):
+    """Seed-load finalizer, after identity, traits and snapshots are complete."""
+    from app.segments.templates import template_definitions
+    ensure_templates(db)
+    owner_id = first_admin_id(db)
+    if owner_id is None:
+        raise ValueError("Create an admin user before loading audited audiences.")
+    keys = [template["key"] for template in template_definitions()]
+    templates = list(db.scalars(select(Segment).where(
+        Segment.template_key.in_(keys)).order_by(Segment.id)))
+    for segment in templates:
+        segment.status = "active"
+        segment.created_by = owner_id
+        segment.refresh_schedule = "daily"
+    db.flush()
+    for segment in templates:
+        materialize(db, segment.id, as_of=as_of)
+    return templates
+
+
 def ensure_templates(db, definitions=None):
     from app.segments.templates import template_definitions, legacy_template_definitions
     graph_lock(db)
+    owner_id = first_admin_id(db)
     if definitions is None:
         legacy = {t["key"]: t for t in legacy_template_definitions()}
         available = [t for t in template_definitions() if db.scalar(
@@ -147,10 +228,19 @@ def ensure_templates(db, definitions=None):
                 saved.name = replacement["name"]
                 saved.description = replacement["description"]
                 saved.definition = replacement["definition"]
+                saved.status = "active"
+                saved.created_by = owner_id
+                saved.refresh_schedule = "daily"
         db.flush()
     for template in definitions if definitions is not None else template_definitions():
         if db.scalar(select(Segment.id).where(Segment.template_key == template["key"])) is None:
             db.add(Segment(template_key=template["key"], name=template["name"],
                            description=template["description"], definition=template["definition"],
-                           status="draft", refresh_schedule="daily"))
+                           status="active" if definitions is None else "draft",
+                           created_by=owner_id if definitions is None else None,
+                           refresh_schedule="daily"))
+        elif owner_id is not None:
+            saved = db.scalar(select(Segment).where(Segment.template_key == template["key"]))
+            if saved.created_by is None:
+                saved.created_by = owner_id
     db.flush()

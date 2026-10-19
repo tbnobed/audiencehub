@@ -136,7 +136,10 @@ def test_reset_preserves_config_and_refuses_running_jobs(reset_engine):
     reset_demo(engine, yes=True)
     with engine.connect() as conn:
         for table in DATA_TABLES:
-            assert conn.execute(text(f"SELECT count(*) FROM public.{table}")).scalar_one() == 0, table
+            assert conn.execute(text(f"SELECT count(*) FROM public.{table}")).scalar_one() == (23 if table == "segments" else 0), table
+        assert conn.scalar(text("""SELECT count(*) FROM segments
+            WHERE status='active' AND refresh_schedule='daily' AND created_by=:owner"""),
+            {"owner": user}) == 23
         assert conn.execute(text("SELECT subject FROM users WHERE id=:id"),
                             {"id": user}).scalar_one() == "reset-test"
         assert conn.execute(text("SELECT settings FROM sources WHERE id=:id"),

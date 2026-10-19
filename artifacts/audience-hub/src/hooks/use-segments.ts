@@ -34,5 +34,10 @@ export function useSegmentActions() {
   const save = useMutation({ mutationFn: ({ id, ...body }: SegmentWrite & { id?: number }) => fetchApi(id ? `${base}/${id}` : base, { method: id ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }) as Promise<Segment>, onSuccess: refresh });
   const archive = useMutation({ mutationFn: (id: number) => fetchApi(`${base}/${id}`, { method: 'DELETE' }), onSuccess: refresh });
   const materialize = useMutation({ mutationFn: (id: number) => post<{ job_id: number }>(`${base}/${id}/materialize`, {}), onSuccess: refresh });
-  return { save, archive, materialize };
+  const bulk = useMutation({
+    mutationFn: (body: { ids: number[]; action: 'activate' | 'pause' | 'refresh' }) =>
+      post<{ ids: number[]; job_ids: number[]; action: string }>(`${base}/bulk`, body),
+    onSuccess: refresh,
+  });
+  return { save, archive, materialize, bulk };
 }

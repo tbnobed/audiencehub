@@ -83,6 +83,13 @@ def run(job_type: str, payload: dict, job_id: int | None = None) -> None:
         from app.segments.service import materialize
         from app.identity.locking import IdentityResolutionDeferred
         with Session(engine) as db:
+            from app.segments.service import graph_lock
+            graph_lock(db)
+            if db.scalar(text("SELECT status FROM segments WHERE id=:id"),
+                         {"id": int(payload["segment_id"])}) != "active":
+                # Pause/archive may happen after a refresh was queued. It must
+                # not restart work or turn an intentional pause into a failure.
+                return
             # Same transaction lock as recompute: never read half-old traits or
             # race a recompute between readiness checking and materialization.
             if not db.scalar(text(

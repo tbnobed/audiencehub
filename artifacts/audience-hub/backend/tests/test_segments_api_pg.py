@@ -37,6 +37,62 @@ def test_templates_idempotent_and_preserve_edits(db):
     assert templates[0].name == "My editable partners"
 
 
+def test_audited_templates_owned_active_daily_and_startup_preserves_pause(db):
+    setup(db)
+    db.execute(text("UPDATE users SET role='admin' WHERE id=1"))
+    ensure_templates(db)
+    rows = list(db.scalars(select(Segment)))
+    assert len(rows) == 23
+    assert all(row.status == "active" and row.created_by == 1
+               and row.refresh_schedule == "daily" for row in rows)
+    rows[0].status = "draft"
+    db.flush()
+    ensure_templates(db)
+    assert rows[0].status == "draft"
+
+
+def test_activate_all_templates_rerun_dedupes_pending_refreshes(db):
+    from app.segments.service import activate_templates
+    setup(db)
+    db.execute(text("UPDATE users SET role='admin' WHERE id=1"))
+    first = activate_templates(db)
+    second = activate_templates(db)
+    assert len(first["ids"]) == 23
+    assert first["job_ids"] == second["job_ids"]
+    assert db.scalar(text("SELECT count(*) FROM jobs WHERE type='segment.materialize'")) == 23
+
+
+def test_bulk_pause_refresh_activate_retains_counts_and_checks_dependencies(db):
+    from app.segments.service import bulk_action
+    user = setup(db)
+    first = api.create(api.Write(name="Base", definition=definition(), status="active"), user, db)
+    ref = {"version": 1, "root": {"op": "and", "rules": [
+        {"type": "segment", "segment_id": first["id"], "operator": "in"}]}}
+    second = api.create(api.Write(name="Dependent", definition=ref, status="active"), user, db)
+    materialize(db, second["id"], AS_OF)
+    with pytest.raises(ValueError, match="references"):
+        bulk_action(db, [first["id"]], "pause", user.id)
+    ids = [first["id"], second["id"]]
+    bulk_action(db, ids, "pause", user.id)
+    assert all(db.get(Segment, key).status == "draft" for key in ids)
+    assert all(db.get(Segment, key).last_count == 2 for key in ids)
+    with pytest.raises(ValueError, match="Activate"):
+        bulk_action(db, ids, "refresh", user.id)
+    bulk_action(db, ids, "activate", user.id)
+    first_jobs = bulk_action(db, ids, "refresh", user.id)["job_ids"]
+    assert bulk_action(db, ids, "refresh", user.id)["job_ids"] == first_jobs
+
+
+def test_seed_finalizer_populates_count_change_and_refreshed_at(db):
+    from app.segments.service import materialize_seed_templates
+    setup(db)
+    db.execute(text("UPDATE users SET role='admin' WHERE id=1"))
+    rows = materialize_seed_templates(db, AS_OF)
+    assert len(rows) == 23
+    assert all(row.last_count is not None and row.last_materialized_at is not None for row in rows)
+    assert all(api.serialize(db, row)["change"] is not None for row in rows)
+
+
 def test_save_materialize_changes_and_history(db):
     user = setup(db)
     row = api.create(api.Write(name="TX partners",definition=definition(),status="active"), user, db)

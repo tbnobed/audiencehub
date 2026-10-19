@@ -50,6 +50,12 @@ class Write(BaseModel):
         return "daily" if value == "0 4 * * *" else value
 
 
+class BulkAction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    ids: list[int] = Field(min_length=1, max_length=500)
+    action: Literal["activate", "pause", "refresh"]
+
+
 def now(body):
     return body.as_of or datetime.now(timezone.utc)
 
@@ -262,6 +268,18 @@ def save(db, user, body, row=None):
 @router.post("")
 def create(body: Write, user: User = analyst, db: Session = session):
     return save(db, user, body)
+
+
+@router.post("/bulk")
+def bulk(body: BulkAction, user: User = analyst, db: Session = session):
+    from app.segments.service import bulk_action
+    try:
+        result = bulk_action(db, body.ids, body.action, user.id)
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(409, str(exc)) from exc
+    db.commit()
+    return result
 
 
 @router.get("/{segment_id}")

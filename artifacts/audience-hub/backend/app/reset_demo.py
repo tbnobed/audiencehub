@@ -117,6 +117,13 @@ def reset_demo(engine: Engine, *, yes: bool = False, force: bool = False) -> Non
                     raise RuntimeError("Refusing reset-demo: a source pull is busy. Stop source pull processes before retrying.")
             conn.execute(text("UPDATE public.source_connections SET state='{}'::jsonb,updated_at=now()"))
             conn.execute(text(f"TRUNCATE TABLE {tables} RESTART IDENTITY"))
+            # Bootstrap audiences atomically with the reset, retaining the first
+            # admin as owner. Counts are populated after the subsequent seed load.
+            from sqlalchemy.orm import Session
+            from app.segments.service import ensure_templates
+            with Session(bind=conn) as db:
+                ensure_templates(db)
+                db.commit()  # Joins, but does not commit, the outer transaction.
     except OperationalError as exc:
         if getattr(exc.orig, "sqlstate", None) == "55P03":
             raise RuntimeError(

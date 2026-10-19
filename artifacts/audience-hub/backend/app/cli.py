@@ -125,7 +125,32 @@ def main():
     repair.add_argument("--yes", action="store_true", help="Explicit acknowledgement; also requires --apply.")
     repair.add_argument("--timeout-seconds", type=int, default=7200,
                         help="Per-query timeout, 1..14400 seconds (default: 7200).")
+    segments = commands.add_parser("segments", help="Manage saved partner audiences.")
+    segment_commands = segments.add_subparsers(dest="segment_command", required=True)
+    activate = segment_commands.add_parser("activate", help="Activate the 23 audited templates with daily refresh.")
+    activate.add_argument("--all-templates", action="store_true", required=True)
+    refresh = segment_commands.add_parser("refresh", help="Queue refreshes for every active audience.")
+    refresh.add_argument("--all", action="store_true", required=True)
     args = parser.parse_args()
+    if args.command == "segments":
+        from app.db import engine
+        from app.models import Segment
+        from app.segments.service import activate_templates, bulk_action
+        try:
+            with Session(engine) as db:
+                if args.segment_command == "activate":
+                    result = activate_templates(db)
+                else:
+                    ids = list(db.scalars(select(Segment.id).where(Segment.status == "active")))
+                    result = bulk_action(db, ids, "refresh")
+                db.commit()
+            print(f"{result['action']}: {len(result['ids'])} audiences; "
+                  f"{len(result['job_ids'])} refresh jobs queued or already pending.")
+            if args.segment_command == "refresh":
+                print("Draft/paused and archived audiences are skipped; run segments activate --all-templates to activate templates.")
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from None
+        return
     if args.command == "repair-seed":
         from app.repair_seed import repair_seed
         from sqlalchemy.exc import SQLAlchemyError
@@ -288,9 +313,11 @@ def main():
                 print("CSV files submitted through app.importer.import_seed_files.")
                 _compute_seed_traits(import_ids, as_of=reference)
                 from app.db import engine
-                from app.segments.service import ensure_templates
+                from app.segments.service import materialize_seed_templates
                 with Session(engine) as db:
-                    ensure_templates(db)
+                    instant = datetime.combine(reference, datetime.min.time(), tzinfo=timezone.utc)
+                    for segment in materialize_seed_templates(db, instant):
+                        print(f"Audience {segment.name}: {segment.last_count:,} partners", flush=True)
                     db.commit()
                 print("Computed profile traits and backfilled 24 monthly snapshots.")
             if args.events:
