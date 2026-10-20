@@ -48,9 +48,9 @@ function MasterIdentityBody({ masterId, profileId }: { masterId: string; profile
       <Card>
         <CardHeader><CardTitle className="flex items-center text-base"><KeyRound className="h-4 w-4 mr-2" /> Master keys</CardTitle>
           <CardDescription>Cross-reference keys bound to {data.master_id}{data.requested_master_id !== data.master_id ? ` (resolved from ${data.requested_master_id})` : ''}.</CardDescription></CardHeader>
-        <CardContent className="p-0 max-h-[320px] overflow-auto"><Table><TableHeader className="bg-muted/30"><TableRow><TableHead>Key</TableHead><TableHead>Value</TableHead><TableHead className="text-right">Last seen</TableHead></TableRow></TableHeader><TableBody>
-          {data.keys.length === 0 ? <TableRow><TableCell colSpan={3} className="text-center py-6 text-muted-foreground">No keys recorded.</TableCell></TableRow> :
-            data.keys.map((k, i) => <TableRow key={i}><TableCell className="font-mono text-[11px] uppercase">{k.key_type}</TableCell><TableCell className="font-mono text-[11px] break-all">{k.key_value}</TableCell><TableCell className="text-right text-xs text-muted-foreground">{displayDate(k.last_seen_at, 'MMM d, yy')}</TableCell></TableRow>)}
+        <CardContent className="p-0 max-h-[320px] overflow-auto"><Table><TableHeader className="bg-muted/30"><TableRow><TableHead>Key</TableHead><TableHead>Value</TableHead><TableHead>Why linked</TableHead><TableHead className="text-right">Last seen</TableHead></TableRow></TableHeader><TableBody>
+          {data.keys.length === 0 ? <TableRow><TableCell colSpan={4} className="text-center py-6 text-muted-foreground">No keys recorded.</TableCell></TableRow> :
+            data.keys.map((k, i) => <TableRow key={i}><TableCell className="font-mono text-[11px] uppercase">{k.key_type}</TableCell><TableCell className="font-mono text-[11px] break-all">{k.key_value}</TableCell><TableCell className="text-[11px] text-muted-foreground">{[k.method, k.rule, k.confidence != null ? `${(k.confidence * 100).toFixed(1)}%` : null, k.source_name].filter(Boolean).join(" · ") || "—"}</TableCell><TableCell className="text-right text-xs text-muted-foreground">{displayDate(k.last_seen_at, 'MMM d, yy')}</TableCell></TableRow>)}
         </TableBody></Table></CardContent>
       </Card>
       <Card>

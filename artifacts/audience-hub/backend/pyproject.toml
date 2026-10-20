@@ -15,6 +15,7 @@ dependencies = [
   "Faker==37.1.0", "python-multipart==0.0.32", "paramiko>=3.5.1,<5",
   "snowflake-connector-python>=4.3.0,<5", "pip-audit==2.10.1",
   "segno==1.6.6",
+  "splink==5.0.0", "usaddress==0.5.16",
 ]
 
 [project.optional-dependencies]

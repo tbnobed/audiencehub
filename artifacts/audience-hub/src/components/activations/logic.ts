@@ -26,17 +26,20 @@ export const can = (role: Role | undefined) => ({
 
 /* ---------- funnel ---------- */
 export type FunnelStage = { key: string; label: string; count: number; dropped: number };
-export function runFunnel(r: Pick<ActivationRun, 'profiles_selected' | 'profiles_excluded_consent' | 'profiles_excluded_suppressed' | 'profiles_excluded_missing_fields' | 'profiles_sent'>): FunnelStage[] {
+export function runFunnel(r: Pick<ActivationRun, 'profiles_selected' | 'profiles_excluded_consent' | 'profiles_excluded_suppressed' | 'profiles_excluded_missing_fields' | 'profiles_sent'> & Partial<Pick<ActivationRun, 'profiles_excluded_household'>>): FunnelStage[] {
   const selected = r.profiles_selected;
   const consent = Math.max(0, selected - r.profiles_excluded_consent);
   const unsuppressed = Math.max(0, consent - r.profiles_excluded_suppressed);
   const complete = Math.max(0, unsuppressed - r.profiles_excluded_missing_fields);
+  const hh = r.profiles_excluded_household ?? 0;
+  const household = Math.max(0, complete - hh);
   return [
     { key: 'selected', label: 'Selected', count: selected, dropped: 0 },
     { key: 'consent', label: 'Eligible consent', count: consent, dropped: r.profiles_excluded_consent },
     { key: 'unsuppressed', label: 'Unsuppressed', count: unsuppressed, dropped: r.profiles_excluded_suppressed },
     { key: 'complete', label: 'Fields complete', count: complete, dropped: r.profiles_excluded_missing_fields },
-    { key: 'sent', label: 'Sent', count: r.profiles_sent, dropped: Math.max(0, complete - r.profiles_sent) },
+    ...(hh > 0 ? [{ key: 'household', label: 'One per household', count: household, dropped: hh }] : []),
+    { key: 'sent', label: 'Sent', count: r.profiles_sent, dropped: Math.max(0, household - r.profiles_sent) },
   ];
 }
 
@@ -289,7 +292,7 @@ export function buildDestinationWrite(f: DestinationForm): DestinationWrite & { 
   return body;
 }
 
-export type ActivationForm = { id?: number; name: string; segment_id: number | null; destination_id: number | null; rows: MapRow[]; required_consent: string | null; consent_override: boolean; override_note: string; schedule: ScheduleState; timezone: string; is_active: boolean; attribute_mode: AttributeMode };
+export type ActivationForm = { id?: number; name: string; segment_id: number | null; destination_id: number | null; rows: MapRow[]; required_consent: string | null; consent_override: boolean; override_note: string; schedule: ScheduleState; timezone: string; is_active: boolean; attribute_mode: AttributeMode; one_per_household: boolean };
 export function activationToForm(a?: Activation | null): ActivationForm {
   return {
     id: a?.id, name: a?.name ?? '', segment_id: a?.segment_id ?? null, destination_id: a?.destination_id ?? null,
@@ -297,6 +300,7 @@ export function activationToForm(a?: Activation | null): ActivationForm {
     consent_override: !!a && isAdsType(a.destination_type) && a.required_consent !== ADS_CONSENT, override_note: '',
     schedule: parseCron(a?.schedule), timezone: a?.timezone ?? DEFAULT_TZ, is_active: a?.is_active ?? true,
     attribute_mode: a?.attribute_mode ?? 'selected',
+    one_per_household: a?.one_per_household ?? false,
   };
 }
 export function effectiveConsent(f: Pick<ActivationForm, 'required_consent' | 'consent_override'>, destType: DestinationType | undefined, role: Role | undefined): string | null {
@@ -331,7 +335,7 @@ export function crosswalkErrors(f: Pick<ActivationForm, 'required_consent' | 'is
 export function buildActivationWrite(f: ActivationForm, destType: DestinationType | undefined, role: Role | undefined): ActivationWrite & { id?: number } {
   const body: ActivationWrite & { id?: number } = {
     name: f.name.trim(), segment_id: f.segment_id!, destination_id: f.destination_id!, field_mapping: rowsToMapping(enforceLocked(destType, f.rows)),
-    required_consent: effectiveConsent(f, destType, role), schedule: buildCron(f.schedule), timezone: f.timezone, is_active: f.is_active, attribute_mode: f.attribute_mode,
+    required_consent: effectiveConsent(f, destType, role), schedule: buildCron(f.schedule), timezone: f.timezone, is_active: f.is_active, attribute_mode: f.attribute_mode, one_per_household: f.one_per_household,
   };
   if (f.id) body.id = f.id;
   if (isAdsType(destType) && f.consent_override && can(role).overrideAdsConsent) { body.consent_override = true; body.override_note = f.override_note.trim(); }
@@ -339,7 +343,7 @@ export function buildActivationWrite(f: ActivationForm, destType: DestinationTyp
 }
 /** Full PATCH body for pause/resume, reusing the stored activation verbatim. */
 export function toggleActiveBody(a: Activation, is_active: boolean): ActivationWrite & { id: number } {
-  return { id: a.id, name: a.name, segment_id: a.segment_id, destination_id: a.destination_id, field_mapping: a.field_mapping, required_consent: a.required_consent, schedule: a.schedule, timezone: a.timezone, is_active, ...(a.attribute_mode ? { attribute_mode: a.attribute_mode } : {}) };
+  return { id: a.id, name: a.name, segment_id: a.segment_id, destination_id: a.destination_id, field_mapping: a.field_mapping, required_consent: a.required_consent, schedule: a.schedule, timezone: a.timezone, is_active, one_per_household: a.one_per_household ?? false, ...(a.attribute_mode ? { attribute_mode: a.attribute_mode } : {}) };
 }
 
 /** Run manifest summary: file count, total rows, total bytes. */

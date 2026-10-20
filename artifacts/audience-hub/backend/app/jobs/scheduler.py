@@ -70,6 +70,18 @@ def schedule_once(db: Session, task: str, window_key: str, job_type: str,
 
 def tick(db: Session) -> None:
     now = datetime.now(timezone.utc)
+    # Keep matching disabled until an admin reviews a dry run. Address/household
+    # maintenance runs independently and never changes identity memberships.
+    graph_policy = db.execute(text("SELECT * FROM identity_graph_policy WHERE id=1")).mappings().one()
+    if graph_policy["enabled"] and now.hour >= graph_policy["schedule_hour"]:
+        window = now.strftime("%Y-%m-%d")
+        task = "identity.graph.daily"
+        db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:key))"),
+                   {"key": f"{task}:{window}"})
+        if db.get(ScheduledRun, (task, window)) is None:
+            from app.identity.graph_jobs import queue_run
+            identifier = queue_run(db, False)
+            db.add(ScheduledRun(task=task, window_key=window, job_id=identifier))
     schedule_once(db, "maintenance.daily", now.strftime("%Y-%m-%d"), "maintenance.run", {})
     from app.source_pulls import tick_sources
     tick_sources(db, now)

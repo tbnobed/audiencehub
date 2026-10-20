@@ -63,7 +63,7 @@ export function ActivationDetail({ id }: { id: number }) {
     </div>
 
     <div className="grid grid-cols-4 gap-2">
-      {[['Schedule', describeSchedule(a.schedule, a.timezone)], ['Next run', a.is_active && a.next_run_at ? when(a.next_run_at) : a.is_active ? 'manual only' : 'paused'], ['Consent', a.required_consent ?? 'none'], ['Columns', Object.keys(a.field_mapping).join(', ') || '—']].map(([k, v]) =>
+      {[['Schedule', describeSchedule(a.schedule, a.timezone)], ['Next run', a.is_active && a.next_run_at ? when(a.next_run_at) : a.is_active ? 'manual only' : 'paused'], ['Consent', a.required_consent ?? 'none'], ['Columns', Object.keys(a.field_mapping).join(', ') || '—'], ['Household', a.one_per_household ? 'One record per household' : 'All members']].map(([k, v]) =>
         <div key={k} className="border border-line bg-surface rounded-sm px-3 py-2 min-w-0"><div className="text-[10px] uppercase tracking-wider text-ink-muted">{k}</div><div className="text-[12px] font-mono truncate" title={v} data-testid={`text-${k.toLowerCase().replace(' ', '-')}`}>{v}</div></div>)}
     </div>
     {isAdsType(a.destination_type) && <p className="text-[12px] text-ink-muted border border-line rounded-sm p-2 bg-surface">Produces a normalized, SHA-256 hashed CSV. Download it from a finished run and upload it manually in the ad platform — this console has no connection to Google or Meta.</p>}

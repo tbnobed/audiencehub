@@ -180,8 +180,9 @@ def journal_merge(db, winner, loser, job_id=None):
       INSERT INTO identity_merge_journal(merge_id,winner_id,loser_id,sides)
       VALUES(:m,:w,:l,CAST(:s AS jsonb));
       INSERT INTO master_id_aliases(retired_id,survivor_id,merge_id) VALUES(:old,:new,:m);
-      INSERT INTO identity_xref(master_id,key_type,key_value,source_id,first_seen_at,last_seen_at,status)
-      SELECT :new,key_type,key_value,source_id,first_seen_at,last_seen_at,status
+      INSERT INTO identity_xref(master_id,key_type,key_value,source_id,first_seen_at,last_seen_at,status,
+        method,confidence,rule)
+      SELECT :new,key_type,key_value,source_id,first_seen_at,last_seen_at,status,method,confidence,rule
       FROM identity_xref WHERE master_id=:old
       ON CONFLICT(master_id,key_type,key_value,source_id) DO UPDATE SET
         first_seen_at=least(identity_xref.first_seen_at,EXCLUDED.first_seen_at),
@@ -316,10 +317,13 @@ def unmerge(db, merge_id, actor):
             if row["key_type"] == "external":
                 continue
             db.execute(text("""
-              INSERT INTO identity_xref(master_id,key_type,key_value,source_id,first_seen_at,last_seen_at,status)
-              VALUES(:m,:key_type,:key_value,:source_id,:first_seen_at,:last_seen_at,:status)
+              INSERT INTO identity_xref(master_id,key_type,key_value,source_id,first_seen_at,last_seen_at,status,
+                method,confidence,rule)
+              VALUES(:m,:key_type,:key_value,:source_id,:first_seen_at,:last_seen_at,:status,
+                :method,:confidence,:rule)
               ON CONFLICT(master_id,key_type,key_value,source_id) DO NOTHING
-            """), {**row, "m": master})
+            """), {"method": "deterministic", "confidence": 1,
+                   "rule": "existing_deterministic_resolver", **row, "m": master})
     # Retired IDs remain retired. Alias still points at original survivor.
     statements = """
       UPDATE identity_merge_journal SET undone_at=clock_timestamp(),undone_by=:a,new_profile_id=:n
@@ -334,6 +338,15 @@ def unmerge(db, merge_id, actor):
         if statement.strip():
             db.execute(text(statement), {"a": actor, "n": new.id, "m": merge_id, "ids": [w, new.id]})
     recompute_profiles_fields(db, {w, new.id})
+    from app.identity.devices import rehome_devices
+    from app.identity.addresses import refresh_addresses, refresh_households
+    rehome_devices(db)
+    # Drop stale parsed addresses for split sides; canonical source fields were
+    # just recomputed. Daily maintenance will parse the current addresses.
+    db.execute(text("DELETE FROM identity_addresses WHERE profile_id=ANY(:ids)"),
+               {"ids": [w, new.id]})
+    refresh_addresses(db, [w, new.id])
+    refresh_households(db)
     audit(db, actor, "identity.unmerge", "identity_merge", merge_id, {"sides": 2})
     return {"merge_id": merge_id, "retained_master_id": survivor,
             "new_master_id": new.master_id, "retained_side": retained,

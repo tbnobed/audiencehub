@@ -22,7 +22,7 @@ def profile_signature(connection):
                  for name in ("profiles", "profile_traits"))
 
 
-def refresh_profile_views(connection):
+def refresh_profile_views(connection, *, before_recreate=None):
     """Snapshot/recreate dependent views in order, including matview indexes.
 
     active_profiles is the application's full-row view. Other catalog-discovered
@@ -123,6 +123,8 @@ def refresh_profile_views(connection):
         kind = "MATERIALIZED VIEW" if view["relkind"] == "m" else "VIEW"
         connection.exec_driver_sql(
             f"DROP {kind} {qualified(view['nspname'],view['relname'])}")
+    if before_recreate is not None:
+        before_recreate()
     for oid in ordered:
         view = views[oid]
         name = qualified(view["nspname"], view["relname"])

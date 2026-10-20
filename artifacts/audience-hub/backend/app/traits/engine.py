@@ -241,6 +241,11 @@ def recompute_traits(db: Session, *, as_of: date | None = None,
     updated = result.rowcount
     from app.segments.projection import refresh_projections
     refresh_projections(db, profile_ids)
+    # Address/household data follows canonical survivorship in the same trait
+    # pipeline, including after an import. This never creates identity edges.
+    from app.identity.addresses import refresh_addresses, refresh_households
+    refresh_addresses(db, profile_ids)
+    refresh_households(db)
     if profile_ids is None:
         db.execute(text("""
             DELETE FROM profile_traits pt

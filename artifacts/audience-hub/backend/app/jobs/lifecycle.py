@@ -69,6 +69,7 @@ def timeout_ms(job_type):
         "zeta.import": settings.bulk_statement_timeout_seconds,
         "zeta.parity": settings.bulk_statement_timeout_seconds,
         "identity.resolve_batch": settings.bulk_statement_timeout_seconds,
+        "identity.graph": settings.bulk_statement_timeout_seconds,
         "ingestion.resolve": settings.bulk_statement_timeout_seconds,
         "traits.recompute": settings.bulk_statement_timeout_seconds,
         "segment.materialize": settings.segment_statement_timeout_seconds,

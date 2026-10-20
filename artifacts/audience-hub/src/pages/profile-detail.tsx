@@ -17,6 +17,7 @@ import { ProfileSectionBoundary } from '@/components/ProfileSectionBoundary';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ConsentEditor } from '@/components/privacy/consent-editor';
 import { MasterIdChip } from '@/components/profiles/master-id-chip';
+import { HouseholdDevicePanel } from '@/components/identity/household-device-panel';
 import { MasterIdentityPanel } from '@/components/identity/master-identity-panel';
 import { CanonicalAttributes } from '@/components/profiles/canonical-attributes';
 import { ActivityTimeline } from '@/components/profiles/activity-timeline';
@@ -363,6 +364,7 @@ export default function ProfileDetail() {
               </Card>
             </div>
             
+            <HouseholdDevicePanel profileId={profile.id} />
             <MasterIdentityPanel masterId={profile.master_id} profileId={profile.id} />
             <Card>
               <CardHeader>

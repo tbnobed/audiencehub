@@ -110,6 +110,7 @@ export function ActivationWizard({ id, role }: { id?: number; role: Role }) {
               className={`h-7 px-2.5 rounded-sm border ${form.attribute_mode === m ? 'border-signal bg-signal-soft text-ink' : 'border-line text-ink-muted hover:border-line-strong'}`}>{m === 'selected' ? 'Selected columns' : 'All attributes'}</button>)}
             <span className="text-[11px] text-ink-muted">{form.attribute_mode === 'all' ? 'Exports every non-sensitive canonical and computed attribute. Columns below are added on top; sensitive fields still need the explicit admin opt-in above.' : 'Only the columns mapped below are exported.'}</span>
           </div>}
+          <label className="mb-3 flex items-start gap-2 text-[12px] text-ink" data-testid="group-one-per-household"><input type="checkbox" className="mt-0.5" checked={form.one_per_household} onChange={e => set('one_per_household', e.target.checked)} data-testid="checkbox-one-per-household" /><span>Send one record per household<span className="block text-[11px] text-ink-muted">Members who share a household are collapsed to a single row on every run.</span></span></label>
           {errors.mapping && <p className="mb-2 text-[11px] text-danger">{errors.mapping}</p>}
           <FieldMapper rows={form.rows} onChange={r => set('rows', r)} fields={selectableFields} destination={destination} />{mapProblems.length > 0 && <ul className="mt-2 text-[11px] text-warn list-disc pl-4">{mapProblems.map(p => <li key={p}>{p}</li>)}</ul>}</>)}
         {step === 3 && <ConsentStep form={form} set={set} destType={destType} role={role} showErrors={showErrors} error={errors.consent} />}
@@ -225,6 +226,7 @@ function Review({ form, destination, destType, role, problems }: { form: Activat
       {row('Destination', destination ? <span className="inline-flex items-center gap-2">{destination.name}<TypeBadge type={destination.type} /></span> : '—')}
       {row('Columns', <span className="font-mono">{form.attribute_mode === 'all' ? 'All non-sensitive attributes' : ''}{form.attribute_mode === 'all' && form.rows.some(r => r.value) ? ' + ' : ''}{form.rows.filter(r => r.value).map(r => r.column).join(', ') || (form.attribute_mode === 'all' ? '' : '—')}</span>)}
       {row('Consent', <span className="font-mono">{effectiveConsent(form, destType as never, role) ?? 'none'}{form.consent_override && isAdsType(destType as never) ? ' (admin override)' : ''}</span>)}
+      {row('Household', form.one_per_household ? 'One record per household' : 'All members')}
       {row('Schedule', describeSchedule(buildCron(form.schedule), form.timezone))}
     </div>
     <label className="flex items-center gap-2 text-[12px]"><Checkbox checked={form.is_active} onCheckedChange={() => undefined} disabled /> {form.is_active ? 'Active — scheduled runs enabled' : 'Paused'}</label>

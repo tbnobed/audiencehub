@@ -139,6 +139,7 @@ def enqueue_run(db, activation_id, user_id=None, triggered_by="manual", dedupe_k
         "config": destination.config, "secrets": security.decrypt(destination.secret_encrypted),
         "mapping": activation_mapping(db, activation, destination.type),
         "consent": "email" if destination.type == "hubspot" else activation.required_consent,
+        "one_per_household": activation.one_per_household,
     }
     approval_id, selected = sensitive_approval(
         db, activation.id, segment.id, destination.id, snapshot["mapping"], snapshot["consent"])
@@ -337,6 +338,18 @@ def prepare(db, run, snapshot):
         if suppressed or missing:
             db.execute(text("DELETE FROM activation_work WHERE profile_id=ANY(:ids)"),
                        {"ids": sorted(suppressed | missing)})
+    # Pick a stable eligible representative AFTER consent, suppression, and
+    # required-field filtering. An ineligible first member cannot hide the rest.
+    run.profiles_excluded_household = 0
+    if snapshot.get("one_per_household"):
+        run.profiles_excluded_household = db.execute(text("""
+          DELETE FROM activation_work w USING (
+            SELECT w.profile_id,row_number() OVER(
+              PARTITION BY coalesce(p.household_id,'person:'||coalesce(p.master_id,p.id::text))
+              ORDER BY p.master_id,p.id) AS rank
+            FROM activation_work w JOIN active_profiles p ON p.id=w.profile_id
+          ) ranked WHERE w.profile_id=ranked.profile_id AND ranked.rank>1
+        """)).rowcount
     db.flush()
     track_members_durably(db, run)
 

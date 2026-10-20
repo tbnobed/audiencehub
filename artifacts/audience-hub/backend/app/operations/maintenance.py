@@ -76,6 +76,19 @@ def run(job_id):
             run_upload_retention()
             with Session(engine) as db:
                 expire_exports(db)
+                from app.identity.addresses import refresh_addresses, refresh_households
+                from app.identity.devices import rehome_devices
+                from app.identity.locking import acquire_resolver_lock
+                acquire_resolver_lock(db)
+                from app.identity.graph_jobs import purge_scratch
+                purge_scratch(db)
+                totals["identity_addresses_updated"] = refresh_addresses(db)
+                refresh_households(db)
+                rehome_devices(db)
+                totals["device_links_expired"] = db.execute(
+                    text("DELETE FROM identity_devices WHERE expires_at<=now()")).rowcount
+                db.execute(text("""DELETE FROM identity_device_receipts
+                  WHERE received_at<now()-interval '1 day'"""))
                 enqueue(db, "traits.recompute", {"mode": "dirty"}, dedupe_key="traits:incremental")
                 heartbeat(db, job_id, {"phase": "completed", "totals": totals})
                 db.commit()

@@ -31,6 +31,8 @@ KNOWN_REFERENCES = {
     "dashboard_donor_daily": {"profile_id"},
     "identity_merge_journal": {"winner_id", "loser_id", "new_profile_id"},
     "identity_xref": {"master_id"},
+    "identity_addresses": {"profile_id"}, "identity_devices": {"profile_id"},
+    "identity_pairs": {"left_id", "right_id"},
 }
 PROFILE_KEYS = {"profile_id", "profile_ids", "matched_profile_ids", "winner_id", "loser_id", "merged_into_id"}
 
@@ -471,6 +473,10 @@ def execute_deletion(db, request_id):
         raise IdentityResolutionDeferred("Privacy execution waits for active imports to finish.")
     acquire_resolver_lock(db)
     db.execute(text("SELECT pg_advisory_xact_lock(hashtext('audience-hub:trait-recompute'))"))
+    # A killed worker can leave committed Splink scratch tables outside the
+    # application schema. Erasure includes those, not just FK-discovered rows.
+    from app.identity.graph_jobs import purge_scratch
+    purge_scratch(db)
     request = db.execute(text("SELECT * FROM deletion_requests WHERE id=:id FOR UPDATE"), {"id": request_id}).mappings().first()
     if not request:
         raise LookupError("Deletion request not found.")
@@ -580,7 +586,8 @@ def execute_deletion(db, request_id):
       SELECT unnest(matched_profile_ids) EXCEPT SELECT unnest(CAST(:ids AS bigint[])))
       WHERE matched_profile_ids && CAST(:ids AS bigint[])"""), {"ids": ids})
     # Dependency order covers source-record referencing diagnostics and merge links.
-    order = ("activation_run_members", "activation_last_members", "segment_membership",
+    order = ("identity_pairs", "identity_devices", "identity_addresses",
+             "activation_run_members", "activation_last_members", "segment_membership",
              "consents", "enrichment_values", "profile_traits", "trait_dirty_profiles",
              "dashboard_donor_daily", "client_errors", "events", "gifts", "identifiers", "source_records", "profile_merges")
     for table in order:

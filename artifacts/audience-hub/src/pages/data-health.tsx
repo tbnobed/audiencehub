@@ -15,6 +15,7 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recha
 import { toast } from '@/hooks/use-toast';
 import { useNavigate } from 'react-router-dom';
 import { ActivationAlertsCard } from '@/components/activations/activation-alerts-card';
+import { IdentityTrendsCard } from '@/components/identity/identity-quality';
 import { IdentityHealthCard } from '@/components/identity/identity-health-card';
 
 export default function DataHealth() {
@@ -74,6 +75,7 @@ export default function DataHealth() {
 
       {user?.role !== 'viewer' && <ActivationAlertsCard />}
       <IdentityHealthCard />
+      <IdentityTrendsCard />
 
       {!!data.privacy_segment_reviews?.length && <Card>
         <CardHeader>

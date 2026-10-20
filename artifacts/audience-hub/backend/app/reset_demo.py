@@ -10,6 +10,8 @@ from sqlalchemy.exc import OperationalError
 # Keep this allowlist in sync with migrations. Never use CASCADE: a new FK from a
 # retained table must make the operation fail, not quietly destroy configuration.
 DATA_TABLES = (
+    "identity_pairs", "identity_devices", "identity_addresses", "identity_graph_daily",
+    "identity_graph_runs", "identity_device_receipts",
     "audit_log", "client_errors", "scheduled_runs", "jobs", "source_import_receipts",
     "zeta_migrations", "zeta_migration_files",
     "hubspot_pulls",
@@ -27,6 +29,7 @@ DATA_TABLES = (
     "dashboard_kpis", "dashboard_cache",
 )
 RETAINED_TABLES = (
+    "identity_graph_policy", "identity_device_credentials",
     "users", "sources", "enrichment_attributes", "admin_settings", "master_id_registry",
     "source_connections", "canonical_field_catalog",
     "local_credentials", "local_sessions", "local_account_tokens",
@@ -146,6 +149,8 @@ def reset_demo(engine: Engine, *, yes: bool = False, force: bool = False,
                                    {"key": f"source-pull:{source_id}"}):
                     raise RuntimeError("Refusing reset-demo: a source pull is busy. Stop source pull processes before retrying.")
             conn.execute(text("UPDATE public.source_connections SET state='{}'::jsonb,updated_at=now()"))
+            from app.identity.graph_jobs import purge_scratch
+            purge_scratch(conn)
             conn.execute(text(f"TRUNCATE TABLE {tables} RESTART IDENTITY"))
             # Bootstrap audiences atomically with the reset, retaining the first
             # admin as owner. Counts are populated after the subsequent seed load.

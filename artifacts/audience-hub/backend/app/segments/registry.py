@@ -18,6 +18,8 @@ PROFILE_FIELDS = {
     "id": "number", "first_seen_at": "timestamp", "last_seen_at": "timestamp",
 }
 PROFILE_FIELDS["master_id"] = "text"
+PROFILE_FIELDS["household_id"] = "text"
+PROFILE_FIELDS["household_size"] = "number"
 for _type in OPERATORS:
     OPERATORS[_type].append("exists")
 for _type in ("date", "timestamp"):

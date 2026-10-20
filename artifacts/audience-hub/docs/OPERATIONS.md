@@ -1,3 +1,9 @@
+# First-party identity graph
+
+See [IDENTITY_GRAPH.md](IDENTITY_GRAPH.md) for the disabled-by-default scheduled
+Splink matcher, evidence/unmerge rules, address/vendor adapters, household
+exports, authenticated device signing and server verification checklist.
+
 # M8 operations runbook
 
 ## Release status and first upgrade

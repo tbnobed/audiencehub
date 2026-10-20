@@ -49,6 +49,11 @@ app.include_router(activations_router)
 app.include_router(privacy_router)
 app.include_router(ingestion_router)
 app.include_router(identity_router)
+from app.identity.graph_api import router as identity_graph_router
+from app.identity.device_api import router as identity_device_router, event_router as device_event_router
+app.include_router(identity_graph_router)
+app.include_router(identity_device_router)
+app.include_router(device_event_router)
 app.include_router(resources_router)
 app.include_router(dev.router)
 app.include_router(sources_router)

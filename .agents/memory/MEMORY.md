@@ -17,3 +17,4 @@
 - [HubSpot product rules](hubspot-product-rules.md) — TBN's email platform; real HubSpot contact IDs and opt-outs that govern every email export.
 - [Audience lifecycle](audience-lifecycle.md) — seed/reset activate templates; ordinary startup must preserve deliberate pauses.
 - [Local account boundary](local-account-policy.md) — no SSO for now; keep user ownership stable and retain old peppers for irreversible suppression tombstones.
+- [First-party identity boundaries](first-party-identity-boundaries.md) — preserve accepted person identity rules; households and devices cannot merge people; scratch data is in erasure scope.

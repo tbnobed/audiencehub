@@ -96,8 +96,10 @@ def master(master_id: str, db=Depends(session_scope), user=Depends(require_role(
         raise HTTPException(404, "Master identity not found")
     profile_id = db.scalar(text("SELECT id FROM profiles WHERE master_id=:m"), {"m": resolved})
     keys = [dict(r) for r in db.execute(text("""
-      SELECT key_type,key_value,source_id,first_seen_at,last_seen_at,status
-      FROM identity_xref WHERE master_id=:m ORDER BY key_type,key_value,source_id
+      SELECT x.key_type,x.key_value,x.source_id,x.first_seen_at,x.last_seen_at,x.status,
+        x.method,x.confidence,x.rule,s.name AS source_name
+      FROM identity_xref x LEFT JOIN sources s ON s.id=x.source_id
+      WHERE master_id=:m ORDER BY key_type,key_value,source_id
     """), {"m": resolved}).mappings()]
     history = [dict(r) for r in db.execute(text("""
       SELECT m.id AS merge_id,w.master_id AS survivor_id,l.master_id AS retired_id,m.merged_at,

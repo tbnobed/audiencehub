@@ -287,6 +287,8 @@ def resolve_bulk(db: Session, job_id: int | None = None, *, mode: str = "auto",
         _move_profile_references(db, winner, loser)
     if merges:
         _sql(db, "UPDATE profiles p SET merged_into_id=m.winner FROM ir_moves m WHERE p.id=m.loser")
+        from app.identity.devices import rehome_devices
+        rehome_devices(db)
     _materialize(db, skip_unchanged=skip_unchanged)
     _sql(db, """
       UPDATE identity_xref x SET status='duplicate_in_source'

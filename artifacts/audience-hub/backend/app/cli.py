@@ -151,7 +151,13 @@ def main():
     activate.add_argument("--all-templates", action="store_true", required=True)
     refresh = segment_commands.add_parser("refresh", help="Queue refreshes for every active audience.")
     refresh.add_argument("--all", action="store_true", required=True)
+    from app.identity.graph_cli import add_commands as add_graph_commands
+    add_graph_commands(commands)
     args = parser.parse_args()
+    if args.command == "identity-graph":
+        from app.identity.graph_cli import command as graph_command
+        graph_command(args)
+        return
     if args.command == "rotate-fernet":
         from app.operations.rotation import rotate_fernet
         import json

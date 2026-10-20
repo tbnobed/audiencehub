@@ -6,6 +6,10 @@ class SegmentTraitsRefreshRequired(ValueError):
 
 
 def run(job_type: str, payload: dict, job_id: int | None = None) -> None:
+    if job_type == "identity.graph":
+        from app.identity.graph_jobs import run as graph_run
+        graph_run(int(payload["run_id"]), job_id)
+        return
     if job_type == "account.email":
         from app.operations.email import deliver
         deliver(int(payload["message_id"]))

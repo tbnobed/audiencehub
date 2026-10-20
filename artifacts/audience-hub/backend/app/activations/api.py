@@ -48,6 +48,7 @@ class ActivationWrite(BaseModel):
     schedule: str | None = Field(default=None, max_length=100)
     timezone: str = Field(default="America/New_York", max_length=100)
     attribute_mode: str = "selected"
+    one_per_household: bool = False
     is_active: bool = True
     consent_override: bool = False
     override_note: str | None = Field(default=None, max_length=500)
@@ -68,6 +69,7 @@ class ActivationPatch(BaseModel):
     override_note: str | None = Field(default=None, max_length=500)
     sensitive_fields: list[str] | None = None
     attribute_mode: str | None = None
+    one_per_household: bool | None = None
 
 
 def require(db, model, identifier):
@@ -91,7 +93,7 @@ def run_json(row, db=None, user=None):
     result = {name: getattr(row, name) for name in (
         "id", "activation_id", "status", "started_at", "finished_at", "created_at",
         "profiles_selected", "profiles_excluded_consent", "profiles_excluded_suppressed",
-        "profiles_excluded_missing_fields", "profiles_sent", "error", "triggered_by")}
+        "profiles_excluded_missing_fields", "profiles_excluded_household", "profiles_sent", "error", "triggered_by")}
     result["hubspot_result"] = row.hubspot_result or {}
     try:
         service.safe_file(row)
@@ -122,7 +124,7 @@ def activation_json(db, row, user=None):
     last = db.scalar(select(ActivationRun).where(ActivationRun.activation_id == row.id).order_by(ActivationRun.id.desc()).limit(1))
     result = {name: getattr(row, name) for name in (
         "id", "name", "segment_id", "destination_id", "field_mapping", "required_consent",
-        "schedule", "timezone", "is_active", "created_by", "attribute_mode")}
+        "schedule", "timezone", "is_active", "created_by", "attribute_mode", "one_per_household")}
     result.update(segment_name=segment.name if segment else "Unavailable audience",
                   destination_name=destination.name if destination else "Unavailable destination",
                   destination_type=destination.type if destination else None,
@@ -332,7 +334,7 @@ def save_activation(db, row, body, user):
         row = Activation(name=body.name, segment_id=body.segment_id, destination_id=body.destination_id,
                          timezone="America/New_York", is_active=True, field_mapping={}, created_by=user.id,
                          attribute_mode="selected")
-    for key in ("name", "segment_id", "destination_id", "timezone", "is_active", "field_mapping", "attribute_mode"):
+    for key in ("name", "segment_id", "destination_id", "timezone", "is_active", "field_mapping", "attribute_mode", "one_per_household"):
         if key in values:
             if values[key] is None:
                 raise HTTPException(422, "Activation fields cannot be null.")
