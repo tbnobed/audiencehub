@@ -1,0 +1,13 @@
+Extend the Master ID identity system into a full first-party identity graph. Keep every existing rule, key type and the Master ID behavior unchanged. Code changes only: commit and push. Do not run tests, seeds, imports or benchmarks in Replit; verification runs on the production server.
+
+1. Link evidence: every identity_xref edge records method (deterministic or probabilistic), confidence (0–1), the rule or model that created it, source, first_seen_at and last_seen_at. The profile page shows "why these records are linked" for each key, and the existing unmerge works for probabilistic links too.
+
+2. Address standardization: parse and normalize postal addresses into components (number, street, unit, city, state, ZIP+4) with a stable normalized-address key. Use libpostal or usaddress for parsing. Leave a hook to load CASS/NCOA results from a vendor file without changing the schema.
+
+3. Probabilistic matching with Splink on the Postgres data: blocking on normalized address, phone and last name plus ZIP; comparisons on first name (with nickname table), last name, address, date of birth and phone. Configurable thresholds: auto-link above the upper threshold, identity review item between thresholds, no link below. Never auto-link when it would join two different values of any system key. Run as a scheduled batch job with run history, counts per band, and a dry-run mode that only reports.
+
+4. Households: household_id assigned to people sharing a normalized address (plus surname rule, configurable), stored separately from Master ID; people are never merged by household. Household view on the profile page, household fields usable in segments, and a "one per household" option on every export.
+
+5. Devices: key types for device IDs (Roku RIDA, Samsung TIFA, Apple IDFA, Google AAID, app install ID, web cookie ID). A device links to a person only from an authenticated event that carries okta_customer_id; links expire after a configurable number of days without being seen; a device never causes two people to merge.
+
+6. Quality: an admin page that samples N linked pairs for manual review and records the verdicts, plus match-rate and review-queue trends by source on Data Health.
