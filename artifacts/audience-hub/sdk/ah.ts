@@ -51,6 +51,7 @@ type SDK = {
     queue = [];
     active?.abort();
     clearInterval(timer);
+    try { sessionStorage.removeItem('ah_fbclid'); sessionStorage.removeItem('ah_fbc'); } catch { /* Storage disabled. */ }
   };
   const warn = () => console.warn('Audience Hub: invalid event or queue limit reached.');
   const depthOK = (value: unknown, depth = 1): boolean => {
@@ -66,8 +67,29 @@ type SDK = {
         anonymousId = read('ah_aid') || uuid();
         store('ah_aid', anonymousId);
       }
+      // First-party attribution only. Never identify or merge on these IDs.
+      // Only collect after opt-out/GPC checks; do not load Meta's Pixel.
+      const click = new URLSearchParams(location.search).get('fbclid');
+      if (click && /^[A-Za-z0-9._~-]{1,512}$/.test(click)) {
+        try {
+          if (sessionStorage.getItem('ah_fbclid') !== click) {
+            sessionStorage.setItem('ah_fbc', `fb.1.${Date.now()}.${click}`);
+          }
+          sessionStorage.setItem('ah_fbclid', click);
+        } catch { /* Session-only memory unavailable. */ }
+      }
+      let fbclid = click;
+      try { fbclid ||= sessionStorage.getItem('ah_fbclid'); } catch { /* Storage disabled. */ }
+      const attribution: Json = {};
+      for (const [key, value] of [['fbclid', fbclid], ['_fbp', read('_fbp')], ['_fbc', read('_fbc')]]) {
+        if (typeof value === 'string' && value.length <= (key === '_fbc' ? 600 : 512) && /^[A-Za-z0-9._~-]+$/.test(value)) attribution[key!] = value;
+      }
+      if (!attribution._fbc && typeof attribution.fbclid === 'string') {
+        try { attribution._fbc = sessionStorage.getItem('ah_fbc'); } catch { /* Storage disabled. */ }
+        attribution._fbc ||= `fb.1.${Date.now()}.${attribution.fbclid}`;
+      }
       const data = JSON.parse(JSON.stringify({
-        ...fields, type, anonymousId, userId, messageId: uuid(), timestamp: new Date().toISOString(),
+        ...fields, ...attribution, type, anonymousId, userId, messageId: uuid(), timestamp: new Date().toISOString(),
       }));
       // A batch stays below the browser keepalive / beacon 64 KiB budget.
       if (new TextEncoder().encode(JSON.stringify(data)).length > 30000) throw Error();

@@ -37,7 +37,7 @@ class SourceCreate(BaseModel):
     @field_validator("kind")
     @classmethod
     def valid_kind(cls, value: str) -> str:
-        if value not in {"csv", "event_api", "sftp_jsonl", "snowflake", "zeta_exit", "hubspot"}:
+        if value not in {"csv", "event_api", "sftp_jsonl", "snowflake", "zeta_exit", "hubspot", "meta_lead_ads"}:
             raise ValueError("Unsupported source kind")
         return value
 

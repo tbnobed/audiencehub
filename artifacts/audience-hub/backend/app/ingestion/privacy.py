@@ -15,7 +15,7 @@ def erase_unresolved_and_aliases(db, ids, kind, value):
     db.execute(text("""CREATE TEMP TABLE ingestion_erasure_keys ON COMMIT DROP AS
       WITH RECURSIVE closure(id) AS (
         SELECT sr.id FROM source_records sr JOIN sources s ON s.id=sr.source_id
-        WHERE s.kind='event_api' AND
+        WHERE s.kind IN ('event_api','meta_lead_ads') AND
           (sr.profile_id=ANY(:ids) OR
            (:kind='email' AND sr.email_norm=:value) OR
            (:kind='phone' AND sr.phone_e164=:value) OR EXISTS(
@@ -36,6 +36,29 @@ def erase_unresolved_and_aliases(db, ids, kind, value):
       {"ids": ids, "kind": kind, "value": value})
     aliases = set(db.execute(text("""SELECT type,value FROM identifiers
       WHERE profile_id=ANY(:ids) AND type IN ('anonymous_id','user_id')"""), {"ids": ids}).all())
+    aliases.update(db.execute(text("""SELECT k.kind,k.value FROM meta_verified_keys v
+      JOIN source_records s ON s.id=v.source_record_id CROSS JOIN LATERAL
+      (VALUES('meta_app_user_id',v.meta_app_user_id),('meta_psid',v.meta_psid)) k(kind,value)
+      WHERE k.value IS NOT NULL AND (s.profile_id=ANY(:ids)
+        OR (:kind='email' AND s.email_norm=:value) OR (:kind='phone' AND s.phone_e164=:value))"""),
+      {"ids": ids, "kind": kind, "value": value}).all())
+    # The provider lead ID is personal capture provenance. Remove it from job
+    # history as well as the lead/source rows; already executing deliveries
+    # cannot write after erasure because contact() rechecks suppression.
+    db.execute(text("""UPDATE jobs j SET
+      status=CASE WHEN j.status IN ('queued','running') THEN 'cancelled' ELSE j.status END,
+      finished_at=coalesce(j.finished_at,now()),payload=j.payload-'lead_id',error=NULL,progress='{}'
+      WHERE j.type='meta.lead' AND EXISTS(
+        SELECT 1 FROM meta_leads l JOIN source_records s ON s.id=l.source_record_id
+        WHERE l.source_id::text=j.payload->>'source_id' AND l.lead_id=j.payload->>'lead_id'
+          AND (s.profile_id=ANY(:ids) OR (:kind='email' AND s.email_norm=:value)
+            OR (:kind='phone' AND s.phone_e164=:value)))"""),
+      {"ids": ids, "kind": kind, "value": value})
+    db.execute(text("""DELETE FROM meta_attribution_sessions a
+      WHERE a.profile_id=ANY(:ids) OR EXISTS(
+        SELECT 1 FROM ingestion_erasure_keys k WHERE k.source_id=a.source_id AND k.anonymous_key=a.session_key)
+      OR EXISTS(SELECT 1 FROM identifiers i WHERE i.profile_id=ANY(:ids)
+        AND i.type='anonymous_id' AND i.value=a.session_key)"""), {"ids": ids})
     for row in db.execute(text("SELECT * FROM ingestion_erasure_keys")).mappings():
         if row["anonymous_key"]:
             aliases.add(("anonymous_id", row["anonymous_key"]))
@@ -66,7 +89,7 @@ def erase_unresolved_and_aliases(db, ids, kind, value):
     # Do not remove resolved records early: normal privacy teardown needs their
     # aliases, provenance, and FK ordering. Pending API contacts have no child FK.
     pending = db.execute(text("""DELETE FROM source_records sr USING sources s
-      WHERE sr.source_id=s.id AND s.kind='event_api' AND sr.profile_id IS NULL
+      WHERE sr.source_id=s.id AND s.kind IN ('event_api','meta_lead_ads') AND sr.profile_id IS NULL
         AND sr.last_import_id IS NULL AND
         ((:kind='email' AND sr.email_norm=:value) OR (:kind='phone' AND sr.phone_e164=:value)
           OR EXISTS(SELECT 1 FROM ingestion_erasure_keys k WHERE k.source_id=sr.source_id AND

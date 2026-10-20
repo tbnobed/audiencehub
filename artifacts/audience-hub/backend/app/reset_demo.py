@@ -10,6 +10,8 @@ from sqlalchemy.exc import OperationalError
 # Keep this allowlist in sync with migrations. Never use CASCADE: a new FK from a
 # retained table must make the operation fail, not quietly destroy configuration.
 DATA_TABLES = (
+    "meta_ad_results", "meta_audiences", "meta_attribution_sessions", "meta_pending_contacts",
+    "meta_verified_keys", "meta_leads",
     "identity_pairs", "identity_devices", "identity_addresses", "identity_graph_daily",
     "identity_graph_runs", "identity_device_receipts",
     "audit_log", "client_errors", "scheduled_runs", "jobs", "source_import_receipts",
@@ -29,6 +31,7 @@ DATA_TABLES = (
     "dashboard_kpis", "dashboard_cache",
 )
 RETAINED_TABLES = (
+    "meta_connections",
     "identity_graph_policy", "identity_device_credentials",
     "users", "sources", "enrichment_attributes", "admin_settings", "master_id_registry",
     "source_connections", "canonical_field_catalog",

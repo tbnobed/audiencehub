@@ -76,6 +76,10 @@ def _record_identifiers(record: dict, source_key: str) -> set[tuple[str, str]]:
     from app.identity.master import SYSTEM_KEYS
     import hashlib
     for kind in SYSTEM_KEYS:
+        if kind == "meta_app_user_id":
+            # Meta identifiers enter only from meta_verified_keys in the
+            # set-based resolver, never from caller-supplied attributes.
+            continue
         if attrs.get(kind):
             value = str(attrs[kind]).strip()
             values.add((kind, value.lower() if kind == "zeta_uid" else value))

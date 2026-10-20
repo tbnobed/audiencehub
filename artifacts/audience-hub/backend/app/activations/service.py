@@ -141,6 +141,13 @@ def enqueue_run(db, activation_id, user_id=None, triggered_by="manual", dedupe_k
         "consent": "email" if destination.type == "hubspot" else activation.required_consent,
         "one_per_household": activation.one_per_household,
     }
+    if destination.type == "meta_custom_audience":
+        from app.meta_privacy import safe_rule, safe_mapping
+        safe_rule(db, segment.definition)
+        safe_mapping(snapshot["mapping"])
+        if destination.config.get("meta_source_id"):
+            from app.meta_ads import assert_owned
+            assert_owned(db, destination.id, segment.id, destination.config)
     approval_id, selected = sensitive_approval(
         db, activation.id, segment.id, destination.id, snapshot["mapping"], snapshot["consent"])
     fields.validate_mapping(db, snapshot["mapping"], destination.config.get("include_pii", True),
@@ -297,6 +304,19 @@ def export_suppressed_ids(db, batch, snapshot):
 
 
 def prepare(db, run, snapshot):
+    if snapshot["type"] == "meta_custom_audience":
+        from app.meta_privacy import safe_rule, safe_mapping
+        segment = db.get(Segment, snapshot["segment_id"])
+        if segment is None:
+            raise security.DeliveryError("Meta audience no longer exists.")
+        try:
+            safe_rule(db, segment.definition)
+            safe_mapping(snapshot["mapping"])
+            if snapshot["config"].get("meta_source_id"):
+                from app.meta_ads import assert_owned
+                assert_owned(db, snapshot["destination_id"], snapshot["segment_id"], snapshot["config"])
+        except ValueError as error:
+            raise security.DeliveryError(str(error)) from None
     snapshot["mapping"] = export_mapping(snapshot["type"], snapshot["mapping"])
     validate_provider_mapping(snapshot["type"], snapshot["mapping"])
     _, selected = verify_snapshot_approval(db, run, snapshot)
@@ -512,6 +532,12 @@ def execute(db, run_id):
             _, run.file_sha256 = package(run.file_path)
         else:
             export_csv(db, run, snapshot)
+            if snapshot["type"] == "meta_custom_audience" and snapshot["config"].get("meta_source_id"):
+                from app.meta_ads import send
+                try:
+                    send(db, run, snapshot)
+                except ValueError as error:
+                    raise security.DeliveryError(str(error)) from None
             if snapshot["type"] == "sftp":
                 from app.activations.sftp import publish
                 manifest = publish(snapshot["config"], snapshot["secrets"]["credentials"],

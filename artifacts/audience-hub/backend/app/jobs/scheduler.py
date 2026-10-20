@@ -83,6 +83,10 @@ def tick(db: Session) -> None:
             identifier = queue_run(db, False)
             db.add(ScheduledRun(task=task, window_key=window, job_id=identifier))
     schedule_once(db, "maintenance.daily", now.strftime("%Y-%m-%d"), "maintenance.run", {})
+    for segment_id in db.scalars(text("""SELECT DISTINCT a.segment_id FROM meta_audiences a
+      JOIN sources s ON s.id=a.source_id WHERE s.is_active""")):
+        schedule_once(db, f"meta.results:{segment_id}", now.strftime("%Y-%m-%d"),
+                      "meta.results", {"segment_id": segment_id})
     from app.source_pulls import tick_sources
     tick_sources(db, now)
     from app.activations.schedule import tick_activations

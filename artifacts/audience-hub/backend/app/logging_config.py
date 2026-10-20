@@ -6,6 +6,12 @@ from datetime import datetime, timezone
 from sqlalchemy.exc import DataError, IntegrityError, OperationalError, ProgrammingError
 
 SENSITIVE = re.compile(r"wk_(?:live|test)_[A-Za-z0-9_-]+|[\w.+-]+@[\w.-]+\.[a-z]{2,}|\+?\d[\d\s().-]{8,}\d", re.I)
+QUERY_SECRETS = re.compile(
+    r"((?:access_token|input_token|appsecret_proof|hub(?:\.|%2e)verify_token)=)[^&\s\"']+", re.I)
+
+
+def redact_message(message):
+    return SENSITIVE.sub("[REDACTED]", QUERY_SECRETS.sub(r"\1[REDACTED]", message))
 
 SQLSTATE_MESSAGES = {
     "23502": "A required database field was missing",
@@ -137,7 +143,7 @@ def safe_job_error(error: BaseException) -> str:
 
 class Redact(logging.Filter):
     def filter(self, record):
-        record.msg = SENSITIVE.sub("[REDACTED]", str(record.getMessage()))
+        record.msg = redact_message(str(record.getMessage()))
         record.args = ()
         return True
 
@@ -146,13 +152,14 @@ class JsonFormatter(logging.Formatter):
     def format(self, record):
         result = {"at": datetime.now(timezone.utc).isoformat(),
                   "level": record.levelname, "logger": record.name,
-                  "message": SENSITIVE.sub("[REDACTED]", record.getMessage())}
+                   "message": redact_message(record.getMessage())}
         if record.exc_info and record.exc_info[1]:
             result["exception"] = safe_exception(record.exc_info[1])
         return json.dumps(result)
 
 
 def configure_logging(level: str):
+    logging.getLogger("uvicorn.access").addFilter(Redact())
     handler = logging.StreamHandler()
     handler.addFilter(Redact())
     handler.setFormatter(JsonFormatter())

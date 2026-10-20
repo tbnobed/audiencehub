@@ -87,4 +87,6 @@ def validate(message, kind=None, received_at=None, ip=None):
         result["context"]["ip"] = truncated
     result["occurred_at"] = at
     result["received_at"] = now
+    from app.meta_attribution import extract
+    result["attribution"] = extract(message)
     return result

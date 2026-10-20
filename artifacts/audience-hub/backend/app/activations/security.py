@@ -72,6 +72,9 @@ def target(url, allow_internal=False):
                 or any(ord(c) <= 32 for c in url) or "%" in parsed.hostname):
             raise ValueError()
         host = parsed.hostname.encode("idna").decode("ascii")
+        if any(host.lower() == domain or host.lower().endswith("." + domain)
+               for domain in ("facebook.com", "facebook.net", "instagram.com", "meta.com")):
+            raise DeliveryError("Meta delivery requires the privacy-guarded Meta connection, not a generic webhook.")
         port = parsed.port or (443 if parsed.scheme == "https" else 80)
         if not _dns_slots.acquire(blocking=False):
             raise DeliveryError("Webhook DNS resolution is busy; try again later.")

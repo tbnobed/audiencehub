@@ -257,6 +257,17 @@ def save(db, user, body, row=None):
     row.definition = definition
     row.updated_by = user.id
     db.flush()
+    # Includes referenced-child edits: a safe parent cannot silently acquire
+    # viewing rules through another segment after a Meta activation is saved.
+    from app.meta_privacy import safe_rule
+    meta_ids = db.scalars(text("""SELECT segment_id FROM meta_audiences UNION
+      SELECT a.segment_id FROM activations a JOIN destinations d ON d.id=a.destination_id
+      WHERE d.type='meta_custom_audience' AND a.is_active""")).all()
+    try:
+        for identifier in meta_ids:
+            safe_rule(db, db.get(Segment, identifier).definition)
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from None
     db.add(AuditLog(user_id=user.id, actor_type="user", action="segment.save",
                     entity_type="segment", entity_id=str(row.id), details={"status": row.status}))
     if row.status == "active":

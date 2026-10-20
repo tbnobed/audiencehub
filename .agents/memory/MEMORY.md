@@ -18,3 +18,4 @@
 - [Audience lifecycle](audience-lifecycle.md) — seed/reset activate templates; ordinary startup must preserve deliberate pauses.
 - [Local account boundary](local-account-policy.md) — no SSO for now; keep user ownership stable and retain old peppers for irreversible suppression tombstones.
 - [First-party identity boundaries](first-party-identity-boundaries.md) — preserve accepted person identity rules; households and devices cannot merge people; scratch data is in erasure scope.
+- [Meta first-party privacy](meta-first-party-privacy.md) — verified Login/Page keys only; click IDs never merge people; no viewing/VOD data in Meta audiences or delivery.

@@ -5,9 +5,9 @@ import re
 from sqlalchemy import text
 
 SYSTEM_KEYS = ("donor_account_number", "hubspot_record_id", "okta_customer_id",
-               "zeta_cdp_id", "zeta_uid")
+               "zeta_cdp_id", "zeta_uid", "meta_app_user_id")
 CONTACT_KEYS = ("email", "email_md5", "email_sha256", "mobile_phone")
-KEY_TYPES = SYSTEM_KEYS + CONTACT_KEYS
+KEY_TYPES = SYSTEM_KEYS + CONTACT_KEYS + ("meta_psid",)
 MASTER_RE = re.compile(r"^kin_[0-7][0-9A-HJKMNP-TV-Z]{25}$")
 
 
@@ -32,6 +32,8 @@ def normalize_lookup(kind, value):
         value = str(UUID(value))
     elif kind == "zeta_cdp_id" and not value.startswith("cdp-"):
         raise ValueError("zeta_cdp_id must start with cdp-")
+    elif kind in ("meta_app_user_id", "meta_psid") and not re.fullmatch(r"\d{1,40}:\d{1,40}", value):
+        raise ValueError("Meta keys must be scoped as app_id:user_id or page_id:psid")
     if not value:
         raise ValueError("Invalid contact key")
     return value

@@ -1,5 +1,8 @@
 # First-party identity graph
 
+For Meta Page setup, first-party click/Login capture, Marketing reporting and
+the video-privacy restrictions, see [META_CAPTURE.md](META_CAPTURE.md).
+
 See [IDENTITY_GRAPH.md](IDENTITY_GRAPH.md) for the disabled-by-default scheduled
 Splink matcher, evidence/unmerge rules, address/vendor adapters, household
 exports, authenticated device signing and server verification checklist.

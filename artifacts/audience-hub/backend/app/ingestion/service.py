@@ -12,8 +12,18 @@ def anonymous_key(source_id, value):
     return "ah:" + hashlib.sha256(f"{source_id}:{value}".encode()).hexdigest()
 
 
+def message_contact(message):
+    traits = dict(message["traits"])
+    if (message["type"] == "track" and message["name"].strip().lower().replace(" ", "_")
+            in {"donation", "donation_success", "signup", "sign_up", "login", "account_created"}):
+        for key in ("email", "phone"):
+            if not traits.get(key) and isinstance(message["properties"].get(key), str):
+                traits[key] = message["properties"][key]
+    return traits
+
+
 def identities(source, message):
-    traits = message["traits"]
+    traits = message_contact(message)
     values = {("external", f'{source.key}:{message["messageId"]}')}
     if message["anonymousId"]:
         values.add(("anonymous_id", anonymous_key(source.id, message["anonymousId"])))
@@ -52,8 +62,16 @@ def ingest(db, source, messages):
         if receipt is None:
             continue
         changed = True
-        if message["type"] == "identify":
-            traits = message["traits"]
+        from app.meta_attribution import capture
+        capture(db, source.id, message)
+        # Giving/signup/login can identify with an explicitly provided contact,
+        # using the SAME normal resolver path, never a click ID.
+        traits = message_contact(message)
+        identifying_conversion = (
+            message["type"] == "track" and message["name"].strip().lower().replace(" ", "_")
+            in {"donation", "donation_success", "signup", "sign_up", "login", "account_created"}
+            and (normalize_email(traits.get("email")) or normalize_phone(traits.get("phone"))))
+        if message["type"] == "identify" or identifying_conversion:
             attrs = {"identify": True, "user_id": message["userId"],
                      "anonymous_id": anonymous_key(source.id, message["anonymousId"]) if message["anonymousId"] else None}
             # Each identify delivery is a contact observation. This preserves
@@ -103,3 +121,5 @@ def backfill(db, source_id):
       SELECT profile_id,clock_timestamp() FROM (SELECT DISTINCT profile_id FROM changed) dirty
       ON CONFLICT(profile_id) DO UPDATE SET dirtied_at=EXCLUDED.dirtied_at"""),
       {"source": source.id, "key": source.key})
+    from app.meta_attribution import attach
+    attach(db, source_id)

@@ -135,6 +135,13 @@ def activation_json(db, row, user=None):
 
 
 def validate_destination(kind, config, secrets, enabled=True):
+    if kind == "meta_custom_audience" and ("meta_source_id" in config or "meta_audience_id" in config):
+        if (set(config) - {"meta_source_id", "meta_audience_id", "delimiter", "include_pii"}
+                or type(config.get("meta_source_id")) is not int or config["meta_source_id"] < 1
+                or not str(config.get("meta_audience_id", "")).isdigit()
+                or config.get("delimiter", ",") != "," or config.get("include_pii", True) is not True or secrets):
+            raise ValueError("Invalid connected Meta destination; create it from the audience's Meta results tab.")
+        return
     if kind == "hubspot":
         from app.hubspot_client import validate_destination as validate_hubspot
         if set(secrets) - {"credentials"}:
@@ -340,6 +347,12 @@ def save_activation(db, row, body, user):
                 raise HTTPException(422, "Activation fields cannot be null.")
             setattr(row, key, values[key])
     segment, destination = require(db, Segment, row.segment_id), require(db, Destination, row.destination_id)
+    if destination.type == "meta_custom_audience":
+        from app.meta_privacy import safe_rule
+        try:
+            safe_rule(db, segment.definition)
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from None
     if destination.config.get("export_kind") == "crosswalk" and user.role != "admin":
         raise HTTPException(403, "Crosswalk activations are restricted to admins.")
     if segment.status != "active" or (row.is_active and not destination.is_active):

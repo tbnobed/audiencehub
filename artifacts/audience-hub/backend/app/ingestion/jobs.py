@@ -15,6 +15,8 @@ def resolve(db, source_id, job_id=None):
         raise IdentityResolutionDeferred("Ingestion identity waits for the import barrier.")
     resolve_bulk(db, job_id=job_id, mode="incremental")
     backfill(db, source_id)
+    from app.meta_capture import finish_consents
+    finish_consents(db, source_id)
 
 
 def run_resolution(source_id, job_id=None):

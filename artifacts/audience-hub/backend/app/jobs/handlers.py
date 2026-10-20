@@ -6,6 +6,18 @@ class SegmentTraitsRefreshRequired(ValueError):
 
 
 def run(job_type: str, payload: dict, job_id: int | None = None) -> None:
+    if job_type == "meta.backfill":
+        from app.meta_capture import backfill
+        backfill(int(payload["source_id"]), job_id)
+        return
+    if job_type == "meta.lead":
+        from app.meta_capture import process_lead
+        process_lead(int(payload["source_id"]), str(payload["lead_id"]), job_id)
+        return
+    if job_type == "meta.results":
+        from app.meta_ads import refresh_results
+        refresh_results(int(payload["segment_id"]), job_id)
+        return
     if job_type == "identity.graph":
         from app.identity.graph_jobs import run as graph_run
         graph_run(int(payload["run_id"]), job_id)

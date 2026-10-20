@@ -51,7 +51,7 @@ def run(job_id):
                     raise RuntimeError("Maintenance ownership lost")
                 totals["partitions_created"] = partitions(db, policy["partitions_ahead_months"])
                 db.commit()
-            stages = ["licensed_sources", "enrichment", "events", "audit", "jobs", "sessions"]
+            stages = ["licensed_sources", "enrichment", "events", "audit", "jobs", "sessions", "meta_attribution"]
             for stage in stages:
                 total = 0
                 while True:
@@ -128,6 +128,15 @@ def clean_batch(db, stage, policy, job_id):
                 (attributes ? :key OR attributes->'_import_enrichments' ? :key)"""),
                 {"key": key, "profile": profile_id, "source": source_id})
         ids = sorted({row[0] for row in rows})
+    elif stage == "meta_attribution":
+        days = min(90, policy["event_retention_days"]) if policy["event_retention_days"] else 90
+        rows = db.execute(text("""WITH doomed AS (
+          SELECT source_id,session_key FROM meta_attribution_sessions
+          WHERE last_seen_at<now()-make_interval(days=>:days) ORDER BY last_seen_at LIMIT 5000
+        ) DELETE FROM meta_attribution_sessions a USING doomed d
+          WHERE a.source_id=d.source_id AND a.session_key=d.session_key RETURNING a.source_id"""),
+          {"days": days}).all()
+        ids = []
     elif stage == "events":
         days = policy["event_retention_days"]
         if not days:

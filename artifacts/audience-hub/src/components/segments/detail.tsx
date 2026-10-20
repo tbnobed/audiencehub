@@ -6,6 +6,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useSegment, useSegmentActivity, useSegmentFields, useSegmentHistory, useSegmentMembers, useSegments } from '@/hooks/use-segments';
 import type { Segment } from '@/lib/segments';
+import { MetaCampaignResults } from '../meta-campaign-results';
 import { HistoryView } from './history-chart';
 import { STATUS_TONE } from './live-panel';
 import { SCHEDULES, abbreviate, countRules, fullNumber, relativeTime, signed, summarize } from './model';
@@ -103,6 +104,7 @@ export function SegmentDetail({ id }: { id: number }) {
         <TabsTrigger value="history" className="text-xs h-6" data-testid="tab-history">Count history</TabsTrigger>
         <TabsTrigger value="members" className="text-xs h-6" data-testid="tab-members">Members</TabsTrigger>
         <TabsTrigger value="activations" className="text-xs h-6" data-testid="tab-activations">Activations <span className="ml-1 font-mono text-[10px] text-ink-muted">{actQ.data?.activations.length ?? s.activation_count}</span></TabsTrigger>
+        <TabsTrigger value="meta" className="text-xs h-6" data-testid="tab-meta">Meta results</TabsTrigger>
         <TabsTrigger value="audit" className="text-xs h-6" data-testid="tab-audit">Audit trail</TabsTrigger>
       </TabsList>
       <TabsContent value="history" className="mt-2">
@@ -121,6 +123,7 @@ export function SegmentDetail({ id }: { id: number }) {
       <TabsContent value="activations" className="mt-2">
         <ActivityTable segment={s} kind="activations" q={actQ} dependents={dependents} />
       </TabsContent>
+      <TabsContent value="meta" className="mt-2"><MetaCampaignResults segmentId={id} /></TabsContent>
       <TabsContent value="audit" className="mt-2">
         <ActivityTable segment={s} kind="audit" q={actQ} dependents={[]} />
       </TabsContent>

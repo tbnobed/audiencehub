@@ -89,6 +89,9 @@ def resolve_bulk(db: Session, job_id: int | None = None, *, mode: str = "auto",
             ('okta_customer_id',NULLIF(btrim(p.attributes->>'okta_customer_id'),'')),
             ('zeta_cdp_id',NULLIF(btrim(p.attributes->>'zeta_cdp_id'),'')),
             ('zeta_uid',lower(NULLIF(btrim(p.attributes->>'zeta_uid'),''))),
+            ('meta_app_user_id',(SELECT v.meta_app_user_id FROM meta_verified_keys v WHERE v.source_record_id=p.id)),
+            ('meta_psid',(SELECT v.meta_psid FROM meta_verified_keys v WHERE v.source_record_id=p.id
+               AND (p.email_norm IS NOT NULL OR p.phone_e164 IS NOT NULL))),
             ('external', CASE
                WHEN jsonb_typeof(p.attributes->'_identity_reference'->'source_key')='string'
                THEN NULLIF(btrim(p.attributes->'_identity_reference'->>'source_key',:whitespace),'')
@@ -267,9 +270,11 @@ def resolve_bulk(db: Session, job_id: int | None = None, *, mode: str = "auto",
     """ if skip_unchanged else "") + """
       ORDER BY k.kind,k.value,s.profile_id
       ON CONFLICT(type,value) DO NOTHING;
-      INSERT INTO identity_xref(master_id,key_type,key_value,source_id,first_seen_at,last_seen_at)
+      INSERT INTO identity_xref(master_id,key_type,key_value,source_id,first_seen_at,last_seen_at,rule)
       SELECT p.master_id,CASE k.kind WHEN 'phone' THEN 'mobile_phone' ELSE k.kind END,
-        k.value,s.source_id,min(s.created_at),max(s.updated_at)
+        k.value,s.source_id,min(s.created_at),max(s.updated_at),
+        CASE k.kind WHEN 'meta_app_user_id' THEN 'facebook_login_verified'
+          WHEN 'meta_psid' THEN 'meta_page_contact_provided' ELSE 'existing_deterministic_resolver' END
       FROM ir_keys k JOIN source_records s ON s.id=k.record_id
       JOIN profiles p ON p.id=s.profile_id
       WHERE k.kind <> 'external'

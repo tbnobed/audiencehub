@@ -33,6 +33,7 @@ KNOWN_REFERENCES = {
     "identity_xref": {"master_id"},
     "identity_addresses": {"profile_id"}, "identity_devices": {"profile_id"},
     "identity_pairs": {"left_id", "right_id"},
+    "meta_attribution_sessions": {"profile_id"},
 }
 PROFILE_KEYS = {"profile_id", "profile_ids", "matched_profile_ids", "winner_id", "loser_id", "merged_into_id"}
 
@@ -586,7 +587,7 @@ def execute_deletion(db, request_id):
       SELECT unnest(matched_profile_ids) EXCEPT SELECT unnest(CAST(:ids AS bigint[])))
       WHERE matched_profile_ids && CAST(:ids AS bigint[])"""), {"ids": ids})
     # Dependency order covers source-record referencing diagnostics and merge links.
-    order = ("identity_pairs", "identity_devices", "identity_addresses",
+    order = ("meta_attribution_sessions", "identity_pairs", "identity_devices", "identity_addresses",
              "activation_run_members", "activation_last_members", "segment_membership",
              "consents", "enrichment_values", "profile_traits", "trait_dirty_profiles",
              "dashboard_donor_daily", "client_errors", "events", "gifts", "identifiers", "source_records", "profile_merges")

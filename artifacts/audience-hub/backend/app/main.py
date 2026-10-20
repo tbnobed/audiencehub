@@ -54,6 +54,9 @@ from app.identity.device_api import router as identity_device_router, event_rout
 app.include_router(identity_graph_router)
 app.include_router(identity_device_router)
 app.include_router(device_event_router)
+from app.meta_api import router as meta_router, public_router as meta_public_router
+app.include_router(meta_router)
+app.include_router(meta_public_router)
 app.include_router(resources_router)
 app.include_router(dev.router)
 app.include_router(sources_router)
