@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input';
 import { useQuery } from '@tanstack/react-query';
 import { brandAsset, useTheme } from '@/lib/theme';
 import { ThemeToggle } from '@/components/theme/theme-toggle';
+import { LoginTotpDialog } from '@/components/account/login-totp-dialog';
 
 async function loginCsrf(signal?: AbortSignal): Promise<string> {
   const data = await fetchApi('/auth/local/session', {
@@ -42,8 +43,9 @@ export default function Login() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [again, setAgain] = useState('');
-  const [totp, setTotp] = useState('');
-  const [needTotp, setNeedTotp] = useState(false);
+  const [totpOpen, setTotpOpen] = useState(false);
+  const [totpExpires, setTotpExpires] = useState('');
+  const [totpError, setTotpError] = useState('');
   const [csrf, setCsrf] = useState('');
   useEffect(() => {
     if (auth?.mode !== 'local') return;
@@ -63,10 +65,13 @@ export default function Login() {
       headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': currentCsrf },
       body: JSON.stringify(body),
     });
+    return data;
+  };
+  const finish = async (data: { login_required?: boolean }) => {
     if (token) window.history.replaceState(null, '', window.location.pathname);
     if (data.login_required) {
-      setToken(null); setPassword(''); setAgain(''); setNeedTotp(true);
-      setNotice('Password set. Sign in with your password and authenticator code.');
+      setToken(null); setPassword(''); setAgain('');
+      setNotice('Password set. Sign in with your email and password; your authenticator will be requested next.');
       return;
     }
     setCsrfToken(null);
@@ -77,12 +82,38 @@ export default function Login() {
     if (token && password !== again) { setErrorMessage('Passwords do not match.'); return; }
     setLoading(true); setErrorMessage('');
     try {
-      if (token) await post('/auth/local/accept', { token, password });
-      else await post('/auth/local/login', { email, password, ...(totp ? { totp } : {}) });
+      const data = token
+        ? await post('/auth/local/accept', { token, password })
+        : await post('/auth/local/login', { email, password });
+      setPassword(''); setAgain('');
+      if (data.mfa_required) {
+        setNotice(''); setTotpError(''); setTotpExpires(data.expires_at); setTotpOpen(true);
+        return;
+      }
+      await finish(data);
     } catch (error) {
       const m = error instanceof Error ? error.message : 'Sign-in failed';
-      if (/totp|authenticator|code/i.test(m)) setNeedTotp(true);
       setErrorMessage(m);
+    } finally { setLoading(false); }
+  };
+
+  const verifyTotp = async (code: string) => {
+    setLoading(true); setTotpError('');
+    try {
+      const data = await post('/auth/local/totp', { code });
+      await finish(data);
+      setTotpOpen(false);
+    } catch (error) {
+      setTotpError(error instanceof Error ? error.message : 'Verification failed. Try again.');
+    } finally { setLoading(false); }
+  };
+  const cancelTotp = async () => {
+    setLoading(true); setTotpError('');
+    try {
+      await post('/auth/local/totp/cancel', {});
+      setTotpOpen(false); setTotpExpires(''); setPassword('');
+    } catch (error) {
+      setTotpError(error instanceof Error ? error.message : 'Could not cancel. Try again.');
     } finally { setLoading(false); }
   };
 
@@ -113,8 +144,7 @@ export default function Login() {
             {token ? <p className="text-sm text-muted-foreground">Choose a password to activate your account or finish a reset.</p> : <div className="space-y-2"><label className="text-sm font-medium" htmlFor="login-email">Email</label><Input id="login-email" data-testid="input-login-email" type="email" autoComplete="username" value={email} onChange={e => setEmail(e.target.value)} required /></div>}
             <div className="space-y-2"><label className="text-sm font-medium" htmlFor="login-password">{token ? 'New password' : 'Password'}</label><Input id="login-password" data-testid="input-login-password" type="password" autoComplete={token ? 'new-password' : 'current-password'} value={password} onChange={e => setPassword(e.target.value)} required /></div>
             {token && <div className="space-y-2"><label className="text-sm font-medium" htmlFor="login-again">Confirm password</label><Input id="login-again" data-testid="input-login-confirm" type="password" autoComplete="new-password" value={again} onChange={e => setAgain(e.target.value)} required /></div>}
-            {!token && <div className="space-y-2"><label className="text-sm font-medium" htmlFor="login-totp">Authenticator or recovery code{needTotp ? '' : ' (if enabled)'}</label><Input id="login-totp" data-testid="input-login-totp" autoComplete="one-time-code" maxLength={19} value={totp} onChange={e => setTotp(e.target.value.trim())} required={needTotp} /><p className="text-xs text-muted-foreground">Use any standard TOTP app, or one unused recovery code if your device is unavailable.</p></div>}
-            <Button data-testid="button-login" type="submit" className="w-full" disabled={loading || !csrf}>{loading ? 'Working…' : token ? 'Set password and continue' : 'Sign in'}</Button>
+            <Button data-testid="button-login" type="submit" className="w-full" disabled={loading || !csrf || totpOpen}>{loading ? 'Working…' : token ? 'Set password and continue' : 'Sign in'}</Button>
           </form> : auth?.mode === 'dev' ? <form onSubmit={handleLogin} className="space-y-4">
             <div className="space-y-2">
               <label className="text-sm font-medium">Name</label>
@@ -149,6 +179,7 @@ export default function Login() {
           {errorMessage ? <p role="alert" className="mt-4 text-sm text-destructive">{errorMessage}</p> : null}
         </CardContent>
       </Card>
+      <LoginTotpDialog open={totpOpen} loading={loading} error={totpError} expiresAt={totpExpires} onVerify={verifyTotp} onCancel={cancelTotp} />
     </div>
   );
 }

@@ -62,6 +62,7 @@ def credentials(db, user_id):
 
 def revoke(db, user_id):
     db.execute(text("DELETE FROM local_sessions WHERE user_id=:id"), {"id": user_id})
+    db.execute(text("DELETE FROM local_login_challenges WHERE user_id=:id"), {"id": user_id})
 
 
 def local_only():
@@ -77,6 +78,9 @@ def status(db, user):
 
 
 def establish(db, request, user, verified=False):
+    pending = request.session.get("login_challenge")
+    if pending:
+        db.execute(text("DELETE FROM local_login_challenges WHERE token_hash=:hash"), {"hash": token_hash(pending)})
     sid = secrets.token_urlsafe(48)
     db.execute(text("INSERT INTO local_sessions(token_hash,user_id,mfa_verified) VALUES(:hash,:id,:mfa)"),
                {"hash": token_hash(sid), "id": user.id, "mfa": verified})
@@ -97,7 +101,8 @@ def issue_token(db, user_id, purpose="reset"):
     return {"user_id": user_id, "token": token, "expires_at": expiry}
 
 
-def failed(db, user_id, limit_key, reason="invalid_credentials"):
+def failed(db, user_id, limit_key, reason="invalid_credentials", *, status_code=401,
+           message="Sign-in failed. Check credentials or try again after the cooldown."):
     if user_id:
         row = credentials(db, user_id)
         count = row["failures"] + 1
@@ -111,7 +116,7 @@ def failed(db, user_id, limit_key, reason="invalid_credentials"):
         {"key": limit_key})
     audit(db, "auth.login_failed", user_id, {"reason": reason})
     db.commit()
-    raise HTTPException(401, "Sign-in failed. Check credentials or try again after the cooldown.")
+    raise HTTPException(status_code, message)
 
 
 @router.get("/auth/local/session")
@@ -121,10 +126,7 @@ def session(request: Request):
     return {"csrf_token": request.session["csrf"], "mode": "local"}
 
 
-@router.post("/auth/local/login")
-def login(body: Login, request: Request, db: Session = Depends(session_scope)):
-    local_only()
-    check_csrf(request)
+def login_throttle(db, request):
     limit_key = token_hash("login:" + (request.client.host if request.client else "unknown"))
     db.execute(text("INSERT INTO local_login_limits(key_hash) VALUES(:key) ON CONFLICT DO NOTHING"), {"key": limit_key})
     throttle = db.execute(text("SELECT * FROM local_login_limits WHERE key_hash=:key FOR UPDATE"), {"key": limit_key}).mappings().one()
@@ -134,6 +136,14 @@ def login(body: Login, request: Request, db: Session = Depends(session_scope)):
         raise HTTPException(429, "Sign-in cooldown. Try again in 15 minutes.")
     if (now()-throttle["window_started"]).total_seconds() >= 900:
         db.execute(text("UPDATE local_login_limits SET failures=0,locked_until=NULL,window_started=now() WHERE key_hash=:key"), {"key": limit_key})
+    return limit_key
+
+
+@router.post("/auth/local/login")
+def login(body: Login, request: Request, db: Session = Depends(session_scope)):
+    local_only()
+    check_csrf(request)
+    limit_key = login_throttle(db, request)
     user = db.scalar(select(User).where(text("lower(users.email)=:email")).params(email=body.email.strip().lower()))
     row = credentials(db, user.id) if user else None
     if row and row["locked_until"] and row["locked_until"] > now():
@@ -149,6 +159,9 @@ def login(body: Login, request: Request, db: Session = Depends(session_scope)):
         failed(db, user.id if user else None, limit_key)
     verified = False
     if row["totp_secret"]:
+        if not body.totp:
+            from app.auth.challenge import begin
+            return begin(db, request, user, row)
         if not verify_second_factor(db, user.id, row, body.totp):
             failed(db, user.id, limit_key, "invalid_second_factor")
         if len(body.totp) != 6:
@@ -158,6 +171,22 @@ def login(body: Login, request: Request, db: Session = Depends(session_scope)):
     db.execute(text("UPDATE local_login_limits SET failures=0,locked_until=NULL WHERE key_hash=:key"), {"key": limit_key})
     establish(db, request, user, verified)
     return {"ok": True}
+
+
+@router.post("/auth/local/totp")
+def login_totp(body: Code, request: Request, db: Session = Depends(session_scope)):
+    local_only()
+    check_csrf(request)
+    from app.auth.challenge import complete
+    return complete(db, request, body.code)
+
+
+@router.post("/auth/local/totp/cancel")
+def cancel_login_totp(request: Request, db: Session = Depends(session_scope)):
+    local_only()
+    check_csrf(request)
+    from app.auth.challenge import cancel
+    return cancel(db, request)
 
 
 @router.post("/auth/local/accept")

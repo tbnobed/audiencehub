@@ -61,6 +61,17 @@ hashes only; the email outbox temporarily stores Fernet-encrypted message bodies
 erasing them on provider acceptance or expiration. Tokens and links never enter
 the jobs payload or audit log.
 
+The browser sign-in form requests only email and password. After a correct
+password, users with TOTP enabled receive a separate verification popup accepting
+an authenticator or recovery code. Users without TOTP sign in directly (the
+existing enrollment gate still applies if the admin-role policy requires TOTP).
+The password step creates no authenticated session for an enrolled user.
+Popup challenges expire after five minutes, are bound to the signed browser
+session, and are single use; cancelling or changing credentials invalidates them.
+Failed second factors use the same account/address lockout as password failures.
+The existing combined email/password/`totp` CLI request remains supported.
+Migration `0043_login_challenges` is required for this sign-in flow.
+
 Passwords must contain at least 14 characters and pass the bundled
 `app/auth/breached_passwords.txt` denylist check. The bundled list is a small
 offline common-breach denylist, not a claim to contain every breached password;

@@ -24,6 +24,16 @@ app, not one particular vendor. SendGrid is the account email relay.
 connections with locally managed credentials; do not substitute managed Replit
 authentication or connector credentials for this self-hosted account system.
 
+Show TOTP in its own sign-in popup only for users who have it enabled, after
+their password is accepted. Do not place an optional code field on every user's
+initial password form or grant authentication before the second factor succeeds.
+
+**Why:** the user explicitly requested “TOTP should be on it's own popup if it's
+enabled for the user.”
+
+**How to apply:** preserve the separate password and second-factor steps in the
+browser while retaining authenticator-app and recovery-code support.
+
 Keep the observed session query stable when changing authentication state.
 Treat an anonymous session probe as signed-out data, not a global cache-expiration
 event; clear private data without removing that observed query.

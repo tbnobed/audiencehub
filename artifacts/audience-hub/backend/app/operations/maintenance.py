@@ -148,6 +148,7 @@ def clean_batch(db, stage, policy, job_id):
         count = db.execute(text("""DELETE FROM local_sessions WHERE token_hash IN (
             SELECT token_hash FROM local_sessions WHERE last_seen<now()-interval '8 hours' LIMIT 5000)""")).rowcount
         db.execute(text("DELETE FROM local_account_tokens WHERE expires_at<now()"))
+        db.execute(text("DELETE FROM local_login_challenges WHERE expires_at<now()"))
         db.execute(text("""UPDATE account_email_outbox SET payload=NULL,cancelled_at=now()
             WHERE payload IS NOT NULL AND expires_at<=now()"""))
         db.execute(text("""DELETE FROM account_email_outbox WHERE payload IS NULL
