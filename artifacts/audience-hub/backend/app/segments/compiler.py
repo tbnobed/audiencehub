@@ -240,6 +240,19 @@ class Compiler:
             if kind == "attribute":
                 sr = SourceRecord.__table__
                 key = node["field"]
+                if key in ("okta_customer_id", "fusionauth_user_id"):
+                    # Login presence survives a provider cutover. Exact ID
+                    # comparisons remain provider-specific, not string aliases.
+                    x = table("identity_xref", column("master_id"), column("key_type"), column("key_value"))
+                    types = ("okta_customer_id", "fusionauth_user_id") if node.get("operator") in (
+                        "exists", "is_not_null", "is_null") else (key,)
+                    predicate = select(literal(1)).where(
+                        x.c.master_id == self.active.c.master_id, x.c.key_type.in_(types))
+                    if node.get("operator") not in ("exists", "is_not_null", "is_null"):
+                        predicate = predicate.where(_predicate(
+                            x.c.key_value, typ, node, path, self.now, entry["enum_values"]))
+                    expr = predicate.correlate(self.active).exists()
+                    return not_(expr) if node.get("operator") == "is_null" else expr
                 value = func.coalesce(sr.c[key], sr.c.attributes[key].astext) if key in ("address1", "address2", "city", "region", "postal_code", "country") else sr.c.attributes[key].astext
                 col = select(value).join(Source, Source.id == sr.c.source_id).where(
                     sr.c.profile_id == self.active.c.id, value.is_not(None)

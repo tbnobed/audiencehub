@@ -5,11 +5,12 @@ import re
 from app.imports.mapping import suggest_mapping
 from app.source_connectors import RESOURCES, SourceError, TARGET_FEEDS
 
-IDENTITY_KEYS = ("zeta_cdp_id", "zeta_uid", "donor_account_number", "hubspot_record_id", "okta_customer_id")
+IDENTITY_KEYS = ("zeta_cdp_id", "zeta_uid", "donor_account_number", "hubspot_record_id", "okta_customer_id", "fusionauth_user_id")
 ZETA_ALIASES = {
     "cdp_id": "zeta_cdp_id", "zeta_profile_id": "zeta_cdp_id",
     "uid": "zeta_uid", "zeta_user_id": "zeta_uid", "user_id": "zeta_uid",
     "hubspot_id": "hubspot_record_id", "okta_id": "okta_customer_id",
+    "fusionauth_id": "fusionauth_user_id",
     "donor_account": "donor_account_number",
 }
 

@@ -47,7 +47,7 @@ def alias_pattern(aliases):
     patterns = []
     for kind, value in sorted(set(aliases)):
         if not value or kind not in {"email", "phone", "external", "email_md5", "email_sha256",
-                                      "donor_account_number", "hubspot_record_id", "okta_customer_id",
+                                      "donor_account_number", "hubspot_record_id", "okta_customer_id", "fusionauth_user_id",
                                       "zeta_cdp_id", "zeta_uid"}:
             continue
         if kind == "email":

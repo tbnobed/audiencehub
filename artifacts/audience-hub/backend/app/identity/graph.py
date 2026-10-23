@@ -21,7 +21,7 @@ def constrain_components(db):
             UNION ALL SELECT l.label,x.key_type,x.key_value FROM ir_labels l
             JOIN ir_edges e ON e.record_id=l.id AND e.kind='profile'
             JOIN profiles p ON p.id=e.value::bigint JOIN identity_xref x ON x.master_id=p.master_id
-          ) keys WHERE kind IN ('donor_account_number','okta_customer_id','zeta_cdp_id','zeta_uid')
+          ) keys WHERE kind IN ('donor_account_number','okta_customer_id','fusionauth_user_id','zeta_cdp_id','zeta_uid')
           GROUP BY label,kind HAVING count(DISTINCT value)>1;
           INSERT INTO identity_reviews(source_record_id,reason)
           SELECT l.id,'system_key_conflict' FROM ir_labels l JOIN ir_conflicts c USING(label)

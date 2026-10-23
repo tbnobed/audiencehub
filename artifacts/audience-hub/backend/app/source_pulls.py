@@ -31,7 +31,7 @@ from app.source_connectors import (
     sftp_connection, snowflake_connection, snowflake_rows, validate_config, window,
 )
 
-IDENTITIES = ("zeta_cdp_id", "zeta_uid", "donor_account_number", "hubspot_record_id", "okta_customer_id")
+IDENTITIES = ("zeta_cdp_id", "zeta_uid", "donor_account_number", "hubspot_record_id", "okta_customer_id", "fusionauth_user_id")
 
 
 def json_default(value):
@@ -85,6 +85,12 @@ def canonical_row(row, feed):
             raise SourceError("Resource name and series must be text.")
         row.pop("id", None)
         return "resource", row
+    attributes = row.setdefault("attributes", {})
+    if not isinstance(attributes, dict):
+        raise SourceError("Event attributes must be an object.")
+    for key in ("okta_customer_id", "fusionauth_user_id"):
+        if row.get(key):
+            attributes[key] = row[key]
     row.setdefault("contact_external_id", row.pop("user_id", None) or next(
         (str(row[k]) for k in IDENTITIES if row.get(k)), None))
     for key in IDENTITIES:

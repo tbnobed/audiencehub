@@ -38,7 +38,8 @@ def rotate(source_id: int, db=Depends(session_scope), user=Depends(require_role(
 class DeviceEvent(BaseModel):
     event_id: str = Field(min_length=1, max_length=256)
     occurred_at: datetime
-    okta_customer_id: str = Field(min_length=1, max_length=512)
+    okta_customer_id: str | None = Field(default=None, min_length=1, max_length=512)
+    fusionauth_user_id: str | None = Field(default=None, min_length=1, max_length=512)
     devices: dict[str, str]
 
 
@@ -71,6 +72,8 @@ async def authenticated_event(source_id: int, request: Request, db=Depends(sessi
         raise HTTPException(401, "Invalid device event signature")
     try:
         body = DeviceEvent.model_validate_json(bytes(raw))
+        if not (body.okta_customer_id or body.fusionauth_user_id):
+            raise ValueError()
         # Validate all device fields before receipt insertion.
         from app.identity.devices import DEVICE_KEY_TYPES
         if set(body.devices) - set(DEVICE_KEY_TYPES) or not body.devices:
@@ -78,7 +81,12 @@ async def authenticated_event(source_id: int, request: Request, db=Depends(sessi
     except ValueError:
         raise HTTPException(422, "Invalid device event") from None
     from app.ingestion.service import suppressed
-    if suppressed(db, {("okta_customer_id", body.okta_customer_id)}):
+    identities = {kind: value.strip() for kind, value in (
+        ("okta_customer_id", body.okta_customer_id),
+        ("fusionauth_user_id", body.fusionauth_user_id)) if value}
+    if not identities or any(not value for value in identities.values()):
+        raise HTTPException(422, "A non-empty login identity is required")
+    if suppressed(db, set(identities.items())):
         raise HTTPException(422, "Identity is suppressed")
     event_hash = hashlib.sha256(body.event_id.encode()).hexdigest()
     if not db.scalar(text("""INSERT INTO identity_device_receipts(source_id,event_hash)
@@ -86,14 +94,14 @@ async def authenticated_event(source_id: int, request: Request, db=Depends(sessi
         return {"accepted": True, "duplicate": True}
     try:
         count = observe(db, source_id, {"occurred_at": body.occurred_at,
-            "properties": {**body.devices, "okta_customer_id": body.okta_customer_id}},
+            "properties": {**body.devices, **identities}},
             trusted_authenticated=True)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     if not count:
         # Do not consume a receipt before the person exists: the server can
         # retry after contact resolution. No looping background resolver.
-        raise HTTPException(409, "No unique current Okta identity or event outside device lifetime")
+        raise HTTPException(409, "No unique current Okta/FusionAuth identity or event outside device lifetime")
     audit(db, None, "identity.device.observed", "source", source_id, {"links": count})
     db.commit()
     return {"accepted": True, "links": count}

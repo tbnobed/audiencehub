@@ -60,6 +60,12 @@ def validate(message, kind=None, received_at=None, ip=None):
     for field in ("email", "phone", "firstName", "lastName"):
         if field in result["traits"] and not isinstance(result["traits"][field], str):
             raise ValueError(f"traits.{field} must be a string")
+    for container in ("traits", "properties"):
+        for field in ("okta_customer_id", "fusionauth_user_id"):
+            if field in result[container]:
+                value = result[container][field]
+                if not isinstance(value, str) or not 1 <= len(value.strip()) <= 512:
+                    raise ValueError(f"{container}.{field} must be 1–512 characters")
     from app.identity.normalize import normalize_email, normalize_phone
     for field, normalizer in (("email", normalize_email), ("phone", normalize_phone)):
         if result["traits"].get(field) and not normalizer(result["traits"][field]):

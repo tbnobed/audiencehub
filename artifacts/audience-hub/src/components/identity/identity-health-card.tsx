@@ -34,6 +34,26 @@ export function IdentityHealthCard() {
         <Button size="icon" variant="ghost" className="h-7 w-7" disabled={isFetching} data-testid="button-refresh-identity-health" onClick={() => refetch()}><RefreshCw className={`h-3 w-3 ${isFetching ? 'animate-spin' : ''}`} /></Button>
       </CardHeader>
       <CardContent className="space-y-4">
+        {data.tbn_plus_identity && <div className="rounded border border-line p-3" data-testid="tbn-plus-identity-migration">
+          <div className="text-sm font-medium">TBN+ login migration: Okta → FusionAuth</div>
+          <p className="text-xs text-muted-foreground mt-1">
+            Current partners with a login key or TBN+ subscription evidence. Legacy Okta IDs remain valid.
+          </p>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3">
+            {([
+              ['TBN+ users', data.tbn_plus_identity.total],
+              ['Okta coverage', data.tbn_plus_identity.okta],
+              ['FusionAuth coverage', data.tbn_plus_identity.fusionauth],
+              ['Both keys', data.tbn_plus_identity.both],
+              ['Okta only', data.tbn_plus_identity.okta_only],
+              ['FusionAuth only', data.tbn_plus_identity.fusionauth_only],
+              ['Neither key', data.tbn_plus_identity.neither],
+            ] as const).map(([label, count]) => <div key={label}>
+              <div className="text-xs text-muted-foreground">{label}</div>
+              <div className="font-mono text-base">{count.toLocaleString()}</div>
+            </div>)}
+          </div>
+        </div>}
         <div className="grid grid-cols-2 md:grid-cols-5 gap-px bg-line border border-line rounded overflow-hidden">
           {stats.map(([label, value, tone]) => <div key={label} className="bg-surface px-3 py-2">
             <div className="text-[10px] uppercase tracking-wider text-ink-muted">{label}</div>

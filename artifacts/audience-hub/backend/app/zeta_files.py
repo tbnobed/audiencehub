@@ -81,7 +81,7 @@ def detect_type(name, first):
         return event
     if {"amount", "timestamp"} <= keys or {"amount", "occurred_at"} <= keys:
         return "donation_return" if str(normalized.get("is_refund", "")).lower() == "true" else "donation"
-    if any("lookup" in lower or provider in lower for provider in ("hubspot", "okta", "donor_account")):
+    if any("lookup" in lower or provider in lower for provider in ("hubspot", "okta", "fusionauth", "donor_account")):
         return "lookups"
     if {"source_code", "name"} <= keys and not keys & {"user_id", "zeta_uid", "zeta_cdp_id"}:
         return "source_codes"

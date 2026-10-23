@@ -64,7 +64,7 @@ for _key in ("vendor", "license_id", "append_date", "sensitive"):
     ALIASES[_key.replace("_", " ")] = _key
 ENRICHMENT_TYPES = {"text", "number", "boolean", "date", "enum"}
 
-for _identity_key in ("donor_account_number", "hubspot_record_id", "okta_customer_id",
+for _identity_key in ("donor_account_number", "hubspot_record_id", "okta_customer_id", "fusionauth_user_id",
                       "zeta_cdp_id", "zeta_uid", "email_md5", "email_sha256"):
     ALIASES[_identity_key.replace("_", " ")] = "attributes." + _identity_key
 ALIASES["mobile phone"] = "phone"

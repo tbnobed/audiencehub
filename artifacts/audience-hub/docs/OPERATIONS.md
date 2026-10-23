@@ -1,5 +1,8 @@
 # First-party identity graph
 
+For the TBN+ Okta → FusionAuth identity mapping, dual-key ingestion and
+production verification, see [FUSIONAUTH_MIGRATION.md](FUSIONAUTH_MIGRATION.md).
+
 For Meta Page setup, first-party click/Login capture, Marketing reporting and
 the video-privacy restrictions, see [META_CAPTURE.md](META_CAPTURE.md).
 

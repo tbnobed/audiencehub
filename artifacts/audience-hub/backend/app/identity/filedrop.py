@@ -31,6 +31,8 @@ KEY_COLUMNS = {
     "hubspot_record_ids": "hubspot_record_id",
     "okta_customer_id": "okta_customer_id",
     "okta_customer_ids": "okta_customer_id",
+    "fusionauth_user_id": "fusionauth_user_id",
+    "fusionauth_user_ids": "fusionauth_user_id",
     "donor_account_number": "donor_account_number",
     "donor_account_numbers": "donor_account_number",
 }

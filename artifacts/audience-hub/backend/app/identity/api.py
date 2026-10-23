@@ -68,9 +68,35 @@ def health(db=Depends(session_scope), user=Depends(require_role("analyst"))):
             AND x.key_type='email')) AS hash_only_profiles
     """)).mappings().one())
     coverage = [dict(r) for r in db.execute(text("""
-      SELECT key_type,count(DISTINCT master_id) AS profiles FROM identity_xref
-      GROUP BY key_type ORDER BY key_type
+      SELECT x.key_type,count(DISTINCT x.master_id) AS profiles FROM identity_xref x
+      JOIN active_profiles p ON p.master_id=x.master_id
+      GROUP BY x.key_type ORDER BY x.key_type
     """)).mappings()]
+    tbn_plus_identity = dict(db.execute(text("""
+      WITH keys AS MATERIALIZED (
+        SELECT master_id,bool_or(key_type='okta_customer_id') AS okta,
+          bool_or(key_type='fusionauth_user_id') AS fusionauth
+        FROM identity_xref WHERE key_type IN ('okta_customer_id','fusionauth_user_id')
+        GROUP BY master_id
+      ), users AS (
+        SELECT COALESCE(k.okta,false) AS okta,COALESCE(k.fusionauth,false) AS fusionauth
+        FROM active_profiles p LEFT JOIN keys k ON k.master_id=p.master_id
+        LEFT JOIN profile_traits t ON t.profile_id=p.id
+        WHERE k.master_id IS NOT NULL OR NULLIF(btrim(t.attr_tbn_plus_subscription),'') IS NOT NULL
+      )
+      SELECT count(*) AS total,
+        count(*) FILTER(WHERE okta) AS okta,
+        count(*) FILTER(WHERE fusionauth) AS fusionauth,
+        count(*) FILTER(WHERE okta AND fusionauth) AS both,
+        count(*) FILTER(WHERE okta AND NOT fusionauth) AS okta_only,
+        count(*) FILTER(WHERE fusionauth AND NOT okta) AS fusionauth_only,
+        count(*) FILTER(WHERE NOT okta AND NOT fusionauth) AS neither FROM users
+    """)).mappings().one())
+    # Show zero coverage explicitly before the migration starts.
+    for key_type in ("okta_customer_id", "fusionauth_user_id"):
+        if not any(row["key_type"] == key_type for row in coverage):
+            coverage.append({"key_type": key_type, "profiles": 0})
+    coverage.sort(key=lambda row: row["key_type"])
     reviews = [dict(r) for r in db.execute(text("""
       SELECT r.id,r.source_record_id,r.reason,r.created_at,p.master_id
       FROM identity_reviews r LEFT JOIN source_records s ON s.id=r.source_record_id
@@ -81,7 +107,7 @@ def health(db=Depends(session_scope), user=Depends(require_role("analyst"))):
         'duplicate_in_source' AS status FROM identity_xref WHERE key_type='hubspot_record_id'
       GROUP BY master_id HAVING count(DISTINCT key_value)>1 ORDER BY master_id LIMIT 100
     """)).mappings()]
-    return {**stats, "key_coverage": coverage, "review_items": reviews,
+    return {**stats, "key_coverage": coverage, "tbn_plus_identity": tbn_plus_identity, "review_items": reviews,
             "duplicate_hubspot": duplicates}
 
 

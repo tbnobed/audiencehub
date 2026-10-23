@@ -249,7 +249,7 @@ def map_and_validate_row(row: dict[str, str], columns: dict[str, Any], record_ty
         values.get(key) for key in ("external_id", "email", "phone", "first_name", "last_name",
                                     "address1", "city", "region", "postal_code", "country")
     ) and not any(values.get("attributes", {}).get(key) for key in
-                  ("donor_account_number", "hubspot_record_id", "okta_customer_id",
+                  ("donor_account_number", "hubspot_record_id", "okta_customer_id", "fusionauth_user_id",
                    "zeta_cdp_id", "zeta_uid", "email_md5", "email_sha256")):
         errors.append("Row contains no mapped contact values")
     if record_type == "consent":

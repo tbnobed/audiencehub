@@ -9,6 +9,10 @@ export type IdentityHealth = {
   duplicate_hubspot_profiles: number;
   hash_only_profiles: number;
   key_coverage: { key_type: string; profiles: number }[];
+  tbn_plus_identity: {
+    total: number; okta: number; fusionauth: number; both: number;
+    okta_only: number; fusionauth_only: number; neither: number;
+  };
   review_items: { id: number; source_record_id: number | null; reason: string; created_at: string; master_id: string | null }[];
   duplicate_hubspot: { master_id: string; hubspot_record_ids: string[]; status: string }[];
 };

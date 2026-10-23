@@ -24,6 +24,10 @@ def attach_transactions(db, progress_callback=None):
           FROM pending p CROSS JOIN LATERAL (VALUES
             (0, 'external', COALESCE(p.attributes->'_identity_reference'->>'source_key',p.source_key)
               || ':' || NULLIF(p.attributes->'_identity_reference'->>'contact_external_id','')),
+            (0, 'okta_customer_id', NULLIF(btrim(COALESCE(
+              p.attributes->>'okta_customer_id',p.attributes->'_event_properties'->>'okta_customer_id')),'')),
+            (0, 'fusionauth_user_id', NULLIF(btrim(COALESCE(
+              p.attributes->>'fusionauth_user_id',p.attributes->'_event_properties'->>'fusionauth_user_id')),'')),
             (1, 'email', NULLIF(lower(btrim(p.email_norm::text)),'')),
             (1, 'phone', NULLIF(p.phone_e164,''))
           ) k(rank,kind,value)

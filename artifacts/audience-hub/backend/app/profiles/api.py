@@ -25,7 +25,7 @@ _REDACTED = "[redacted]"
 # Schema-aware masking is required: opaque IDs/hashes cannot be recognized by
 # contact regexes. Normalize snake/camel/legacy names before checking them.
 _PRIVATE_IDENTITY_FIELDS = {
-    "donoraccountnumber", "donoraccount", "hubspotrecordid", "oktacustomerid",
+    "donoraccountnumber", "donoraccount", "hubspotrecordid", "oktacustomerid", "fusionauthuserid",
     "zetacdpid", "zetauid", "emailmd5", "emailsha256", "md5", "sha256",
     "customidentifier", "customidentifiers", "externalid", "keyvalue",
     "identifiervalue", "identifier", "identifiers", "identitykeys",

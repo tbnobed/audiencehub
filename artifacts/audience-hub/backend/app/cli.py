@@ -38,6 +38,9 @@ def main():
         description="Audience Hub administration and deterministic synthetic CSV generation."
     )
     commands = parser.add_subparsers(dest="command", required=True)
+    fusionauth = commands.add_parser("fusionauth-map", help="Link FusionAuth IDs to existing Okta Master IDs only.")
+    fusionauth.add_argument("mapping_file", help="CSV with okta_customer_id,fusionauth_user_id.")
+    fusionauth.add_argument("--report", required=True, help="New private CSV report path; never overwritten.")
     destinations = commands.add_parser("destinations", help="Run a configured HubSpot destination.")
     destination_commands = destinations.add_subparsers(dest="destination_command", required=True)
     destination_run = destination_commands.add_parser("run", help="Queue a consent-filtered HubSpot static-list sync.")
@@ -154,6 +157,10 @@ def main():
     from app.identity.graph_cli import add_commands as add_graph_commands
     add_graph_commands(commands)
     args = parser.parse_args()
+    if args.command == "fusionauth-map":
+        from app.identity.fusionauth import command as fusionauth_command
+        fusionauth_command(args)
+        return
     if args.command == "identity-graph":
         from app.identity.graph_cli import command as graph_command
         graph_command(args)

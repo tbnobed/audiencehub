@@ -12,6 +12,8 @@ def _fields(group, data_type, names):
     for name in names.split():
         FIELDS[name] = {"data_type": data_type, "group": group, "sensitive": name == "inmate"}
 
+_fields("Login identity", "text", "okta_customer_id fusionauth_user_id")
+
 
 _fields("Donor", "text", """donor_account_status donor_account_type donor_status
 inception_source_code last_donation_source donation_trend recptpref stopmail offerpref

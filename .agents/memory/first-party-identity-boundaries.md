@@ -13,7 +13,7 @@ not replacing it with a new matcher.
 the existing winner ordering and reversible merge journal. Never merge two
 different values of any system key through probabilistic matching. Households
 group people without merging them. Device observations require an authenticated
-originating server event with an Okta identity; public SDK credentials and JSON
+originating server event with an Okta or FusionAuth identity; public SDK credentials and JSON
 authentication flags are not sufficient. Device IDs must never become person
 resolver bridges.
 
@@ -27,3 +27,15 @@ the application's regular table inventory. A killed process can leave them.
 When an application transaction reads scratch tables, drop them on the same
 transaction or after it ends; another connection's DROP would wait on the
 reader's own access-share locks.
+
+TBN is replacing Okta with FusionAuth for TBN+ logins. Keep Okta IDs as legacy
+keys alongside FusionAuth IDs, with existing Master IDs and audience memberships
+preserved through the switch. Mapping unmatched IDs must never create people.
+This does not change Kinship's local console-account policy.
+
+**Why:** The user explicitly described the TBN+ provider migration and required
+dual-key continuity rather than replacing identities or audience rules.
+
+**How to apply:** Accept either provider for authenticated first-party login
+evidence; if both are supplied, require the same current person. Do not interpret
+this as permission to migrate the console to SSO or alter audited seed proportions.

@@ -4,7 +4,7 @@ import re
 
 from sqlalchemy import text
 
-SYSTEM_KEYS = ("donor_account_number", "hubspot_record_id", "okta_customer_id",
+SYSTEM_KEYS = ("donor_account_number", "hubspot_record_id", "okta_customer_id", "fusionauth_user_id",
                "zeta_cdp_id", "zeta_uid", "meta_app_user_id")
 CONTACT_KEYS = ("email", "email_md5", "email_sha256", "mobile_phone")
 KEY_TYPES = SYSTEM_KEYS + CONTACT_KEYS + ("meta_psid",)
@@ -115,6 +115,7 @@ def sync_legacy_xref(db, ids):
         VALUES ('donor_account_number',NULLIF(btrim(s.attributes->>'donor_account_number'),'')),
           ('hubspot_record_id',NULLIF(btrim(s.attributes->>'hubspot_record_id'),'')),
           ('okta_customer_id',NULLIF(btrim(s.attributes->>'okta_customer_id'),'')),
+          ('fusionauth_user_id',NULLIF(btrim(s.attributes->>'fusionauth_user_id'),'')),
           ('zeta_cdp_id',NULLIF(btrim(s.attributes->>'zeta_cdp_id'),'')),
           ('zeta_uid',lower(NULLIF(btrim(s.attributes->>'zeta_uid'),''))),
           ('email_md5',CASE WHEN s.email_norm IS NOT NULL THEN md5(lower(btrim(
